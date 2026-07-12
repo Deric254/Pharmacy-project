@@ -1,0 +1,84 @@
+"""
+Report export utilities.
+
+Both functions take the same shape of input (headers + rows of plain
+values) so any report's data can be exported without each report
+endpoint reimplementing file generation. Kept intentionally simple --
+one sheet, one table -- rather than a templating system, since that's
+what an SME pharmacy report actually needs.
+"""
+
+import io
+
+from openpyxl import Workbook
+from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
+
+
+def export_to_excel(
+    headers: list[str], rows: list[list[object]], sheet_title: str = "Report"
+) -> bytes:
+    workbook = Workbook()
+    sheet = workbook.active
+    assert sheet is not None  # a freshly created Workbook always has an active sheet
+    sheet.title = sheet_title[:31]  # Excel sheet name length limit
+
+    sheet.append(headers)
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+
+    for row in rows:
+        sheet.append(row)
+
+    column_count = len(headers)
+    for col_index in range(1, column_count + 1):
+        column_letter = get_column_letter(col_index)
+        header_length = len(str(headers[col_index - 1]))
+        data_lengths = (
+            len(str(row[col_index - 1])) for row in rows if row[col_index - 1] is not None
+        )
+        max_length = max([header_length, *data_lengths], default=10)
+        sheet.column_dimensions[column_letter].width = min(max_length + 2, 50)
+
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def export_to_pdf(title: str, headers: list[str], rows: list[list[object]]) -> bytes:
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, title=title, topMargin=3 * cm)
+
+    table_data = [headers] + [[str(cell) for cell in row] for row in rows]
+    table = Table(table_data, repeatRows=1)
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0F172A")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F1F5F9")]),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+
+    def draw_header(canvas: object, _doc: object) -> None:
+        _draw_title(canvas, title)
+
+    doc.build([table], onFirstPage=draw_header, onLaterPages=lambda c, d: None)
+    return buffer.getvalue()
+
+
+def _draw_title(canvas: object, title: str) -> None:
+    canvas.saveState()  # type: ignore[attr-defined]
+    canvas.setFont("Helvetica-Bold", 14)  # type: ignore[attr-defined]
+    canvas.drawString(2 * cm, 28 * cm, title)  # type: ignore[attr-defined]
+    canvas.restoreState()  # type: ignore[attr-defined]

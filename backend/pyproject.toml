@@ -1,0 +1,38 @@
+[project]
+name = "pharmacy-erp-backend"
+version = "0.1.0"
+description = "Pharmacy POS/ERP backend"
+requires-python = ">=3.12"
+
+[tool.semantic_release]
+version_variables = ["app/__init__.py:__version__"]
+version_toml = ["pyproject.toml:project.version"]
+branch = "main"
+build_command = false
+commit_message = "chore(release): {version} [skip ci]"
+tag_format = "v{version}"
+
+[tool.semantic_release.changelog]
+changelog_file = "../CHANGELOG.md"
+
+[tool.semantic_release.branches.main]
+match = "main"
+prerelease = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]

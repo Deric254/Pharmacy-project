@@ -1,8 +1,9 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.rbac import get_current_user, require_permission
 from app.models.user import User
@@ -17,11 +18,28 @@ from app.services.auth_service import AuthService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+REFRESH_COOKIE_NAME = "refresh_token"
+REFRESH_COOKIE_PATH = "/api/v1/auth"
+
+
+def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
+    settings = get_settings()
+    response.set_cookie(
+        key=REFRESH_COOKIE_NAME,
+        value=refresh_token,
+        httponly=True,
+        secure=settings.environment == "production",
+        samesite="lax",
+        path=REFRESH_COOKIE_PATH,
+        max_age=settings.refresh_token_expire_days * 24 * 60 * 60,
+    )
+
 
 @router.post("/login", response_model=TokenResponse)
 async def login(
     payload: LoginRequest,
     request: Request,
+    response: Response,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> TokenResponse:
     service = AuthService(db)
@@ -30,7 +48,39 @@ async def login(
     tokens = await service.issue_tokens(
         user, device_label=request.headers.get("user-agent"), ip_address=client_ip
     )
+    _set_refresh_cookie(response, tokens["refresh_token"])
     return TokenResponse(access_token=tokens["access_token"])
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh(
+    request: Request,
+    response: Response,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    refresh_token: Annotated[str | None, Cookie()] = None,
+) -> TokenResponse:
+    if refresh_token is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="No refresh token provided"
+        )
+    service = AuthService(db)
+    client_ip = request.client.host if request.client else None
+    tokens = await service.rotate_refresh_token(
+        refresh_token, device_label=request.headers.get("user-agent"), ip_address=client_ip
+    )
+    _set_refresh_cookie(response, tokens["refresh_token"])
+    return TokenResponse(access_token=tokens["access_token"])
+
+
+@router.post("/logout", status_code=204)
+async def logout(
+    response: Response,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    refresh_token: Annotated[str | None, Cookie()] = None,
+) -> None:
+    if refresh_token is not None:
+        await AuthService(db).revoke_session_by_refresh_token(refresh_token)
+    response.delete_cookie(REFRESH_COOKIE_NAME, path=REFRESH_COOKIE_PATH)
 
 
 @router.post("/forgot-password", status_code=204)
@@ -65,5 +115,6 @@ async def read_current_user(current_user: Annotated[User, Depends(get_current_us
         full_name=current_user.full_name,
         username=current_user.username,
         role_name=current_user.role.name,
+        permissions=sorted(p.code for p in current_user.role.permissions),
         is_active=current_user.is_active,
     )

@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+@theme {
+  /* Ledger palette: aged paper, ink, and two "stamp" colors used the way
+     a bookkeeper's rubber stamp marks a page -- red for shortfall/expiry,
+     green for approved/settled. Kept desaturated so the stamp colors
+     read as accents, not decoration. */
+  --color-paper: #ede8db;
+  --color-paper-dim: #e3ddcb;
+  --color-ink: #211c14;
+  --color-ink-soft: #5a5546;
+  --color-rule: #c9c0a4;
+  --color-rule-strong: #a89c78;
+  --color-brass: #8a6d3b;
+  --color-brass-soft: #b79a5f;
+  --color-stamp-red: #a13d2e;
+  --color-stamp-red-soft: #e7c9c2;
+  --color-stamp-green: #3a6b4c;
+  --color-stamp-green-soft: #c9dcc9;
+  --color-panel: #f6f3e9;
+
+  --font-display: "Fraunces", "Iowan Old Style", ui-serif, Georgia, serif;
+  --font-body: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
+}
+
+@layer base {
+  html {
+    background: var(--color-paper);
+    color: var(--color-ink);
+  }
+  body {
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection {
+    background: var(--color-brass-soft);
+    color: var(--color-ink);
+  }
+  /* Every figure that represents money, quantity, or a date/time in a
+     ledger row uses tabular figures so columns of numbers actually
+     align -- the one non-negotiable rule of an accounting UI. */
+  .figure {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-brass);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+}
+
+@layer components {
+  .ruled-row {
+    border-bottom: 1px solid var(--color-rule);
+  }
+  .ledger-panel {
+    background: var(--color-panel);
+    border: 1px solid var(--color-rule);
+  }
+}

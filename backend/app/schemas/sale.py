@@ -38,6 +38,7 @@ class SaleCreate(BaseModel):
 
 
 class SaleItemOut(BaseModel):
+    id: int
     product_id: int
     batch_id: int
     quantity: int

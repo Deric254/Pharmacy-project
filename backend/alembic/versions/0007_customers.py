@@ -35,10 +35,15 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime, server_default=sa.func.now()),
     )
 
-    op.add_column(
-        "sales",
-        sa.Column("customer_id", sa.Integer, sa.ForeignKey("customers.id"), nullable=True),
-    )
+    with op.batch_alter_table("sales") as batch_op:
+        batch_op.add_column(
+            sa.Column(
+                "customer_id",
+                sa.Integer,
+                sa.ForeignKey("customers.id", name="fk_sales_customer_id"),
+                nullable=True,
+            )
+        )
 
     op.add_column(
         "business_config",
@@ -53,5 +58,6 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_column("business_config", "loyalty_points_per_currency_unit")
     op.drop_column("business_config", "loyalty_program_enabled")
-    op.drop_column("sales", "customer_id")
+    with op.batch_alter_table("sales") as batch_op:
+        batch_op.drop_column("customer_id")
     op.drop_table("customers")

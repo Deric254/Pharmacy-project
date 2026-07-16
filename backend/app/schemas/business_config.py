@@ -1,10 +1,16 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+BUILT_IN_THEMES = ("ledger", "clinical", "midnight", "sunrise")
+ThemeName = Literal["ledger", "clinical", "midnight", "sunrise"]
 
 
 class BusinessConfigOut(BaseModel):
     business_name: str
     slogan: str
     logo_url: str | None
+    theme_name: str
     primary_color: str
     secondary_color: str
     receipt_header_text: str
@@ -35,6 +41,7 @@ class BusinessConfigUpdate(BaseModel):
     business_name: str | None = Field(default=None, min_length=1, max_length=120)
     slogan: str | None = Field(default=None, max_length=255)
     logo_url: str | None = Field(default=None, max_length=500)
+    theme_name: ThemeName | None = None
     primary_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
     secondary_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
     receipt_header_text: str | None = Field(default=None, max_length=255)

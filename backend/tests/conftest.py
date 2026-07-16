@@ -15,7 +15,7 @@ os.environ.setdefault("ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 import pytest_asyncio
 
 from app.core.database import AsyncSessionLocal, Base, engine
-from app.core.redis_client import redis_client
+from app.core.redis_client import aclose_for_current_loop, redis_client
 from app.core.security import hash_password
 from app.models.ai_provider_key import AIProviderKey  # noqa: F401
 from app.models.audit_log import AuditLog  # noqa: F401
@@ -26,6 +26,7 @@ from app.models.customer import Customer  # noqa: F401
 from app.models.medicine_batch import MedicineBatch  # noqa: F401
 from app.models.product import Product  # noqa: F401
 from app.models.purchase_order import PurchaseOrder, PurchaseOrderItem  # noqa: F401
+from app.models.refund import Refund, RefundItem  # noqa: F401
 from app.models.role import Permission, Role  # noqa: F401
 from app.models.sale import Payment, Sale, SaleItem  # noqa: F401
 from app.models.stock_movement import StockMovement  # noqa: F401
@@ -63,6 +64,7 @@ async def _clear_cache():
     """
     yield
     await redis_client.flushdb()
+    await aclose_for_current_loop()
 
 
 @pytest_asyncio.fixture
@@ -72,6 +74,7 @@ async def seeded_roles():
             code: Permission(code=code, description=code)
             for code in [
                 "sales.create",
+                "sales.refund",
                 "users.manage",
                 "config.edit",
                 "inventory.view",

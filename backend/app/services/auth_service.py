@@ -9,12 +9,14 @@ import secrets
 import uuid
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.redis_client import redis_client
 from app.core.security import (
+    JWTError,
     create_token,
+    decode_token,
     hash_password,
     verify_password,
 )
@@ -101,6 +103,100 @@ class AuthService:
         )
         await self.db.commit()
         return {"access_token": access_token, "refresh_token": refresh_token}
+
+    async def rotate_refresh_token(
+        self, refresh_token: str, device_label: str | None, ip_address: str | None
+    ) -> dict[str, str]:
+        """
+        Redeem a refresh token for a new access+refresh pair, rotating
+        the session. A refresh token can only ever be used once:
+
+        - Unknown jti (never issued, or the DB was reset) -> reject.
+        - Session already revoked -> this exact token was already
+          redeemed once before. Presenting it again means either the
+          legitimate client double-submitted (harmless) or an attacker
+          replayed a stolen token (not harmless). We can't tell which,
+          so we treat it as compromise: revoke every other active
+          session for this user too, forcing a real re-login
+          everywhere. This is the "reuse detection" the rotation model
+          exists for -- rotation alone is meaningless without it.
+        """
+        credentials_error = HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired refresh token"
+        )
+        try:
+            payload = decode_token(refresh_token)
+            if payload.get("type") != "refresh":
+                raise credentials_error
+            jti = payload.get("jti")
+            user_id = payload.get("sub")
+            if jti is None or user_id is None:
+                raise credentials_error
+        except JWTError as exc:
+            raise credentials_error from exc
+
+        result = await self.db.execute(
+            select(UserSession).where(UserSession.refresh_token_jti == jti)
+        )
+        session = result.scalar_one_or_none()
+        if session is None:
+            raise credentials_error
+
+        if session.revoked_at is not None:
+            await self._revoke_all_sessions_for_user(int(user_id), reason="refresh_token_reuse")
+            raise credentials_error
+
+        user_result = await self.db.execute(
+            select(User).where(User.id == int(user_id), User.is_active.is_(True))
+        )
+        user = user_result.scalar_one_or_none()
+        if user is None:
+            raise credentials_error
+
+        session.revoked_at = func.now()
+        self.db.add(session)
+        return await self.issue_tokens(user, device_label=device_label, ip_address=ip_address)
+
+    async def _revoke_all_sessions_for_user(self, user_id: int, reason: str) -> None:
+        result = await self.db.execute(
+            select(UserSession).where(
+                UserSession.user_id == user_id, UserSession.revoked_at.is_(None)
+            )
+        )
+        sessions = result.scalars().all()
+        for session in sessions:
+            session.revoked_at = func.now()
+            self.db.add(session)
+        self.db.add(
+            AuditLog(
+                user_id=user_id,
+                action="auth.refresh_token_reuse_detected",
+                entity_type="user",
+                entity_id=str(user_id),
+                new_value=reason,
+            )
+        )
+        await self.db.commit()
+
+    async def revoke_session_by_refresh_token(self, refresh_token: str) -> None:
+        """Best-effort logout: revoke the session if the token is still
+        decodable, but never raise -- an expired/garbled cookie on
+        logout should still result in a 204, not a 401."""
+        try:
+            payload = decode_token(refresh_token)
+            jti = payload.get("jti")
+        except JWTError:
+            return
+        if jti is None:
+            return
+        result = await self.db.execute(
+            select(UserSession).where(UserSession.refresh_token_jti == jti)
+        )
+        session = result.scalar_one_or_none()
+        if session is not None and session.revoked_at is None:
+            session.revoked_at = func.now()
+            self.db.add(session)
+            await self.db.commit()
 
     async def reset_password_via_security_question(
         self, username: str, security_answer: str, new_password: str

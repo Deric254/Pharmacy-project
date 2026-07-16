@@ -30,5 +30,12 @@ services:
     ports: ["8000:8000"]
     volumes: ["./backend:/app"]
 
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports: ["8080:80"]
+
 volumes:
   mysql_data:

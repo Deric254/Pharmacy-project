@@ -29,4 +29,5 @@ Thumbs.db
 
 # DB
 *.sqlite3
+*.db
 mysql_data/

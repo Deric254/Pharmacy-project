@@ -47,6 +47,24 @@ class TestCurrentUser:
         assert r.json()["role_name"] == "ChemistOwner"
         assert r.json()["username"] == "lucy"
 
+    async def test_me_exposes_real_permission_codes_not_just_role_name(self, client, owner_user):
+        # The frontend must gate UI on actual permission codes (data),
+        # never on `if role_name == "ChemistOwner"` (a hardcoded string
+        # that silently drifts from whatever the DB actually grants).
+        # This is the contract that makes that possible.
+        login = await client.post(
+            "/api/v1/auth/login", json={"username": "lucy", "password": "S3curePass!"}
+        )
+        token = login.json()["access_token"]
+
+        r = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200
+        body = r.json()
+        assert "permissions" in body
+        assert isinstance(body["permissions"], list)
+        assert len(body["permissions"]) > 0
+        assert all(isinstance(code, str) for code in body["permissions"])
+
 
 class TestRBACEnforcement:
     async def test_permission_gated_route_rejects_missing_permission(self, client, employee_user):
@@ -80,6 +98,109 @@ class TestRBACEnforcement:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert r.status_code == 404
+
+
+class TestRefreshTokenRotation:
+    async def test_login_sets_httponly_refresh_cookie_not_in_body(self, client, owner_user):
+        r = await client.post(
+            "/api/v1/auth/login", json={"username": "lucy", "password": "S3curePass!"}
+        )
+        assert r.status_code == 200
+        assert "refresh_token" not in r.json()  # never handed to JS-readable body
+        assert "refresh_token" in r.cookies
+        set_cookie_header = r.headers.get("set-cookie", "")
+        assert "HttpOnly" in set_cookie_header
+
+    async def test_refresh_with_no_cookie_is_rejected(self, client, owner_user):
+        r = await client.post("/api/v1/auth/refresh")
+        assert r.status_code == 401
+
+    async def test_refresh_issues_a_new_working_access_token(self, client, owner_user):
+        await client.post(
+            "/api/v1/auth/login", json={"username": "lucy", "password": "S3curePass!"}
+        )
+
+        r = await client.post("/api/v1/auth/refresh")
+        assert r.status_code == 200
+        new_access_token = r.json()["access_token"]
+
+        me = await client.get(
+            "/api/v1/auth/me", headers={"Authorization": f"Bearer {new_access_token}"}
+        )
+        assert me.status_code == 200
+        assert me.json()["username"] == "lucy"
+
+    async def test_refresh_rotates_the_cookie_so_the_old_token_is_now_dead(
+        self, client, owner_user
+    ):
+        login = await client.post(
+            "/api/v1/auth/login", json={"username": "lucy", "password": "S3curePass!"}
+        )
+        old_refresh_token = login.cookies["refresh_token"]
+
+        first_refresh = await client.post("/api/v1/auth/refresh")
+        assert first_refresh.status_code == 200
+
+        # Replay the OLD refresh token (as if it had been stolen and the
+        # legitimate client had already rotated past it) -- must fail.
+        replay = await client.post(
+            "/api/v1/auth/refresh", cookies={"refresh_token": old_refresh_token}
+        )
+        assert replay.status_code == 401
+
+    async def test_reused_refresh_token_revokes_all_sessions_for_that_user(
+        self, client, owner_user
+    ):
+        login = await client.post(
+            "/api/v1/auth/login", json={"username": "lucy", "password": "S3curePass!"}
+        )
+        old_refresh_token = login.cookies["refresh_token"]
+
+        # Legitimate rotation.
+        await client.post("/api/v1/auth/refresh")
+        # Attacker replays the stolen pre-rotation token.
+        await client.post("/api/v1/auth/refresh", cookies={"refresh_token": old_refresh_token})
+
+        # The legitimate client's rotated (and otherwise still-valid)
+        # refresh token must now ALSO be dead -- reuse detection nukes
+        # the whole session family, not just the replayed token.
+        legit_but_now_revoked = await client.post("/api/v1/auth/refresh")
+        assert legit_but_now_revoked.status_code == 401
+
+    async def test_logout_revokes_the_session_and_clears_the_cookie(self, client, owner_user):
+        await client.post(
+            "/api/v1/auth/login", json={"username": "lucy", "password": "S3curePass!"}
+        )
+
+        logout = await client.post("/api/v1/auth/logout")
+        assert logout.status_code == 204
+
+        r = await client.post("/api/v1/auth/refresh")
+        assert r.status_code == 401
+
+    async def test_logout_with_no_cookie_still_succeeds(self, client, owner_user):
+        r = await client.post("/api/v1/auth/logout")
+        assert r.status_code == 204
+
+    async def test_refresh_with_garbage_cookie_is_rejected_not_500(self, client, owner_user):
+        r = await client.post("/api/v1/auth/refresh", cookies={"refresh_token": "not-a-real-jwt"})
+        assert r.status_code == 401
+
+    async def test_refresh_with_an_access_token_in_the_cookie_is_rejected(self, client, owner_user):
+        # Someone (or a bug) puts an access token where a refresh token
+        # belongs -- must be rejected, not silently accepted as if it
+        # were a valid refresh token just because it's a well-formed JWT.
+        login = await client.post(
+            "/api/v1/auth/login", json={"username": "lucy", "password": "S3curePass!"}
+        )
+        access_token = login.json()["access_token"]
+
+        r = await client.post("/api/v1/auth/refresh", cookies={"refresh_token": access_token})
+        assert r.status_code == 401
+
+    async def test_logout_with_garbage_cookie_still_succeeds(self, client, owner_user):
+        r = await client.post("/api/v1/auth/logout", cookies={"refresh_token": "not-a-real-jwt"})
+        assert r.status_code == 204
 
 
 class TestForgotPassword:

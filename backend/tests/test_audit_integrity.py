@@ -53,9 +53,9 @@ class TestForeignKeyEnforcement:
             except IntegrityError:
                 raised = True
                 await db.rollback()
-            assert raised, (
-                "Database did not enforce the FK constraint on medicine_batches.product_id"
-            )
+            assert (
+                raised
+            ), "Database did not enforce the FK constraint on medicine_batches.product_id"
 
     async def test_sale_with_nonexistent_cashier_is_rejected_by_the_database(self):
         if running_on_sqlite():

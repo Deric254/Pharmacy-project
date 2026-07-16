@@ -26,6 +26,12 @@ class BusinessConfig(Base):
     slogan: Mapped[str] = mapped_column(String(255), default="")
     logo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
+    # One of the built-in theme presets (see frontend/src/theme/themes.ts
+    # for the actual palettes) -- a business picks a starting point here,
+    # then primary_color/secondary_color below can further nudge the
+    # accent within that preset without needing a whole new theme.
+    theme_name: Mapped[str] = mapped_column(String(30), default="ledger")
+
     primary_color: Mapped[str] = mapped_column(String(7), default="#0EA5E9")  # hex
     secondary_color: Mapped[str] = mapped_column(String(7), default="#0F172A")
 

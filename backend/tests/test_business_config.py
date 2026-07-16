@@ -23,6 +23,7 @@ class TestReadConfig:
         body = r.json()
         assert body["business_name"] == "My Pharmacy"
         assert body["currency"] == "KES"
+        assert body["theme_name"] == "ledger"
         assert body["expiry_alert_days"] == [90, 60, 30]
 
     async def test_get_populates_cache(self, client):
@@ -93,6 +94,26 @@ class TestUpdateConfig:
 
         assert r.json()["business_name"] == "K-Lamed Chemist"  # unchanged by the second call
         assert r.json()["currency"] == "USD"
+
+    async def test_can_switch_to_any_built_in_theme(self, client, owner_user):
+        token = await self._login(client, "lucy", "S3curePass!")
+        for theme in ("clinical", "midnight", "sunrise", "ledger"):
+            r = await client.patch(
+                "/api/v1/config",
+                json={"theme_name": theme},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert r.status_code == 200, r.text
+            assert r.json()["theme_name"] == theme
+
+    async def test_unknown_theme_name_is_rejected(self, client, owner_user):
+        token = await self._login(client, "lucy", "S3curePass!")
+        r = await client.patch(
+            "/api/v1/config",
+            json={"theme_name": "not-a-real-theme"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 422
 
     async def test_expiry_alert_days_round_trips_as_a_list(self, client, owner_user):
         token = await self._login(client, "lucy", "S3curePass!")

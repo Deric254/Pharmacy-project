@@ -27,6 +27,7 @@ class UserOut(BaseModel):
     full_name: str
     username: str
     role_name: str
+    permissions: list[str]
     is_active: bool
 
     model_config = {"from_attributes": True}

@@ -349,6 +349,6 @@ class TestSaleTriggeredLowStockEvent:
                     break
 
         await pubsub.unsubscribe(CHANNEL)
-        assert found_stock_low, (
-            "Expected a stock.low event after the sale dropped below reorder point"
-        )
+        assert (
+            found_stock_low
+        ), "Expected a stock.low event after the sale dropped below reorder point"

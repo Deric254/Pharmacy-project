@@ -90,6 +90,7 @@ class BusinessConfigService:
             business_name=config.business_name,
             slogan=config.slogan,
             logo_url=config.logo_url,
+            theme_name=config.theme_name,
             primary_color=config.primary_color,
             secondary_color=config.secondary_color,
             receipt_header_text=config.receipt_header_text,

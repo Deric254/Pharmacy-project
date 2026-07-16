@@ -56,18 +56,25 @@ def upgrade() -> None:
     )
 
     # Additive: existing batches are simply unlocked (NULL).
-    op.add_column(
-        "medicine_batches",
-        sa.Column(
-            "locked_by_stock_take_id",
-            sa.Integer,
-            sa.ForeignKey("stock_takes.id"),
-            nullable=True,
-        ),
-    )
+    # batch_alter_table, not a plain op.add_column: SQLite can't ALTER
+    # a table to add a column with an inline FK constraint (raises
+    # NotImplementedError), only rebuild-and-copy. Batch mode does the
+    # rebuild transparently on SQLite and falls through to a normal
+    # ALTER on dialects that support it directly (MySQL/Postgres) --
+    # one code path that's actually correct on both.
+    with op.batch_alter_table("medicine_batches") as batch_op:
+        batch_op.add_column(
+            sa.Column(
+                "locked_by_stock_take_id",
+                sa.Integer,
+                sa.ForeignKey("stock_takes.id", name="fk_medicine_batches_locked_by_stock_take_id"),
+                nullable=True,
+            )
+        )
 
 
 def downgrade() -> None:
-    op.drop_column("medicine_batches", "locked_by_stock_take_id")
+    with op.batch_alter_table("medicine_batches") as batch_op:
+        batch_op.drop_column("locked_by_stock_take_id")
     op.drop_table("stock_take_items")
     op.drop_table("stock_takes")

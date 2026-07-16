@@ -165,9 +165,9 @@ class TestDispatcherEventRouting:
             None,
         }
         for event_type, permission in EVENT_PERMISSION_MAP.items():
-            assert permission in known_permission_like_values, (
-                f"{event_type} maps to an unexpected permission value: {permission}"
-            )
+            assert (
+                permission in known_permission_like_values
+            ), f"{event_type} maps to an unexpected permission value: {permission}"
 
 
 class TestWebSocketEndToEnd:

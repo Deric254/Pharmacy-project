@@ -3,28 +3,106 @@
 Full pharmacy POS/ERP — sales, batch/expiry-aware inventory, purchasing with
 Kanban, stock takes, customers, reports, AI assistant, backups, real-time
 cross-module sync via an event bus. Runs on LAN or over the internet, same
-codebase. Installable on Android and Windows as a PWA.
+codebase. Installable on Android and Windows as a PWA. Every business-facing
+detail — name, logo, slogan, currency, and choice of 4 built-in visual
+themes — is configured live from Settings, not hardcoded to any one pharmacy.
 
 ## Stack
 FastAPI (async) · MySQL 8 (InnoDB, ACID) · Redis (cache + event bus) ·
-SQLAlchemy 2 (async) · Alembic (migrations) · React (frontend, PWA).
+SQLAlchemy 2 (async) · Alembic (migrations) · React + Vite + Tailwind
+(frontend, installable PWA).
 
-## Local development
+## Running it for the first time
+
+There are two ways to run this. **Path A is what's actually been run and
+verified, end to end, real HTTP requests, real checkout, real refunds** —
+start there if you just want to see it working. Path B is the intended
+production setup (Docker + MySQL) but hasn't been run in this environment
+(no Docker daemon available while building this) — the compose file and
+Dockerfiles are new and correct by inspection, not yet proven by a live run.
+
+### Path A — local dev (SQLite + Redis), fastest way to see it running
+
+Needs: Python 3.12+, Node 20+, Redis, and `redis-server` reachable on
+localhost:6379 (install via your OS package manager, e.g. `apt install
+redis-server` / `brew install redis`, then `redis-server --daemonize yes`).
 
 ```bash
-cp backend/.env.example backend/.env   # then fill in real secrets
-docker compose up -d mysql redis
+# 1. Backend
 cd backend
 pip install -r requirements.txt -r requirements-dev.txt
+export DATABASE_URL="sqlite+aiosqlite:///./dev.db"
+export JWT_SECRET_KEY="dev-secret-change-me"
+export ENCRYPTION_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="  # dev only -- see note below
+export REDIS_URL="redis://localhost:6379/0"
 alembic upgrade head
+
+# 2. Create the first user (interactive, prompts for a password)
+python -m scripts.create_first_user --full-name "Your Name" --username admin --role ChemistOwner
+
+# 3. Start the backend
 uvicorn app.main:app --reload
+# -> http://localhost:8000  (health check: http://localhost:8000/health)
 ```
 
-Run the quality gate locally before pushing (this is exactly what CI runs):
+In a second terminal:
 
 ```bash
+cd frontend
+npm install
+npm run dev
+# -> http://localhost:5173  (proxies /api to the backend automatically)
+```
+
+Open http://localhost:5173, log in with the username/password you just
+created. That's a fully working system — real checkout, real stock
+ledger, real refunds, real inventory adjustments.
+
+**About `ENCRYPTION_KEY`:** it must be a base64-encoded 32-byte value.
+The one above is all-zero and fine for trying the system locally, but
+generate a real one for anything that matters:
+`python -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())"`
+
+### Path B — Docker Compose (MySQL, production-shaped)
+
+```bash
+cp backend/.env.example backend/.env   # fill in real JWT_SECRET_KEY / ENCRYPTION_KEY
+docker compose up -d
+docker compose exec backend python -m scripts.create_first_user \
+  --full-name "Your Name" --username admin --role ChemistOwner
+```
+
+- Frontend: http://localhost:8080 (nginx serves the built app and reverse-proxies `/api` to the backend — this is what makes it same-origin, which the frontend's relative `fetch('/api/...')` calls depend on)
+- Backend directly: http://localhost:8000
+- Migrations run automatically on container start (`docker-entrypoint.sh`) — no manual `alembic upgrade head` needed after the first `up`.
+
+If this doesn't come up cleanly on your machine, that's exactly the kind
+of thing worth reporting back rather than assuming — this path is new and
+hasn't had a live run yet.
+
+### Making it your own business
+
+Once logged in as ChemistOwner/Administrator, go to **Settings** and set
+the business name, slogan, logo, currency, and pick one of the 4 built-in
+themes (Ledger, Clinical, Midnight, Sunrise). Takes effect immediately for
+everyone, no rebuild, no restart. The only exception is the icon/name
+shown when someone installs the app to a home screen — that's set once per
+deployment via `frontend/.env` (`VITE_APP_NAME` etc., see
+`frontend/.env.example`) and requires a rebuild, since it's baked into a
+static PWA manifest file read by the OS before the app itself ever runs.
+
+## Quality gate
+
+Run this locally before pushing — it's exactly what CI runs:
+
+```bash
+cd backend
 ruff check . && ruff format --check . && mypy app && pytest --cov=app --cov-fail-under=80
 ```
+
+As of the last full run: 214 backend tests passing, 0 failing, 93.7%
+coverage. Frontend: `cd frontend && npx tsc -b && npx oxlint && npm run build`.
+
 
 ## Commit convention (this drives versioning — required, not optional)
 

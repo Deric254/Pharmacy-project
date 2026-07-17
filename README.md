@@ -80,6 +80,31 @@ If this doesn't come up cleanly on your machine, that's exactly the kind
 of thing worth reporting back rather than assuming — this path is new and
 hasn't had a live run yet.
 
+### Windows — double-click setup
+
+Three `.bat` files at the repo root wrap the two paths above for Windows
+users who'd rather not type commands:
+
+- **`install.bat`** — checks Python/Node/Redis are installed (with clear
+  links if not), sets up the backend virtual environment, generates a real
+  `backend\.env` with a properly random encryption key, runs migrations,
+  walks you through creating the first user, and installs frontend deps.
+  Run this once.
+- **`run.bat`** — starts Redis (if not already running), the backend, and
+  the frontend, each in its own window, then opens your browser. Run this
+  every time after `install.bat` has been run once.
+- **`run-docker.bat`** — the Docker Compose path instead, if Docker
+  Desktop is installed. Simpler, since it doesn't touch Redis/Python/Node
+  on the Windows host at all — everything runs in containers.
+
+**Honesty check:** I do not have a Windows machine in the environment I
+built this in, so **these `.bat` files have never actually been
+double-clicked and run** — only reasoned through carefully, line by line,
+for the batch-scripting pitfalls I know about (unescaped parentheses
+inside conditional blocks, delayed-vs-immediate variable expansion,
+nested quoting). If one of them breaks, that's a real bug report, not
+user error — tell me exactly what happened and I'll fix it.
+
 ### Making it your own business
 
 Once logged in as ChemistOwner/Administrator, go to **Settings** and set

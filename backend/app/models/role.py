@@ -31,9 +31,16 @@ class Role(Base):
     __tablename__ = "roles"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    # Values: Employee | Administrator | ChemistOwner
     name: Mapped[str] = mapped_column(String(50), unique=True)
     description: Mapped[str] = mapped_column(String(255), default="")
+    # True for the 3 roles seeded at install time (Employee, Administrator,
+    # ChemistOwner). Protects them from deletion -- deleting the role that
+    # holds users.manage/roles.manage could permanently lock everyone out
+    # of access management -- but NOT from having their name, description,
+    # or permission set edited. A business can rename "Administrator" to
+    # "Pharmacist-in-Charge" or strip its inventory.adjust grant; they
+    # just can't delete the role entirely while it's a system role.
+    is_system: Mapped[bool] = mapped_column(default=False)
 
     permissions: Mapped[list[Permission]] = relationship(
         secondary=role_permissions, lazy="selectin"

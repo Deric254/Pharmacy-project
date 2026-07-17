@@ -83,7 +83,7 @@ async def sales_summary(
 @router.get(
     "/profit",
     response_model=ProfitReportOut,
-    dependencies=[Depends(require_permission("reports.view"))],
+    dependencies=[Depends(require_permission("reports.view_profit"))],
 )
 async def profit_report(
     db: Annotated[AsyncSession, Depends(get_db)], start_date: date, end_date: date

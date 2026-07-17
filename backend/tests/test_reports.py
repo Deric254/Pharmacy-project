@@ -144,6 +144,54 @@ class TestSalesSummaryAndProfit:
         assert body["total_cost"] == 29.0
         assert body["total_profit"] == 41.0
 
+    async def test_administrator_cannot_view_profit_only_chemist_owner_can(
+        self, client, owner_user, administrator_user
+    ):
+        """
+        Profit is the one number in this system that's deliberately
+        owner-only -- matches the original client requirement
+        ("ChemistOwner: order approval, profit visibility") as
+        distinct from Administrator's broader day-to-day operational
+        access. This must hold even though Administrator has the
+        general reports.view permission for every other report.
+        """
+        admin_token = await _login(client, "sam", "AdminPass1")
+        owner_token = await _login(client, "lucy", "S3curePass!")
+        today = date.today().isoformat()
+
+        admin_r = await client.get(
+            f"/api/v1/reports/profit?start_date={today}&end_date={today}",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert admin_r.status_code == 403
+
+        owner_r = await client.get(
+            f"/api/v1/reports/profit?start_date={today}&end_date={today}",
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert owner_r.status_code == 200
+
+    async def test_administrator_can_still_view_every_other_report(
+        self, client, administrator_user
+    ):
+        """The profit restriction is specific to profit, not a general
+        Administrator report lockout -- confirm the general reports.view
+        grant Administrator holds still works for everything else."""
+        admin_token = await _login(client, "sam", "AdminPass1")
+        today = date.today().isoformat()
+
+        sales = await client.get(
+            f"/api/v1/reports/sales?start_date={today}&end_date={today}",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert sales.status_code == 200
+
+        expired = await client.get(
+            "/api/v1/reports/expired-stock",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert expired.status_code == 200
+
     async def test_sales_export_produces_real_readable_excel_file(
         self, client, owner_user, employee_user
     ):

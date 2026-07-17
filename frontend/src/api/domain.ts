@@ -3,15 +3,31 @@ import type {
   AdjustmentOut,
   AdjustmentRequest,
   BatchOut,
+  CountSubmit,
+  CustomerCreate,
+  CustomerOut,
   ExpiringBatchOut,
+  KanbanBoard,
   LowStockProductOut,
+  PaymentRecordRequest,
   ProductOut,
+  PurchaseHistoryEntryOut,
+  PurchaseOrderCreate,
+  PurchaseOrderOut,
+  ReceiveRequest,
+  ReceiveResponse,
+  ReconcileRequest,
   ReconciliationIssueOut,
   RefundOut,
   RefundRequest,
   SaleCreate,
   SaleOut,
+  StockTakeCreate,
+  StockTakeItemOut,
+  StockTakeOut,
   StockValuationOut,
+  SupplierCreate,
+  SupplierOut,
 } from '../types/api'
 
 export const productsApi = {
@@ -36,4 +52,50 @@ export const inventoryApi = {
   valuation: () => api.get<StockValuationOut>('/inventory/valuation'),
   adjust: (payload: AdjustmentRequest) => api.post<AdjustmentOut>('/inventory/adjustments', payload),
   reconcile: () => api.get<ReconciliationIssueOut[]>('/inventory/reconcile'),
+}
+
+export const suppliersApi = {
+  list: () => api.get<SupplierOut[]>('/suppliers'),
+  get: (id: number) => api.get<SupplierOut>(`/suppliers/${id}`),
+  create: (payload: SupplierCreate) => api.post<SupplierOut>('/suppliers', payload),
+  recordPayment: (supplierId: number, payload: PaymentRecordRequest) =>
+    api.post<SupplierOut>(`/suppliers/${supplierId}/payments`, payload),
+}
+
+export const purchaseOrdersApi = {
+  kanban: () => api.get<KanbanBoard>('/purchase-orders/kanban'),
+  get: (id: number) => api.get<PurchaseOrderOut>(`/purchase-orders/${id}`),
+  create: (payload: PurchaseOrderCreate) =>
+    api.post<PurchaseOrderOut>('/purchase-orders', payload),
+  send: (id: number) => api.post<PurchaseOrderOut>(`/purchase-orders/${id}/send`),
+  markInTransit: (id: number) =>
+    api.post<PurchaseOrderOut>(`/purchase-orders/${id}/mark-in-transit`),
+  receive: (id: number, payload: ReceiveRequest) =>
+    api.post<ReceiveResponse>(`/purchase-orders/${id}/receive`, payload),
+  reconcile: (id: number, payload: ReconcileRequest) =>
+    api.post<PurchaseOrderOut>(`/purchase-orders/${id}/reconcile`, payload),
+}
+
+export const customersApi = {
+  list: (search?: string) => api.get<CustomerOut[]>('/customers', { search }),
+  get: (id: number) => api.get<CustomerOut>(`/customers/${id}`),
+  getByPhone: (phone: string) =>
+    api.get<CustomerOut>(`/customers/phone/${encodeURIComponent(phone)}`),
+  create: (payload: CustomerCreate) => api.post<CustomerOut>('/customers', payload),
+  purchaseHistory: (id: number) =>
+    api.get<PurchaseHistoryEntryOut[]>(`/customers/${id}/purchase-history`),
+}
+
+export const stockTakesApi = {
+  list: () => api.get<StockTakeOut[]>('/stock-takes'),
+  get: (id: number) => api.get<StockTakeOut>(`/stock-takes/${id}`),
+  initiate: (payload: StockTakeCreate) => api.post<StockTakeOut>('/stock-takes', payload),
+  submitCount: (stockTakeId: number, itemId: number, payload: CountSubmit) =>
+    api.post<StockTakeItemOut>(
+      `/stock-takes/${stockTakeId}/items/${itemId}/count`,
+      payload,
+    ),
+  approveVariance: (stockTakeId: number, itemId: number) =>
+    api.post<StockTakeItemOut>(`/stock-takes/${stockTakeId}/items/${itemId}/approve`),
+  close: (stockTakeId: number) => api.post<StockTakeOut>(`/stock-takes/${stockTakeId}/close`),
 }

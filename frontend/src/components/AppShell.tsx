@@ -18,6 +18,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/customers', label: 'Customers', permission: 'sales.create' },
   { to: '/reports', label: 'Reports', permission: 'reports.view' },
   { to: '/settings', label: 'Settings', permission: 'config.edit' },
+  { to: '/roles', label: 'Roles & Permissions', permission: 'roles.manage' },
 ]
 
 export function AppShell() {

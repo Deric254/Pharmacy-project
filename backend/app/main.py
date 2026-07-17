@@ -30,6 +30,7 @@ from app.api.v1.inventory import router as inventory_router
 from app.api.v1.products import router as products_router
 from app.api.v1.purchase_orders import router as purchase_orders_router
 from app.api.v1.reports import router as reports_router
+from app.api.v1.roles import router as roles_router
 from app.api.v1.sales import router as sales_router
 from app.api.v1.stock_takes import router as stock_takes_router
 from app.api.v1.suppliers import router as suppliers_router
@@ -76,6 +77,7 @@ app.include_router(reports_router, prefix=settings.api_v1_prefix)
 app.include_router(ai_router, prefix=settings.api_v1_prefix)
 app.include_router(backups_router, prefix=settings.api_v1_prefix)
 app.include_router(users_router, prefix=settings.api_v1_prefix)
+app.include_router(roles_router, prefix=settings.api_v1_prefix)
 app.include_router(websocket_router, prefix=settings.api_v1_prefix)
 
 

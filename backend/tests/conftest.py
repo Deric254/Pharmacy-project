@@ -88,24 +88,47 @@ async def seeded_roles():
                 "purchasing.receive_stock",
                 "reports.view",
                 "reports.export",
+                "reports.view_profit",
                 "ai.use",
                 "backups.manage",
+                "roles.manage",
             ]
         }
         db.add_all(perms.values())
         await db.flush()
 
-        employee = Role(name="Employee")
-        admin = Role(name="Administrator")
-        owner = Role(name="ChemistOwner")
+        employee = Role(name="Employee", is_system=True)
+        admin = Role(name="Administrator", is_system=True)
+        owner = Role(name="ChemistOwner", is_system=True)
         employee.permissions = [
             perms["sales.create"],
             perms["inventory.view"],
             perms["stocktake.perform"],
             perms["ai.use"],
         ]
-        admin.permissions = list(perms.values())
-        owner.permissions = list(perms.values())
+        # Must mirror alembic/versions/0001_initial_auth_rbac.py's
+        # admin_perms exactly. Previously this was `list(perms.values())`
+        # -- identical to ChemistOwner -- which meant Administrator's
+        # actual restricted scope (no products.manage, no batches.create,
+        # no reports.view_profit) was never exercised by a single test.
+        admin.permissions = [
+            perms["sales.create"],
+            perms["sales.refund"],
+            perms["inventory.view"],
+            perms["inventory.adjust"],
+            perms["purchasing.create_po"],
+            perms["purchasing.approve_po"],
+            perms["purchasing.receive_stock"],
+            perms["stocktake.perform"],
+            perms["stocktake.approve_variance"],
+            perms["reports.view"],
+            perms["reports.export"],
+            perms["config.edit"],
+            perms["users.manage"],
+            perms["ai.use"],
+            perms["backups.manage"],
+        ]
+        owner.permissions = list(perms.values())  # ChemistOwner: full visibility, everything
         db.add_all([employee, admin, owner])
         await db.commit()
         return {"Employee": employee.id, "Administrator": admin.id, "ChemistOwner": owner.id}
@@ -119,6 +142,21 @@ async def owner_user(seeded_roles):
             username="lucy",
             hashed_password=hash_password("S3curePass!"),
             role_id=seeded_roles["ChemistOwner"],
+        )
+        db.add(u)
+        await db.commit()
+        await db.refresh(u)
+        return u
+
+
+@pytest_asyncio.fixture
+async def administrator_user(seeded_roles):
+    async with AsyncSessionLocal() as db:
+        u = User(
+            full_name="Sam Admin",
+            username="sam",
+            hashed_password=hash_password("AdminPass1"),
+            role_id=seeded_roles["Administrator"],
         )
         db.add(u)
         await db.commit()

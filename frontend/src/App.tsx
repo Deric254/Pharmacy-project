@@ -8,8 +8,12 @@ import { LoginPage } from './pages/LoginPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { PosPage } from './pages/PosPage'
 import { InventoryPage } from './pages/InventoryPage'
+import { PurchasingPage } from './pages/PurchasingPage'
+import { StockTakesPage } from './pages/StockTakesPage'
+import { CustomersPage } from './pages/CustomersPage'
+import { ReportsPage } from './pages/ReportsPage'
+import { RolesPage } from './pages/RolesPage'
 import { SettingsPage } from './pages/SettingsPage'
-import { ComingSoonPage } from './pages/ComingSoonPage'
 
 export function App() {
   const bootstrap = useAuthStore((s) => s.bootstrap)
@@ -61,7 +65,7 @@ export function App() {
             path="purchasing"
             element={
               <RequirePermission code="purchasing.create_po">
-                <ComingSoonPage title="Purchasing" />
+                <PurchasingPage />
               </RequirePermission>
             }
           />
@@ -69,7 +73,7 @@ export function App() {
             path="stock-takes"
             element={
               <RequirePermission code="stocktake.perform">
-                <ComingSoonPage title="Stock Takes" />
+                <StockTakesPage />
               </RequirePermission>
             }
           />
@@ -77,7 +81,7 @@ export function App() {
             path="customers"
             element={
               <RequirePermission code="sales.create">
-                <ComingSoonPage title="Customers" />
+                <CustomersPage />
               </RequirePermission>
             }
           />
@@ -85,7 +89,7 @@ export function App() {
             path="reports"
             element={
               <RequirePermission code="reports.view">
-                <ComingSoonPage title="Reports" />
+                <ReportsPage />
               </RequirePermission>
             }
           />
@@ -94,6 +98,14 @@ export function App() {
             element={
               <RequirePermission code="config.edit">
                 <SettingsPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="roles"
+            element={
+              <RequirePermission code="roles.manage">
+                <RolesPage />
               </RequirePermission>
             }
           />

@@ -4,11 +4,12 @@ from pydantic import BaseModel, Field
 
 from app.models.refund import RefundReason
 from app.models.sale import PaymentMethod
+from app.schemas._money import PositiveQuantity
 
 
 class RefundItemRequest(BaseModel):
     sale_item_id: int
-    quantity: int = Field(gt=0)
+    quantity: PositiveQuantity
     # False for damaged/expired returns -- the customer is still paid
     # back, but the stock is deliberately NOT added back to sellable
     # inventory.

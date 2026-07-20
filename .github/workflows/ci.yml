@@ -47,7 +47,7 @@ jobs:
 
       - name: Type check (mypy)
         working-directory: backend
-        run: mypy app scripts
+        run: mypy app scripts desktop_main.py
 
       - name: Run migrations against test DB
         working-directory: backend

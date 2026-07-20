@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.schemas._money import PositiveMoney
+
 
 class SupplierCreate(BaseModel):
     name: str = Field(min_length=1, max_length=150)
@@ -25,5 +27,5 @@ class SupplierOut(BaseModel):
 
 
 class PaymentRecordRequest(BaseModel):
-    amount: float = Field(gt=0)
+    amount: PositiveMoney
     notes: str | None = Field(default=None, max_length=255)

@@ -118,7 +118,7 @@ class SaleService:
             await self.db.rollback()
             raise
 
-        await self.db.refresh(sale, attribute_names=["items", "payments"])
+        await self.db.refresh(sale, attribute_names=["items", "payments", "created_at"])
 
         await publish(
             SaleCompletedEvent(

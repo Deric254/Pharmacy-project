@@ -19,6 +19,11 @@ underlying client by the currently running event loop, so each loop
 transparently gets its own connection pool. Existing call sites
 (`redis_client.get(...)`, `redis_client.publish(...)`, etc.) are
 unaffected since attribute access is forwarded via `__getattr__`.
+
+When settings.redis_mode == "memory" (desktop .exe only -- see
+app/core/memory_redis.py), this same proxy forwards to an in-process
+fake instead of a real connection. Every call site stays identical;
+only what's behind the proxy changes.
 """
 
 import asyncio
@@ -27,6 +32,7 @@ from typing import Any, cast
 import redis.asyncio as redis
 
 from app.core.config import get_settings
+from app.core.memory_redis import get_in_memory_redis_client
 
 settings = get_settings()
 
@@ -34,6 +40,9 @@ _clients_by_loop: dict[int, redis.Redis] = {}
 
 
 def _get_client() -> redis.Redis:
+    if settings.redis_mode == "memory":
+        return cast("redis.Redis", get_in_memory_redis_client())
+
     loop = asyncio.get_running_loop()
     key = id(loop)
     client = _clients_by_loop.get(key)
@@ -67,7 +76,12 @@ async def aclose_for_current_loop() -> None:
     could theoretically collide with a future loop). The app's own
     lifespan calls this on shutdown; a test suite that spins up one
     event loop per test must call this in its per-test teardown.
+
+    In memory mode there is no socket, nothing to close, and nothing
+    keyed by loop -- this is a safe no-op there.
     """
+    if settings.redis_mode == "memory":
+        return
     loop = asyncio.get_running_loop()
     key = id(loop)
     client = _clients_by_loop.pop(key, None)

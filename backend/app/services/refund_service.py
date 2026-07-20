@@ -107,7 +107,7 @@ class RefundService:
             )
         )
         await self.db.commit()
-        await self.db.refresh(refund, attribute_names=["items"])
+        await self.db.refresh(refund, attribute_names=["items", "created_at"])
         return RefundOut.model_validate(refund)
 
     async def list_refunds_for_sale(self, sale_id: int) -> list[RefundOut]:

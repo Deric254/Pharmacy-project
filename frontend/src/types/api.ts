@@ -418,6 +418,12 @@ export interface PermissionOut {
   description: string
 }
 
+export interface RoleOut {
+  id: number
+  name: string
+  description: string
+}
+
 export interface RoleDetailOut {
   id: number
   name: string
@@ -437,6 +443,68 @@ export interface RoleUpdate {
   name?: string
   description?: string
   permission_codes?: string[]
+}
+
+export interface UserListItemOut {
+  id: number
+  full_name: string
+  username: string
+  role_name: string
+  is_active: boolean
+}
+
+export interface UserCreate {
+  full_name: string
+  username: string
+  password: string
+  role_id: number
+  security_question?: string | null
+  security_answer?: string | null
+}
+
+export type BackupProviderName = 'GOOGLE_DRIVE'
+export type BackupStatus = 'SUCCESS' | 'FAILED'
+
+export interface BackupLogOut {
+  id: number
+  status: BackupStatus
+  provider: BackupProviderName
+  reference: string | null
+  size_bytes: number | null
+  error_message: string | null
+  created_at: string
+  restored_at: string | null
+}
+
+export interface RestoreResult {
+  backup_log_id: number
+  tables_restored: number
+  total_rows_restored: number
+  manifest_matched: boolean
+}
+
+export type AIProviderName = 'OPENAI' | 'CLAUDE' | 'GEMINI' | 'DEEPSEEK' | 'NVIDIA'
+
+export interface AIProviderKeyOut {
+  id: number
+  provider: AIProviderName
+  masked_key: string
+  priority: number
+  is_active: boolean
+  created_at: string
+  last_used_at: string | null
+}
+
+export interface AIProviderKeyCreate {
+  provider: AIProviderName
+  api_key: string
+  priority?: number
+}
+
+export interface AIAskResponse {
+  answer: string
+  provider_used: AIProviderName | null
+  fallback_used: boolean
 }
 
 export interface ApiErrorBody {

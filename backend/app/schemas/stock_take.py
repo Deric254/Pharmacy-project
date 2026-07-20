@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, computed_field
 
 from app.models.stock_take import StockTakeStatus
+from app.schemas._money import Quantity
 from app.schemas.inventory import AdjustmentReason
 
 
@@ -14,7 +15,7 @@ class StockTakeCreate(BaseModel):
 
 
 class CountSubmit(BaseModel):
-    physical_qty: int = Field(ge=0)
+    physical_qty: Quantity
     reason: AdjustmentReason | None = None
     notes: str | None = Field(default=None, max_length=255)
 

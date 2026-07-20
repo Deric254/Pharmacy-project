@@ -14,6 +14,9 @@ import { CustomersPage } from './pages/CustomersPage'
 import { ReportsPage } from './pages/ReportsPage'
 import { RolesPage } from './pages/RolesPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { UsersPage } from './pages/UsersPage'
+import { BackupsPage } from './pages/BackupsPage'
+import { AiAssistantPage } from './pages/AiAssistantPage'
 
 export function App() {
   const bootstrap = useAuthStore((s) => s.bootstrap)
@@ -106,6 +109,30 @@ export function App() {
             element={
               <RequirePermission code="roles.manage">
                 <RolesPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="users"
+            element={
+              <RequirePermission code="users.manage">
+                <UsersPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="backups"
+            element={
+              <RequirePermission code="backups.manage">
+                <BackupsPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="ai-assistant"
+            element={
+              <RequirePermission code="ai.use">
+                <AiAssistantPage />
               </RequirePermission>
             }
           />

@@ -22,6 +22,12 @@ class Settings(BaseSettings):
 
     database_url: str
     redis_url: str = "redis://localhost:6379/0"
+    # "redis" (default) talks to a real Redis via redis_url, same as
+    # always. "memory" swaps in an in-process fake with the same
+    # interface (app/core/memory_redis.py) -- exclusively for the
+    # bundled desktop .exe, which can't reasonably require a separate
+    # Redis install. Nothing else should ever set this.
+    redis_mode: str = "redis"
 
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"

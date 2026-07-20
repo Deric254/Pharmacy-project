@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, model_validator
 
 from app.models.sale import PaymentMethod
+from app.schemas._money import Money, PositiveMoney, PositiveQuantity
 
 
 class SaleItemRequest(BaseModel):
@@ -14,19 +15,19 @@ class SaleItemRequest(BaseModel):
     """
 
     product_id: int
-    quantity: int = Field(gt=0)
+    quantity: PositiveQuantity
 
 
 class PaymentRequest(BaseModel):
     method: PaymentMethod
-    amount: float = Field(gt=0)
+    amount: PositiveMoney
     reference: str | None = Field(default=None, max_length=100)
 
 
 class SaleCreate(BaseModel):
     items: list[SaleItemRequest] = Field(min_length=1)
     payments: list[PaymentRequest] = Field(min_length=1)
-    discount_amount: float = Field(default=0.0, ge=0)
+    discount_amount: Money = 0.0
     customer_id: int | None = None
 
     @model_validator(mode="after")

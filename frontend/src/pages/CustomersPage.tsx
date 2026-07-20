@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { customersApi } from '../api/domain'
 import { useCurrencyFormatter } from '../lib/currency'
 import { ApiError } from '../api/client'
+import { Modal } from '../components/Modal'
 import type { CustomerOut, PurchaseHistoryEntryOut } from '../types/api'
 
 export function CustomersPage() {
@@ -125,17 +126,8 @@ function CreateCustomerModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4">
-      <form
-        onSubmit={handleSubmit}
-        className="w-full max-w-sm space-y-3 border border-rule bg-paper p-5"
-      >
-        <div className="mb-2 flex items-center justify-between">
-          <h2 className="font-display text-lg text-ink">New customer</h2>
-          <button type="button" onClick={onClose} aria-label="Close" className="text-ink-soft">
-            ✕
-          </button>
-        </div>
+    <Modal title="New customer" onClose={onClose}>
+      <form onSubmit={handleSubmit} className="space-y-3">
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -165,7 +157,7 @@ function CreateCustomerModal({
           {submitting ? 'Saving…' : 'Save customer'}
         </button>
       </form>
-    </div>
+    </Modal>
   )
 }
 
@@ -188,35 +180,27 @@ function CustomerDetailModal({
   }, [customer.id])
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4">
-      <div className="max-h-[85vh] w-full max-w-md overflow-y-auto border border-rule bg-paper p-5">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="font-display text-lg text-ink">{customer.name}</h2>
-          <button onClick={onClose} aria-label="Close" className="text-ink-soft">
-            ✕
-          </button>
-        </div>
-        <p className="text-sm text-ink-soft">{customer.phone ?? 'No phone on file'}</p>
-        <p className="figure mt-1 text-sm text-brass">{customer.loyalty_points} loyalty points</p>
+    <Modal title={customer.name} onClose={onClose}>
+      <p className="text-sm text-ink-soft">{customer.phone ?? 'No phone on file'}</p>
+      <p className="figure mt-1 text-sm text-brass">{customer.loyalty_points} loyalty points</p>
 
-        <h3 className="mb-2 mt-4 text-xs uppercase tracking-wide text-ink-soft">
-          Purchase history
-        </h3>
-        {error && <p className="text-sm text-stamp-red">{error}</p>}
-        <ul className="divide-y divide-rule border border-rule">
-          {history?.map((h) => (
-            <li key={h.sale_id} className="flex justify-between px-3 py-2 text-sm">
-              <span>
-                Sale #{h.sale_id} · {new Date(h.created_at).toLocaleDateString()}
-              </span>
-              <span className="figure">{formatCurrency(h.total_amount)}</span>
-            </li>
-          ))}
-          {history?.length === 0 && (
-            <li className="px-3 py-3 text-sm text-ink-soft">No purchases yet.</li>
-          )}
-        </ul>
-      </div>
-    </div>
+      <h3 className="mb-2 mt-4 text-xs uppercase tracking-wide text-ink-soft">
+        Purchase history
+      </h3>
+      {error && <p className="text-sm text-stamp-red">{error}</p>}
+      <ul className="divide-y divide-rule border border-rule">
+        {history?.map((h) => (
+          <li key={h.sale_id} className="flex justify-between px-3 py-2 text-sm">
+            <span>
+              Sale #{h.sale_id} · {new Date(h.created_at).toLocaleDateString()}
+            </span>
+            <span className="figure">{formatCurrency(h.total_amount)}</span>
+          </li>
+        ))}
+        {history?.length === 0 && (
+          <li className="px-3 py-3 text-sm text-ink-soft">No purchases yet.</li>
+        )}
+      </ul>
+    </Modal>
   )
 }

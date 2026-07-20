@@ -55,6 +55,7 @@ export default defineConfig(({ mode }) => {
       proxy: {
         '/api': { target: 'http://localhost:8000', changeOrigin: true },
         '/api/v1/ws': { target: 'ws://localhost:8000', ws: true },
+        '/health': { target: 'http://localhost:8000', changeOrigin: true },
       },
     },
   }

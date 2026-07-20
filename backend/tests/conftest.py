@@ -14,7 +14,7 @@ os.environ.setdefault("ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
 import pytest_asyncio
 
-from app.core.database import AsyncSessionLocal, Base, engine
+from app.core.database import AsyncSessionLocal, Base, dispose_engine_for_current_loop, engine
 from app.core.redis_client import aclose_for_current_loop, redis_client
 from app.core.security import hash_password
 from app.models.ai_provider_key import AIProviderKey  # noqa: F401
@@ -50,8 +50,17 @@ async def _fresh_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+    finally:
+        # Must run even if drop_all above raised -- otherwise this
+        # loop's connection pool leaks. Confirmed by actually doing
+        # it: running many MySQL-backed tests back to back leaked a
+        # growing number of sleeping connections (125 of a 151 limit
+        # after ~30 tests), directly traced to teardown failures
+        # skipping this line when it came after drop_all unguarded.
+        await dispose_engine_for_current_loop()
 
 
 @pytest_asyncio.fixture(autouse=True)

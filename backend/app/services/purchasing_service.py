@@ -65,7 +65,7 @@ class PurchasingService:
             )
 
         await self.db.commit()
-        await self.db.refresh(po, attribute_names=["items"])
+        await self.db.refresh(po, attribute_names=["items", "created_at"])
         return PurchaseOrderOut.model_validate(po)
 
     async def send(self, po_id: int, user: User) -> PurchaseOrderOut:

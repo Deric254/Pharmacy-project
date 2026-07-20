@@ -66,7 +66,7 @@ class StockTakeService:
             )
 
         await self.db.commit()
-        await self.db.refresh(stock_take, attribute_names=["items"])
+        await self.db.refresh(stock_take, attribute_names=["items", "started_at"])
         return StockTakeOut.model_validate(stock_take)
 
     async def submit_count(

@@ -3,6 +3,8 @@ from datetime import date
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.schemas._money import QuantityDelta
+
 
 class LowStockProductOut(BaseModel):
     product_id: int
@@ -45,7 +47,9 @@ class AdjustmentReason(enum.StrEnum):
 
 class AdjustmentRequest(BaseModel):
     batch_id: int
-    quantity_delta: int = Field(description="Positive to add stock back, negative to remove")
+    quantity_delta: QuantityDelta = Field(
+        description="Positive to add stock back, negative to remove"
+    )
     reason: AdjustmentReason
     notes: str | None = Field(default=None, max_length=255)
 

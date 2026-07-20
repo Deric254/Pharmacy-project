@@ -80,30 +80,62 @@ If this doesn't come up cleanly on your machine, that's exactly the kind
 of thing worth reporting back rather than assuming — this path is new and
 hasn't had a live run yet.
 
-### Windows — double-click setup
+### Windows — three ways to run it, simplest first
 
-Three `.bat` files at the repo root wrap the two paths above for Windows
-users who'd rather not type commands:
+**Option 1 — just download the `.exe`.** Every tagged release publishes
+`Pharmacy-ERP-vX.Y.Z.exe` at
+[github.com/Deric254/Pharmacy-project/releases](https://github.com/Deric254/Pharmacy-project/releases).
+No Python, Node, or Redis to install — the executable is fully
+self-contained, generates its own secrets on first run, sets up its own
+database under `%LOCALAPPDATA%\PharmacyERP`, walks you through creating
+the owner account the first time, then opens your browser automatically.
+This is genuinely the least there is to do — one file, no setup steps.
+The app also checks for newer releases itself and shows a banner when one
+exists (see "Staying up to date" below).
 
-- **`install.bat`** — checks Python/Node/Redis are installed (with clear
-  links if not), sets up the backend virtual environment, generates a real
-  `backend\.env` with a properly random encryption key, runs migrations,
-  walks you through creating the first user, and installs frontend deps.
-  Run this once.
-- **`run.bat`** — starts Redis (if not already running), the backend, and
-  the frontend, each in its own window, then opens your browser. Run this
-  every time after `install.bat` has been run once.
-- **`run-docker.bat`** — the Docker Compose path instead, if Docker
-  Desktop is installed. Simpler, since it doesn't touch Redis/Python/Node
-  on the Windows host at all — everything runs in containers.
+**Option 2 — `Pharmacy-ERP.bat`**, at the repo root, if you're running
+from a source checkout instead of a release download. That's the only
+one you ever need to run, first time or every time after — it checks
+whether setup has been done yet, does it automatically if not (installs
+everything, generates a real `.env`, runs migrations, walks you through
+creating the first user), then always finishes by starting the backend
+and frontend and opening your browser. Nothing else to click, nothing to
+remember to run first.
+
+**Option 3 — `run-docker.bat`**, also at the repo root, if you'd rather
+use Docker Desktop instead of installing Python/Node/Redis directly on
+Windows. Same idea as Option 2, but everything runs in containers.
+
+**Important (Options 2 & 3):** extract the `.zip` fully first (right-click
+→ Extract All). Double-clicking a `.bat` file from inside Windows
+Explorer's zip preview, without extracting, is the single most common way
+these scripts fail — `Pharmacy-ERP.bat` checks for this specifically and
+tells you if that's what happened, rather than failing with a confusing
+wall of errors.
 
 **Honesty check:** I do not have a Windows machine in the environment I
-built this in, so **these `.bat` files have never actually been
-double-clicked and run** — only reasoned through carefully, line by line,
-for the batch-scripting pitfalls I know about (unescaped parentheses
-inside conditional blocks, delayed-vs-immediate variable expansion,
-nested quoting). If one of them breaks, that's a real bug report, not
-user error — tell me exactly what happened and I'll fix it.
+built this in, so **none of this has actually been double-clicked and run
+on real Windows** — only reasoned through carefully, and where possible,
+actually built and run on Linux as the closest available proxy (the exe
+was genuinely compiled with PyInstaller and run end-to-end here — real
+migrations, real first-user creation, real login — just producing a Linux
+binary instead of the `.exe` Windows CI will produce). One real bug was
+caught this way already: two of the internal helper scripts
+(`backend\start-backend.bat`, `frontend\start-frontend.bat`) had no error
+handling and no `pause`, so if either was ever run directly instead of
+through the main script, it would fail instantly and the window would
+close before anything was readable — "it blinks and closes" is exactly
+what that produces. A second one was caught building the exe itself: it
+crashed with a raw traceback instead of a readable message if launched
+without a console attached. Both are now guarded the same way everything
+else is: every failure path prints why, then pauses instead of vanishing.
+
+The rest of `Pharmacy-ERP.bat` has been checked carefully for the same
+class of batch-scripting pitfalls (unescaped nested quoting, delayed-vs-
+immediate variable expansion inside conditional blocks), and every file
+uses proper CRLF line endings. If it still breaks on your machine, that's
+a real bug report, not user error — tell me exactly what happened
+(a screenshot of the window before it closes helps a lot) and I'll fix it.
 
 ### Making it your own business
 
@@ -122,10 +154,10 @@ Run this locally before pushing — it's exactly what CI runs:
 
 ```bash
 cd backend
-ruff check . && ruff format --check . && mypy app && pytest --cov=app --cov-fail-under=80
+ruff check . && ruff format --check . && mypy app scripts desktop_main.py && pytest --cov=app --cov-fail-under=80
 ```
 
-As of the last full run: 214 backend tests passing, 0 failing, 93.7%
+As of the last full run: 252 backend tests passing, 0 failing, 93.6%
 coverage. Frontend: `cd frontend && npx tsc -b && npx oxlint && npm run build`.
 
 
@@ -150,10 +182,31 @@ Every commit message must follow **Conventional Commits**:
    messages since the last tag, bumps the version (`app/__init__.py` +
    `pyproject.toml`), updates `CHANGELOG.md`, creates a git tag (`vX.Y.Z`),
    and publishes a GitHub Release — all automatic, no manual version edits.
+4. **Only if a release was actually cut** (i.e. there were release-worthy
+   commits — a docs-only push cuts no release and this step is skipped
+   entirely), a second job builds the Windows executable: checks out the
+   exact tagged commit, builds the frontend, bundles everything via
+   PyInstaller (`pyinstaller/pharmacy-erp.spec`) into one `Pharmacy-ERP.exe`.
+5. **The built exe is actually run** on the Windows runner before it's
+   trusted with anything — real first-run input piped in, waits for
+   `/health`, performs a real login against the account it just created.
+   If any of that fails, the release build fails loudly rather than
+   silently attaching a broken exe to the release. Only after that passes
+   does it get renamed with the version and uploaded as a release asset.
 
 You never manually edit a version number. If you did, the next automated
 release would immediately overwrite it based on commit history — so don't
 fight the tool, write correct commit prefixes instead.
+
+## Staying up to date (in-app)
+
+Every screen checks `https://api.github.com/repos/Deric254/Pharmacy-project/releases/latest`
+in the background (`frontend/src/lib/updateCheck.ts`) and compares it to
+the running version reported by `/health`. If a newer release exists, a
+banner appears with a direct link to the new `.exe` — informational only,
+never forced, and any failure (offline, rate-limited, no releases yet)
+just means the banner doesn't show, never an error the person has to deal
+with.
 
 ## Compatibility policy (forward/backward, non-negotiable)
 

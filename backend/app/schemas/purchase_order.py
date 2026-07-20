@@ -3,12 +3,13 @@ from datetime import date, datetime
 from pydantic import BaseModel, Field
 
 from app.models.purchase_order import PurchaseOrderStatus
+from app.schemas._money import Money, PositiveMoney, PositiveQuantity, Quantity
 
 
 class PurchaseOrderItemCreate(BaseModel):
     product_id: int
-    quantity_ordered: int = Field(gt=0)
-    unit_cost_expected: float = Field(ge=0)
+    quantity_ordered: PositiveQuantity
+    unit_cost_expected: Money
 
 
 class PurchaseOrderCreate(BaseModel):
@@ -27,8 +28,8 @@ class ReceivingLine(BaseModel):
     item_id: int
     batch_number: str = Field(min_length=1, max_length=80)
     expiry_date: date
-    quantity_received: int = Field(ge=0)
-    unit_cost_actual: float = Field(ge=0)
+    quantity_received: Quantity
+    unit_cost_actual: Money
 
 
 class ReceiveRequest(BaseModel):
@@ -72,7 +73,7 @@ class PurchaseOrderOut(BaseModel):
 
 
 class ReconcileRequest(BaseModel):
-    payment_amount: float | None = Field(default=None, gt=0)
+    payment_amount: PositiveMoney | None = None
     notes: str | None = Field(default=None, max_length=255)
 
 

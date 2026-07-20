@@ -2,12 +2,14 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
+from app.schemas._money import Money, PositiveQuantity
+
 
 class BatchCreate(BaseModel):
     batch_number: str = Field(min_length=1, max_length=80)
     expiry_date: date
-    qty_received: int = Field(gt=0)
-    cost_price: float = Field(ge=0)
+    qty_received: PositiveQuantity
+    cost_price: Money
 
 
 class BatchOut(BaseModel):

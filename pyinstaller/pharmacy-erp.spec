@@ -1,0 +1,96 @@
+# -*- mode: python ; coding: utf-8 -*-
+"""
+Bundles backend/desktop_main.py plus everything it needs at runtime
+into a single executable:
+  - backend/alembic/ and backend/alembic.ini, because desktop_main.py
+    runs migrations via the Alembic Config API against these actual
+    files on disk (not something static analysis can discover).
+  - frontend/dist, so the single running process can serve the whole
+    app on one port -- see app/main.py's _frontend_dist_dir(), which
+    specifically looks for a "frontend_dist" folder next to a frozen
+    executable.
+
+Run from the repo root:
+    pyinstaller pyinstaller/pharmacy-erp.spec
+
+Requires frontend/dist to already exist (`cd frontend && npm run
+build` first) -- the release workflow does this before invoking
+PyInstaller; it is not done here.
+"""
+
+import sys
+from pathlib import Path
+
+block_cipher = None
+
+REPO_ROOT = Path(SPECPATH).resolve().parent
+BACKEND_DIR = REPO_ROOT / "backend"
+FRONTEND_DIST = REPO_ROOT / "frontend" / "dist"
+
+datas = [
+    (str(BACKEND_DIR / "alembic"), "alembic"),
+    (str(BACKEND_DIR / "alembic.ini"), "."),
+]
+if FRONTEND_DIST.is_dir():
+    datas.append((str(FRONTEND_DIST), "frontend_dist"))
+else:
+    print(
+        f"[WARNING] {FRONTEND_DIST} does not exist -- building without a "
+        "bundled frontend. Run `npm run build` in frontend/ first for a "
+        "real release build.",
+        file=sys.stderr,
+    )
+
+a = Analysis(
+    [str(BACKEND_DIR / "desktop_main.py")],
+    pathex=[str(BACKEND_DIR)],
+    binaries=[],
+    datas=datas,
+    # PyInstaller's static import scanner can't see routers/services
+    # that are only ever imported indirectly through app.main's own
+    # imports, alembic's dynamic env.py loading, or argon2's backend
+    # selection -- listed explicitly rather than discovered.
+    hiddenimports=[
+        "app.main",
+        "app.models",
+        "alembic",
+        "alembic.op",
+        "aiosqlite",
+        "argon2",
+        "jose",
+        "uvicorn.logging",
+        "uvicorn.loops.auto",
+        "uvicorn.protocols.http.auto",
+        "uvicorn.protocols.websockets.auto",
+        "uvicorn.lifespan.on",
+    ],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    cipher=block_cipher,
+    noarchive=False,
+)
+
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name="Pharmacy-ERP",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    console=True,  # deliberate: first-run setup and status messages
+    # need somewhere to show up; see desktop_main.py's docstring.
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)

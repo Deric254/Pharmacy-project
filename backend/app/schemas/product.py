@@ -2,14 +2,16 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.schemas._money import Money, Quantity
+
 
 class ProductCreate(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     barcode: str | None = Field(default=None, max_length=64)
     unit: str = Field(default="unit", max_length=30)
     category_id: int | None = None
-    reorder_point: int = Field(default=10, ge=0)
-    default_selling_price: float = Field(default=0.0, ge=0)
+    reorder_point: Quantity = 10
+    default_selling_price: Money = 0.0
 
 
 class ProductUpdate(BaseModel):
@@ -17,8 +19,8 @@ class ProductUpdate(BaseModel):
     barcode: str | None = Field(default=None, max_length=64)
     unit: str | None = Field(default=None, max_length=30)
     category_id: int | None = None
-    reorder_point: int | None = Field(default=None, ge=0)
-    default_selling_price: float | None = Field(default=None, ge=0)
+    reorder_point: Quantity | None = None
+    default_selling_price: Money | None = None
     is_active: bool | None = None
 
 

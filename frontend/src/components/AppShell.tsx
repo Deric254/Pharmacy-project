@@ -1,6 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuthStore } from '../auth/store'
 import { useConfigStore } from '../config/store'
+import { useUpdateCheck } from '../lib/updateCheck'
 import { Logo } from './Logo'
 
 interface NavItem {
@@ -19,6 +20,9 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/reports', label: 'Reports', permission: 'reports.view' },
   { to: '/settings', label: 'Settings', permission: 'config.edit' },
   { to: '/roles', label: 'Roles & Permissions', permission: 'roles.manage' },
+  { to: '/users', label: 'Staff Accounts', permission: 'users.manage' },
+  { to: '/backups', label: 'Backups', permission: 'backups.manage' },
+  { to: '/ai-assistant', label: 'AI Assistant', permission: 'ai.use' },
 ]
 
 export function AppShell() {
@@ -26,6 +30,7 @@ export function AppShell() {
   const hasPermission = useAuthStore((s) => s.hasPermission)
   const logout = useAuthStore((s) => s.logout)
   const businessName = useConfigStore((s) => s.config?.business_name ?? 'Pharmacy System')
+  const updateInfo = useUpdateCheck()
 
   const visibleItems = NAV_ITEMS.filter(
     (item) => item.permission === null || hasPermission(item.permission),
@@ -68,8 +73,31 @@ export function AppShell() {
         </div>
       </aside>
       <main className="flex-1 overflow-y-auto">
+        {updateInfo && <UpdateBanner info={updateInfo} />}
         <Outlet />
       </main>
+    </div>
+  )
+}
+
+function UpdateBanner({ info }: { info: ReturnType<typeof useUpdateCheck> }) {
+  if (!info) return null
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-brass bg-brass-soft/30 px-4 py-2 text-sm">
+      <span>
+        A newer version is available:{' '}
+        <span className="figure">
+          {info.currentVersion} → {info.latestVersion}
+        </span>
+      </span>
+      <a
+        href={info.downloadUrl ?? info.releaseUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="border border-ink bg-ink px-3 py-1 text-paper"
+      >
+        {info.downloadUrl ? 'Download update' : 'View release'}
+      </a>
     </div>
   )
 }

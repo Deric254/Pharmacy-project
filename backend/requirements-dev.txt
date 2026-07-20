@@ -10,3 +10,4 @@ pypdf==5.1.*
 types-openpyxl==3.1.*
 types-reportlab==4.2.*
 httpx-ws==0.9.*
+pyinstaller==6.21.*

@@ -2,6 +2,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas._money import Money
+
 BUILT_IN_THEMES = ("ledger", "clinical", "midnight", "sunrise")
 ThemeName = Literal["ledger", "clinical", "midnight", "sunrise"]
 
@@ -57,4 +59,4 @@ class BusinessConfigUpdate(BaseModel):
     low_stock_threshold_default: int | None = Field(default=None, ge=0)
     expiry_alert_days: list[int] | None = None
     loyalty_program_enabled: bool | None = None
-    loyalty_points_per_currency_unit: float | None = Field(default=None, ge=0)
+    loyalty_points_per_currency_unit: Money | None = None

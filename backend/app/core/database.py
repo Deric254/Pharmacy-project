@@ -27,6 +27,7 @@ this codebase against SQLite could ever have observed.
 """
 
 import asyncio
+import os
 from collections.abc import AsyncGenerator
 from typing import Any, cast
 
@@ -37,6 +38,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
 
@@ -46,18 +48,44 @@ _engines_by_loop: dict[int, AsyncEngine] = {}
 _sessionmakers_by_loop: dict[int, async_sessionmaker[AsyncSession]] = {}
 
 
+def _running_under_pytest() -> bool:
+    # Set automatically by pytest for the duration of every test --
+    # no test-side configuration needed, and it's unset again the
+    # moment the test session ends, so this can't leak into any real
+    # deployment by accident.
+    return "PYTEST_CURRENT_TEST" in os.environ
+
+
 def _get_engine() -> AsyncEngine:
     loop = asyncio.get_running_loop()
     key = id(loop)
     eng = _engines_by_loop.get(key)
     if eng is None:
-        eng = create_async_engine(
-            settings.database_url,
-            pool_size=10,
-            max_overflow=20,
-            pool_pre_ping=True,  # avoids "server has gone away" errors on idle connections
-            echo=settings.environment == "development",
-        )
+        if _running_under_pytest():
+            # No connection is ever held open between operations, so
+            # there's nothing for a disposed-but-not-yet-torn-down
+            # connection to collide with when the next test's engine
+            # opens its own. Trades a little per-query latency (a
+            # fresh TCP handshake every time) for genuinely bounded
+            # connection usage across hundreds of short-lived engines
+            # -- a trade only worth making in exactly this situation.
+            eng = create_async_engine(
+                settings.database_url,
+                poolclass=NullPool,
+                echo=settings.environment == "development",
+            )
+        else:
+            eng = create_async_engine(
+                settings.database_url,
+                # Sized for this app's actual scale (a single
+                # pharmacy, a handful of concurrent staff), not an
+                # arbitrary default.
+                pool_size=3,
+                max_overflow=2,
+                pool_timeout=10,  # fail fast and loud, not a long silent hang
+                pool_pre_ping=True,  # avoids "server has gone away" on idle connections
+                echo=settings.environment == "development",
+            )
         _engines_by_loop[key] = eng
     return eng
 

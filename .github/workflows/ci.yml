@@ -35,7 +35,7 @@ jobs:
       - name: Install dependencies
         working-directory: backend
         run: |
-          pip install -r requirements.txt -r requirements-dev.txt
+          pip install -r requirements.txt -r requirements-mysql.txt -r requirements-dev.txt
 
       - name: Lint (ruff)
         working-directory: backend

@@ -45,6 +45,12 @@ uvicorn app.main:app --reload
 # -> http://localhost:8000  (health check: http://localhost:8000/health)
 ```
 
+Note: `requirements-mysql.txt` is deliberately **not** installed here. It's a
+separate file containing only the MySQL driver (`asyncmy`), needed by
+Docker/production but not by this SQLite-based local path or the desktop
+`.exe` — kept out so a fresh machine doesn't need a C toolchain just to try
+the app locally. `docker compose` (Path B below) installs it automatically.
+
 In a second terminal:
 
 ```bash

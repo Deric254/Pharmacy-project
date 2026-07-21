@@ -47,20 +47,25 @@ def running_on_sqlite() -> bool:
 
 @pytest_asyncio.fixture(autouse=True)
 async def _fresh_db():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield
     try:
         async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
+            await conn.run_sync(Base.metadata.create_all)
+        yield
     finally:
-        # Must run even if drop_all above raised -- otherwise this
-        # loop's connection pool leaks. Confirmed by actually doing
-        # it: running many MySQL-backed tests back to back leaked a
-        # growing number of sleeping connections (125 of a 151 limit
-        # after ~30 tests), directly traced to teardown failures
-        # skipping this line when it came after drop_all unguarded.
-        await dispose_engine_for_current_loop()
+        # Must run no matter WHERE this fixture fails -- create_all
+        # above, the test itself, or drop_all below -- or this loop's
+        # connection pool leaks. A plain try/finally only around
+        # drop_all still misses the create_all failure case entirely,
+        # since a fixture that raises before reaching `yield` never
+        # runs any of its post-yield code at all. Confirmed by
+        # actually doing it: running many MySQL-backed tests back to
+        # back leaked a growing number of sleeping connections (125 of
+        # a 151 limit after ~30 tests) even with the narrower guard.
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.drop_all)
+        finally:
+            await dispose_engine_for_current_loop()
 
 
 @pytest_asyncio.fixture(autouse=True)

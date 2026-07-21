@@ -83,16 +83,25 @@ where redis-server >nul 2>nul
 if errorlevel 1 (
     where memurai >nul 2>nul
     if errorlevel 1 (
-        echo [ERROR] Neither redis-server nor Memurai was found on PATH.
-        echo Windows has no official Redis build. The simplest fix:
-        echo   1. Install Memurai Developer ^(free, Redis-compatible Windows
-        echo      service^) from https://www.memurai.com/get-memurai
-        echo   2. Its installer registers a background service automatically,
-        echo      so nothing needs to be on PATH after that -- just re-run
-        echo      this script once it's installed.
-        echo   OR install Docker Desktop and use run-docker.bat instead,
-        echo   which does not need Redis on Windows at all.
-        exit /b 1
+        if exist "%~dp0redis-portable\redis-server.exe" (
+            echo [OK] Portable Redis found from a previous run.
+        ) else (
+            echo Redis not found on PATH -- downloading a portable copy
+            echo automatically ^(no install, no admin rights needed^)...
+            powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0windows\download-redis.ps1"
+            if errorlevel 1 (
+                echo.
+                echo [ERROR] Automatic Redis setup failed ^(likely no internet
+                echo access, or GitHub is unreachable from this network^).
+                echo Install Memurai manually instead:
+                echo   1. Download from https://www.memurai.com/get-memurai
+                echo   2. Its installer registers a background service automatically
+                echo   3. Re-run this script once it's installed
+                echo OR install Docker Desktop and use run-docker.bat instead,
+                echo which does not need Redis on Windows at all.
+                exit /b 1
+            )
+        )
     )
 )
 echo [OK] Redis/Memurai found.
@@ -196,6 +205,15 @@ if not errorlevel 1 (
     if errorlevel 1 (
         echo Starting Redis...
         start "Pharmacy ERP - Redis" /min redis-server
+        timeout /t 2 /nobreak >nul
+    ) else (
+        echo [OK] Redis is already running.
+    )
+) else if exist "%~dp0redis-portable\redis-server.exe" (
+    netstat -an | findstr "6379" | findstr "LISTENING" >nul 2>nul
+    if errorlevel 1 (
+        echo Starting the portable Redis downloaded during setup...
+        start "Pharmacy ERP - Redis" /min "%~dp0redis-portable\redis-server.exe"
         timeout /t 2 /nobreak >nul
     ) else (
         echo [OK] Redis is already running.

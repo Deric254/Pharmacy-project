@@ -102,6 +102,14 @@ creating the first user), then always finishes by starting the backend
 and frontend and opening your browser. Nothing else to click, nothing to
 remember to run first.
 
+If Redis isn't already on your machine, the script downloads a real,
+portable Redis-for-Windows build automatically (from the actively
+maintained [redis-windows/redis-windows](https://github.com/redis-windows/redis-windows)
+project) into `redis-portable\` next to the script — no install, no admin
+rights, nothing added to PATH. That only fails if the machine has no
+internet access, in which case it prints the manual Memurai fallback
+instead of just stopping.
+
 **Option 3 — `run-docker.bat`**, also at the repo root, if you'd rather
 use Docker Desktop instead of installing Python/Node/Redis directly on
 Windows. Same idea as Option 2, but everything runs in containers.
@@ -129,6 +137,11 @@ what that produces. A second one was caught building the exe itself: it
 crashed with a raw traceback instead of a readable message if launched
 without a console attached. Both are now guarded the same way everything
 else is: every failure path prints why, then pauses instead of vanishing.
+The Redis auto-download (`windows\download-redis.ps1`) is the newest
+piece and carries the same caveat most directly — real GitHub API calls,
+real PowerShell `Expand-Archive`, checked carefully for correctness, but
+never actually run on a Windows machine. If it fails, the script falls
+back to printing the manual Memurai steps rather than leaving you stuck.
 
 The rest of `Pharmacy-ERP.bat` has been checked carefully for the same
 class of batch-scripting pitfalls (unescaped nested quoting, delayed-vs-

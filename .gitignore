@@ -31,3 +31,6 @@ Thumbs.db
 *.sqlite3
 *.db
 mysql_data/
+
+# Downloaded automatically by windows/download-redis.ps1 -- never committed
+redis-portable/

@@ -49,6 +49,19 @@ def running_on_sqlite() -> bool:
 async def _fresh_db():
     try:
         async with engine.begin() as conn:
+            # Drop before create, not just create -- the previous
+            # test's teardown handles this for every test EXCEPT the
+            # very first one in the session, which has no previous
+            # teardown to rely on. Confirmed on a real CI run: ci.yml
+            # runs a separate migrations-verification step against
+            # this exact database before pytest starts, which seeds
+            # real permission/role rows via the migrations themselves.
+            # Without this, the first test to seed its own roles
+            # collides with that leftover data -- "Duplicate entry
+            # 'sales.create'" -- while every later test looks fine,
+            # since by then the previous test's teardown already
+            # cleared it.
+            await conn.run_sync(Base.metadata.drop_all)
             await conn.run_sync(Base.metadata.create_all)
         yield
     finally:

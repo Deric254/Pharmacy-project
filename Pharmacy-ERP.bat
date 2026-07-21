@@ -154,6 +154,34 @@ for /f "usebackq tokens=1,* delims==" %%A in (".env") do (
     if not "%%A"=="" set "%%A=%%B"
 )
 
+rem --- Sanity check: does the existing .env actually match this script's
+rem     SQLite-only design? A leftover .env from an earlier attempt
+rem     (manual MySQL experimentation, a copied .env.example, an older
+rem     script version) pointing at MySQL would otherwise fail deep
+rem     inside alembic with a raw Python traceback -- "ModuleNotFoundError:
+rem     No module named 'asyncmy'" means nothing to someone who just
+rem     wanted to run the app. Confirmed by actually seeing this happen.
+echo !DATABASE_URL! | findstr /i "sqlite" >nul
+if errorlevel 1 (
+    echo.
+    echo [ERROR] backend\.env has DATABASE_URL set to something other than
+    echo SQLite:
+    echo   !DATABASE_URL!
+    echo.
+    echo This script only ever sets up the SQLite path -- it never installs
+    echo a MySQL driver, so migrations will fail no matter what. This is
+    echo almost always a leftover .env from an earlier attempt, not a
+    echo deliberate choice.
+    echo.
+    echo Fix: delete backend\.env and run this script again -- it will
+    echo generate a correct one automatically. If you specifically WANT
+    echo MySQL, use run-docker.bat instead, which installs the MySQL
+    echo driver too.
+    echo.
+    cd ..
+    exit /b 1
+)
+
 echo.
 echo Running database migrations...
 alembic upgrade head

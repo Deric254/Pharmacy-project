@@ -94,6 +94,17 @@ def _run_migrations() -> None:
     command.upgrade(alembic_cfg, "head")
 
 
+def _running_under_electron() -> bool:
+    """
+    Set by electron/main.js when it spawns this exe as its child
+    process (see startBackend() there). Nothing else ever sets this --
+    when it's absent, this is either the raw exe run directly, or the
+    plain `python desktop_main.py` dev path, both of which genuinely
+    need to open a browser themselves since nothing else will.
+    """
+    return os.environ.get("PHARMACY_ERP_ELECTRON") == "1"
+
+
 def _wait_for_server_then_open_browser(port: int) -> None:
     import urllib.error
     import urllib.request
@@ -103,7 +114,8 @@ def _wait_for_server_then_open_browser(port: int) -> None:
         try:
             with urllib.request.urlopen(f"{url}/health", timeout=1) as response:
                 if response.status == 200:
-                    webbrowser.open(url)
+                    if not _running_under_electron():
+                        webbrowser.open(url)
                     return
         except (urllib.error.URLError, OSError):
             pass
@@ -148,8 +160,9 @@ def main() -> None:
     # healthy, there's nothing to set up, just open the browser to it.
     if _already_running_instance(port):
         print(f"Pharmacy ERP is already running at http://127.0.0.1:{port}")
-        print("Opening your browser...")
-        webbrowser.open(f"http://127.0.0.1:{port}")
+        if not _running_under_electron():
+            print("Opening your browser...")
+            webbrowser.open(f"http://127.0.0.1:{port}")
         print()
         print("This window can be closed -- it isn't the one running the app.")
         with contextlib.suppress(EOFError):
@@ -168,7 +181,10 @@ def main() -> None:
 
     print()
     print(f"Starting Pharmacy ERP at http://127.0.0.1:{port}")
-    print("Your browser should open automatically in a moment.")
+    if _running_under_electron():
+        print("The app window will appear in a moment.")
+    else:
+        print("Your browser should open automatically in a moment.")
     print("Close this window to stop the app.")
     print()
 

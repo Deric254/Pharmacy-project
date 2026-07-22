@@ -80,10 +80,16 @@ function packagedBackendPath() {
 
 function startBackend() {
   return new Promise((resolve, reject) => {
+    // Tells desktop_main.py not to open a system browser tab -- this
+    // window is already showing the app. Set on both paths (packaged
+    // and dev) since either one is Electron spawning the backend.
+    const backendEnv = { ...process.env, PHARMACY_ERP_ELECTRON: '1' }
+
     if (app.isPackaged) {
       backendProcess = spawn(packagedBackendPath(), [], {
         windowsHide: true, // the entire point: no console window
         stdio: 'ignore',
+        env: backendEnv,
       })
     } else {
       // Development: run the real Python entrypoint the exe is built
@@ -92,6 +98,7 @@ function startBackend() {
       backendProcess = spawn('python', ['desktop_main.py'], {
         cwd: path.join(__dirname, '..', 'backend'),
         stdio: 'inherit',
+        env: backendEnv,
       })
     }
 

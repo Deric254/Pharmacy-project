@@ -6,7 +6,8 @@ import { ApiError } from '../api/client'
 import { Logo } from '../components/Logo'
 
 export function LoginPage() {
-  const { login, status } = useAuthStore((s) => ({ login: s.login, status: s.status }))
+  const login = useAuthStore((s) => s.login)
+  const status = useAuthStore((s) => s.status)
   const config = useConfigStore((s) => s.config)
   const location = useLocation()
   const [username, setUsername] = useState('')

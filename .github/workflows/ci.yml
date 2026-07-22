@@ -11,14 +11,6 @@ jobs:
     name: Backend lint, type-check, tests
     runs-on: ubuntu-latest
     services:
-      mysql:
-        image: mysql:8
-        env:
-          MYSQL_ROOT_PASSWORD: root
-          MYSQL_DATABASE: pharmacy_erp_test
-        ports: ["3306:3306"]
-        options: >-
-          --health-cmd="mysqladmin ping" --health-interval=5s --health-timeout=5s --health-retries=10
       redis:
         image: redis:7
         ports: ["6379:6379"]
@@ -35,7 +27,7 @@ jobs:
       - name: Install dependencies
         working-directory: backend
         run: |
-          pip install -r requirements.txt -r requirements-mysql.txt -r requirements-dev.txt
+          pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Lint (ruff)
         working-directory: backend
@@ -49,10 +41,10 @@ jobs:
         working-directory: backend
         run: mypy app scripts desktop_main.py
 
-      - name: Run migrations against test DB
+      - name: Run migrations against a fresh SQLite DB
         working-directory: backend
         env:
-          DATABASE_URL: mysql+asyncmy://root:root@127.0.0.1:3306/pharmacy_erp_test
+          DATABASE_URL: sqlite+aiosqlite:///./ci-migration-check.db
           JWT_SECRET_KEY: ci-test-secret-not-for-production
           ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
         run: alembic upgrade head
@@ -60,7 +52,7 @@ jobs:
       - name: Run tests with coverage
         working-directory: backend
         env:
-          DATABASE_URL: mysql+asyncmy://root:root@127.0.0.1:3306/pharmacy_erp_test
+          DATABASE_URL: sqlite+aiosqlite:///./test.db
           REDIS_URL: redis://127.0.0.1:6379/0
           JWT_SECRET_KEY: ci-test-secret-not-for-production
           ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=

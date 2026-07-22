@@ -3,9 +3,9 @@ Purchasing service.
 
 The state machine is enforced here, not left to whatever status string
 a client sends: DRAFT -> SENT -> IN_TRANSIT -> RECEIVED -> RECONCILED,
-each transition its own method, each one validating the PO is
-currently in the exact expected prior state (row-locked to prevent two
-concurrent transition calls racing each other).
+each transition its own method, each one an atomic UPDATE guarded by
+the expected prior status so two concurrent calls can't both move the
+same PO (see _transition's docstring for why this isn't row-locking).
 
 Receiving is the critical integration point: moving to RECEIVED doesn't
 just flip a status field, it creates the actual MedicineBatch rows and
@@ -16,9 +16,11 @@ corrected.
 """
 
 from datetime import UTC, datetime
+from typing import Any, cast
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import PurchaseOrderStatusChangedEvent, publish
@@ -200,30 +202,45 @@ class PurchasingService:
         self, po_id: int, expected_current: PurchaseOrderStatus, target: PurchaseOrderStatus
     ) -> tuple[PurchaseOrder, PurchaseOrderStatus]:
         """
-        Loads the PO row-locked and validates it's exactly in the
-        expected prior state before allowing the move. Returns the PO
-        (still uncommitted -- caller sets timestamp fields, may add
-        more rows, then must call _commit_and_publish) plus the status
-        it moved from, for the event payload.
+        Atomically moves the PO from expected_current to target and
+        returns the fresh row (still open for the caller to set
+        additional fields, e.g. sent_at, before calling
+        _commit_and_publish) plus the status it moved from.
+
+        The actual guarantee against two concurrent transition calls
+        racing each other -- only one of "send this PO" called twice
+        at once can ever win -- is the atomic `UPDATE ... WHERE status
+        = :expected_current` below, not row-locking: SQLite silently
+        drops SELECT...FOR UPDATE entirely, so a plan of "SELECT, check
+        in Python, then UPDATE" was never actually safe under real
+        concurrency on this app's backend. The WHERE clause here is
+        checked against the row's real current status at the exact
+        moment the UPDATE runs; the loser of two simultaneous calls
+        gets a clean 400, never a silently-doubled transition.
         """
-        result = await self.db.execute(
-            select(PurchaseOrder).where(PurchaseOrder.id == po_id).with_for_update()
+        result = cast(
+            "CursorResult[Any]",
+            await self.db.execute(
+                update(PurchaseOrder)
+                .where(PurchaseOrder.id == po_id, PurchaseOrder.status == expected_current)
+                .values(status=target, version=PurchaseOrder.version + 1)
+            ),
         )
-        po = result.scalar_one_or_none()
-        if po is None:
-            raise HTTPException(status_code=404, detail="Purchase order not found")
-        if po.status != expected_current:
+        if result.rowcount == 0:
+            current = await self.db.get(PurchaseOrder, po_id)
+            if current is None:
+                raise HTTPException(status_code=404, detail="Purchase order not found")
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"Cannot move to {target.value} from {po.status.value} "
+                    f"Cannot move to {target.value} from {current.status.value} "
                     f"(expected current status: {expected_current.value})"
                 ),
             )
-        old_status = po.status
-        po.status = target
-        po.version += 1
-        return po, old_status
+
+        po = await self.db.get(PurchaseOrder, po_id)
+        assert po is not None  # the UPDATE above just succeeded against this exact row
+        return po, expected_current
 
     async def _commit_and_publish(self, po: PurchaseOrder, old_status: PurchaseOrderStatus) -> None:
         await self.db.commit()

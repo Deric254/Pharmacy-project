@@ -33,6 +33,7 @@ from app.models.purchase_order import PurchaseOrder, PurchaseOrderItem
 from app.models.refund import Refund, RefundItem
 from app.models.role import Permission, Role
 from app.models.sale import Payment, Sale, SaleItem
+from app.models.setup_lock import SetupLock
 from app.models.stock_movement import StockMovement
 from app.models.stock_take import StockTake, StockTakeItem
 from app.models.supplier import Supplier, SupplierTransaction
@@ -57,6 +58,7 @@ __all__ = [
     "Role",
     "Sale",
     "SaleItem",
+    "SetupLock",
     "StockMovement",
     "StockTake",
     "StockTakeItem",

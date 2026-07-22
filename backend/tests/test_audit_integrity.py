@@ -20,7 +20,6 @@ from app.models.audit_log import AuditLog
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
 from app.models.sale import Sale
-from tests.conftest import running_on_sqlite
 
 
 async def _login(client, username: str, password: str) -> str:
@@ -31,11 +30,6 @@ async def _login(client, username: str, password: str) -> str:
 
 class TestForeignKeyEnforcement:
     async def test_batch_with_nonexistent_product_id_is_rejected_by_the_database(self):
-        if running_on_sqlite():
-            import pytest
-
-            pytest.skip("SQLite doesn't enforce FKs by default; verified against real MySQL.")
-
         async with AsyncSessionLocal() as db:
             raised = False
             try:
@@ -58,11 +52,6 @@ class TestForeignKeyEnforcement:
             ), "Database did not enforce the FK constraint on medicine_batches.product_id"
 
     async def test_sale_with_nonexistent_cashier_is_rejected_by_the_database(self):
-        if running_on_sqlite():
-            import pytest
-
-            pytest.skip("SQLite doesn't enforce FKs by default; verified against real MySQL.")
-
         async with AsyncSessionLocal() as db:
             raised = False
             try:

@@ -114,15 +114,15 @@ jobs:
           # missed by hiddenimports, a bundled data file in the wrong
           # place, anything like that would still "build" fine and
           # then fail the instant someone double-clicks it. Actually
-          # running it here, with a fresh isolated profile and real
-          # first-run input piped in exactly like a real launch would
-          # receive it, is what catches that before it ships.
+          # running it here, then driving the real HTTP setup flow the
+          # web UI itself uses (not a console prompt -- desktop_main.py
+          # no longer has one, since Electron launches it with no
+          # console at all), is what catches that before it ships.
           # LOCALAPPDATA specifically -- see desktop_main.py's
           # _app_data_dir(), which reads that exact variable.
           export LOCALAPPDATA="$RUNNER_TEMP/exe-smoke-test"
           mkdir -p "$LOCALAPPDATA"
-          printf 'CI Smoke Test\nsmoketest\nSmokeTestPass123\n' > "$RUNNER_TEMP/first-run-input.txt"
-          "./dist/Pharmacy-ERP.exe" < "$RUNNER_TEMP/first-run-input.txt" &
+          "./dist/Pharmacy-ERP.exe" &
           EXE_PID=$!
 
           ready=""
@@ -139,7 +139,16 @@ jobs:
             exit 1
           fi
 
-          echo "Exe is up. Verifying a real login works end-to-end..."
+          echo "Exe is up. Driving the real setup flow, then verifying login works end-to-end..."
+          setup_status=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:8000/api/v1/setup/first-user \
+            -H "Content-Type: application/json" \
+            -d '{"full_name":"CI Smoke Test","username":"smoketest","password":"SmokeTestPass123"}')
+          if [ "$setup_status" != "204" ]; then
+            echo "::error::Setup smoke test got HTTP $setup_status from /setup/first-user, expected 204 -- failing the release rather than shipping a broken asset."
+            kill "$EXE_PID" 2>/dev/null || true
+            exit 1
+          fi
+
           login_status=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:8000/api/v1/auth/login \
             -H "Content-Type: application/json" \
             -d '{"username":"smoketest","password":"SmokeTestPass123"}')
@@ -149,17 +158,39 @@ jobs:
             echo "::error::Login smoke test got HTTP $login_status, expected 200 -- failing the release rather than shipping a broken asset."
             exit 1
           fi
-          echo "Smoke test passed: the exe migrates, creates the first user, and serves a working login."
+          echo "Smoke test passed: the exe migrates, the real setup endpoint creates the first user, and login works."
+
+      - name: Build the Electron desktop installer
+        working-directory: electron
+        shell: bash
+        run: |
+          # Real version, not the hardcoded placeholder in package.json --
+          # otherwise every release would ship an installer claiming to be
+          # v0.1.0 regardless of what it actually is.
+          npm version "${{ needs.release.outputs.tag }}" --no-git-tag-version --allow-same-version
+          npm install
+          npm run build:win
 
       - name: Rename with the version
         shell: bash
         run: |
           mv "dist/Pharmacy-ERP.exe" "dist/Pharmacy-ERP-${{ needs.release.outputs.tag }}.exe"
+          # electron-builder's own default NSIS naming
+          # ("<productName> Setup <version>.exe") -- found by its
+          # actual glob rather than hardcoded, since that pattern can
+          # shift between electron-builder versions.
+          installer_path=$(find electron/dist -maxdepth 1 -name "*.exe" | head -n 1)
+          if [ -z "$installer_path" ]; then
+            echo "::error::No installer .exe found under electron/dist after the Electron build."
+            exit 1
+          fi
+          mv "$installer_path" "dist/Pharmacy-ERP-Setup-${{ needs.release.outputs.tag }}.exe"
 
-      - name: Attach the executable to the release
+      - name: Attach the executables to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           gh release upload "${{ needs.release.outputs.tag }}" \
-            "dist/Pharmacy-ERP-${{ needs.release.outputs.tag }}.exe" --clobber
+            "dist/Pharmacy-ERP-${{ needs.release.outputs.tag }}.exe" \
+            "dist/Pharmacy-ERP-Setup-${{ needs.release.outputs.tag }}.exe" --clobber

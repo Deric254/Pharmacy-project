@@ -40,12 +40,12 @@ from app.api.v1.purchase_orders import router as purchase_orders_router
 from app.api.v1.reports import router as reports_router
 from app.api.v1.roles import router as roles_router
 from app.api.v1.sales import router as sales_router
+from app.api.v1.setup import router as setup_router
 from app.api.v1.stock_takes import router as stock_takes_router
 from app.api.v1.suppliers import router as suppliers_router
 from app.api.v1.users import router as users_router
 from app.api.v1.websocket import router as websocket_router
 from app.core.config import get_settings
-from app.core.database import dispose_engine_for_current_loop
 from app.core.redis_client import aclose_for_current_loop
 from app.core.websocket_manager import manager as ws_manager
 from app.services.notification_dispatcher import start_dispatcher_task, stop_dispatcher_task
@@ -85,7 +85,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     finally:
         await stop_dispatcher_task(dispatcher_task)
         await aclose_for_current_loop()
-        await dispose_engine_for_current_loop()
 
 
 app = FastAPI(title=settings.app_name, version=__version__, lifespan=lifespan)
@@ -152,6 +151,7 @@ app.include_router(ai_router, prefix=settings.api_v1_prefix)
 app.include_router(backups_router, prefix=settings.api_v1_prefix)
 app.include_router(users_router, prefix=settings.api_v1_prefix)
 app.include_router(roles_router, prefix=settings.api_v1_prefix)
+app.include_router(setup_router, prefix=settings.api_v1_prefix)
 app.include_router(websocket_router, prefix=settings.api_v1_prefix)
 
 

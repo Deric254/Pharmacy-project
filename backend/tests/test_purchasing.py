@@ -16,7 +16,6 @@ from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
 from app.models.stock_movement import MovementType, StockMovement
 from app.models.supplier import Supplier
-from tests.conftest import running_on_sqlite
 
 
 async def _login(client, username: str, password: str) -> str:
@@ -422,18 +421,12 @@ class TestConcurrentTransitions:
     async def test_two_concurrent_send_calls_only_one_succeeds(self, client, owner_user):
         """
         Two simultaneous 'send' calls against the same DRAFT PO should
-        not both succeed -- the row lock in _transition must serialize
-        them, same principle as the Sales concurrency test.
-
-        Skipped on SQLite for the same reason as the Sales concurrency
-        test: SQLAlchemy silently drops SELECT...FOR UPDATE on SQLite.
-        Verified against real MySQL/InnoDB instead.
+        not both succeed. Same underlying guarantee as the Sales
+        concurrency test, for the same reason: not row-locking (SQLite
+        silently drops SELECT...FOR UPDATE entirely), but the atomic
+        `UPDATE ... WHERE status = :expected_current` in _transition,
+        checked against the row's real state at the moment it runs.
         """
-        if running_on_sqlite():
-            import pytest
-
-            pytest.skip("SQLite has no row-level locking; verified against real MySQL instead.")
-
         supplier_id = await _make_supplier()
         product_id = await _make_product()
         token = await _login(client, "lucy", "S3curePass!")

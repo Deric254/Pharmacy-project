@@ -11,7 +11,10 @@ together. Keeping this module free of that context is what lets it be
 reused unchanged by Sales, Adjustments, and Transfers later.
 """
 
-from sqlalchemy import select
+from typing import Any, cast
+
+from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.medicine_batch import MedicineBatch
@@ -43,9 +46,14 @@ async def select_batches_fefo(
     entirely, as if they had zero stock -- they're being physically
     counted and must not move mid-count.
 
-    `lock` applies SELECT...FOR UPDATE so two concurrent sales can't
-    both allocate against the same units -- this is the actual
-    mechanism that prevents overselling, not just a documented promise.
+    `lock` applies SELECT...FOR UPDATE, kept as defense-in-depth for
+    any backend that honors it -- but it is NOT what actually prevents
+    two concurrent sales from overselling the same units on this app's
+    current SQLite backend, which silently drops the clause entirely.
+    The real guarantee is the atomic `UPDATE ... WHERE qty_remaining
+    >= :qty` in apply_allocations(), below -- correct regardless of
+    what this SELECT saw, since it's checked against the row's actual
+    state at the moment the decrement executes.
     """
     if qty_needed <= 0:
         raise ValueError("qty_needed must be positive")
@@ -95,9 +103,31 @@ async def apply_allocations(
     transaction (this function never commits). The ledger row is what
     makes the change auditable; the qty_remaining update is the cached
     derived value kept in sync alongside it.
+
+    The decrement itself is an atomic `UPDATE ... WHERE qty_remaining
+    >= :qty`, not a Python-level read-modify-write on the ORM object.
+    That distinction is the actual safety mechanism against two
+    concurrent sales both allocating against the same units -- the
+    WHERE clause is checked against the row's real state at the moment
+    the UPDATE runs, not whatever `select_batches_fefo` happened to
+    read earlier in this same request. If a concurrent transaction
+    already consumed the stock this allocation was planned against,
+    the UPDATE affects zero rows and this raises rather than silently
+    overwriting a correct decrement with a stale one.
     """
     for batch, qty in allocations:
-        batch.qty_remaining -= qty
+        result = cast(
+            "CursorResult[Any]",
+            await db.execute(
+                update(MedicineBatch)
+                .where(MedicineBatch.id == batch.id, MedicineBatch.qty_remaining >= qty)
+                .values(qty_remaining=MedicineBatch.qty_remaining - qty)
+            ),
+        )
+        if result.rowcount == 0:
+            refreshed = await db.get(MedicineBatch, batch.id)
+            available_now = refreshed.qty_remaining if refreshed is not None else 0
+            raise InsufficientStockError(batch.product_id, requested=qty, available=available_now)
         db.add(
             StockMovement(
                 batch_id=batch.id,

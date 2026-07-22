@@ -14,7 +14,7 @@ os.environ.setdefault("ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
 import pytest_asyncio
 
-from app.core.database import AsyncSessionLocal, Base, dispose_engine_for_current_loop, engine
+from app.core.database import AsyncSessionLocal, Base, engine
 from app.core.redis_client import aclose_for_current_loop, redis_client
 from app.core.security import hash_password
 from app.models.ai_provider_key import AIProviderKey  # noqa: F401
@@ -29,56 +29,29 @@ from app.models.purchase_order import PurchaseOrder, PurchaseOrderItem  # noqa: 
 from app.models.refund import Refund, RefundItem  # noqa: F401
 from app.models.role import Permission, Role  # noqa: F401
 from app.models.sale import Payment, Sale, SaleItem  # noqa: F401
+from app.models.setup_lock import SetupLock  # noqa: F401
 from app.models.stock_movement import StockMovement  # noqa: F401
 from app.models.stock_take import StockTake, StockTakeItem  # noqa: F401
 from app.models.supplier import Supplier, SupplierTransaction  # noqa: F401
 from app.models.user import User, UserSession  # noqa: F401
 
 
-def running_on_sqlite() -> bool:
-    """
-    Shared by any test that must skip on SQLite because it doesn't
-    enforce a behavior MySQL does by default (row-level locking via
-    SELECT...FOR UPDATE, foreign key constraints). Centralized here
-    instead of each test file redefining its own copy.
-    """
-    return "sqlite" in os.environ.get("DATABASE_URL", "sqlite")
-
-
 @pytest_asyncio.fixture(autouse=True)
 async def _fresh_db():
-    try:
-        async with engine.begin() as conn:
-            # Drop before create, not just create -- the previous
-            # test's teardown handles this for every test EXCEPT the
-            # very first one in the session, which has no previous
-            # teardown to rely on. Confirmed on a real CI run: ci.yml
-            # runs a separate migrations-verification step against
-            # this exact database before pytest starts, which seeds
-            # real permission/role rows via the migrations themselves.
-            # Without this, the first test to seed its own roles
-            # collides with that leftover data -- "Duplicate entry
-            # 'sales.create'" -- while every later test looks fine,
-            # since by then the previous test's teardown already
-            # cleared it.
-            await conn.run_sync(Base.metadata.drop_all)
-            await conn.run_sync(Base.metadata.create_all)
-        yield
-    finally:
-        # Must run no matter WHERE this fixture fails -- create_all
-        # above, the test itself, or drop_all below -- or this loop's
-        # connection pool leaks. A plain try/finally only around
-        # drop_all still misses the create_all failure case entirely,
-        # since a fixture that raises before reaching `yield` never
-        # runs any of its post-yield code at all. Confirmed by
-        # actually doing it: running many MySQL-backed tests back to
-        # back leaked a growing number of sleeping connections (125 of
-        # a 151 limit after ~30 tests) even with the narrower guard.
-        try:
-            async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.drop_all)
-        finally:
-            await dispose_engine_for_current_loop()
+    # Drop before create, not just create -- the previous test's
+    # teardown handles this for every test EXCEPT the very first one
+    # in the session, which has no previous teardown to rely on.
+    # Confirmed on a real CI run: a separate migrations-verification
+    # step used to run against this same database before pytest
+    # started, seeding real permission/role rows via the migrations
+    # themselves -- without this, the first test to seed its own roles
+    # collided with that leftover data.
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
 
 
 @pytest_asyncio.fixture(autouse=True)

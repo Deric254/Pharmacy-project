@@ -17,6 +17,8 @@ htmlcov/
 # Node / frontend
 node_modules/
 dist/
+build/
+installer-output/
 .vite/
 
 # OS

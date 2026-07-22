@@ -1,11 +1,9 @@
 """
 Whole-database dump/restore.
 
-Deliberately implemented at the SQLAlchemy Core level (not by shelling
-out to mysqldump) so the exact same code path works identically on
-MySQL and SQLite -- consistent with this project's established
-preference for portable, dialect-agnostic mechanisms over DB-specific
-tooling wherever one reasonably exists.
+Implemented at the SQLAlchemy Core level (not by shelling out to a
+database-specific dump tool), consistent with this project's
+preference for portable, dialect-agnostic mechanisms.
 
 Restore always deletes in reverse foreign-key order and inserts in
 forward order, so foreign key constraints are never violated mid-restore.
@@ -100,24 +98,16 @@ async def restore_all_tables(db: AsyncSession, dump: dict[str, list[dict[str, An
     Returns total rows restored across all tables.
 
     FK checks are temporarily disabled for the duration of this
-    operation. This is necessary, not just convenient: excluded tables
-    (backup_logs) still hold live foreign keys into tables being wiped
-    and reinserted here (e.g. users), and MySQL correctly refuses a
-    DELETE that would leave those references dangling mid-transaction,
-    even though every row ultimately comes back with the same ID by
-    the time the transaction commits. SQLite does not enforce FKs by
-    default and would not have caught this -- confirmed by this
-    exact scenario failing only against real MySQL, not SQLite, during
-    development.
+    operation, even though SQLite doesn't enforce them by default --
+    excluded tables (backup_logs) still hold live foreign keys into
+    tables being wiped and reinserted here (e.g. users), and this stays
+    correct regardless of whether FK enforcement is ever turned on for
+    SQLite elsewhere in the app later.
     """
-    dialect_name = db.bind.dialect.name if db.bind is not None else ""
     restorable = _restorable_tables()
     tables_by_name = {table.name: table for table in restorable}
 
-    if dialect_name == "mysql":
-        await db.execute(text("SET FOREIGN_KEY_CHECKS=0"))
-    elif dialect_name == "sqlite":
-        await db.execute(text("PRAGMA foreign_keys=OFF"))
+    await db.execute(text("PRAGMA foreign_keys=OFF"))
 
     try:
         for table in reversed(restorable):
@@ -132,10 +122,7 @@ async def restore_all_tables(db: AsyncSession, dump: dict[str, list[dict[str, An
             await db.execute(tables_by_name[table.name].insert(), coerced_rows)
             total_rows += len(coerced_rows)
     finally:
-        if dialect_name == "mysql":
-            await db.execute(text("SET FOREIGN_KEY_CHECKS=1"))
-        elif dialect_name == "sqlite":
-            await db.execute(text("PRAGMA foreign_keys=ON"))
+        await db.execute(text("PRAGMA foreign_keys=ON"))
 
     await db.commit()
     return total_rows

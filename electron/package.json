@@ -1,0 +1,36 @@
+{
+  "name": "pharmacy-erp-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pharmacy ERP desktop app -- native window wrapper around the compiled backend, no console.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:win": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^43.1.1",
+    "electron-builder": "^26.15.7"
+  },
+  "build": {
+    "appId": "com.pharmacyerp.desktop",
+    "productName": "Pharmacy ERP",
+    "files": ["main.js", "package.json"],
+    "extraResources": [
+      {
+        "from": "../dist/Pharmacy-ERP.exe",
+        "to": "backend/Pharmacy-ERP.exe"
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Pharmacy ERP"
+    }
+  }
+}

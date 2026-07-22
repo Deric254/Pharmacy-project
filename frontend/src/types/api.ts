@@ -507,6 +507,16 @@ export interface AIAskResponse {
   fallback_used: boolean
 }
 
+export interface SetupStatusOut {
+  needs_setup: boolean
+}
+
+export interface FirstUserCreate {
+  full_name: string
+  username: string
+  password: string
+}
+
 export interface ApiErrorBody {
   detail?: string | { msg: string; loc: (string | number)[] }[]
 }

@@ -52,11 +52,19 @@ export function useUpdateCheck(): UpdateInfo | null {
         if (cancelled) return
         if (!isNewer(release.tag_name, health.version)) return
 
-        const exeAsset = release.assets.find((a) => a.name.endsWith('.exe'))
+        // Specifically the installer (Pharmacy-ERP-Setup-*.exe), not
+        // just any .exe -- a release attaches both the installer and
+        // the raw backend exe it wraps (the latter exists only so
+        // Electron has something to bundle, never meant as a public
+        // download), and an in-app update banner should only ever
+        // point someone at the one real users are meant to run.
+        const installerAsset = release.assets.find(
+          (a) => a.name.startsWith('Pharmacy-ERP-Setup-') && a.name.endsWith('.exe'),
+        )
         setInfo({
           currentVersion: health.version,
           latestVersion: normalizeVersion(release.tag_name),
-          downloadUrl: exeAsset?.browser_download_url ?? null,
+          downloadUrl: installerAsset?.browser_download_url ?? null,
           releaseUrl: release.html_url,
         })
       } catch {

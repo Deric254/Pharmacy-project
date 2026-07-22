@@ -1,10 +1,12 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { useAuthStore } from './auth/store'
 import { useConfigStore } from './config/store'
+import { setupApi } from './api/setup'
 import { RequireAuth, RequirePermission } from './auth/guards'
 import { AppShell } from './components/AppShell'
 import { LoginPage } from './pages/LoginPage'
+import { SetupPage } from './pages/SetupPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { PosPage } from './pages/PosPage'
 import { InventoryPage } from './pages/InventoryPage'
@@ -22,18 +24,35 @@ export function App() {
   const bootstrap = useAuthStore((s) => s.bootstrap)
   const loadConfig = useConfigStore((s) => s.load)
   const configStatus = useConfigStore((s) => s.status)
+  const [needsSetup, setNeedsSetup] = useState<boolean | null>(null)
 
   useEffect(() => {
     void bootstrap()
     void loadConfig()
+    setupApi
+      .status()
+      .then((s) => setNeedsSetup(s.needs_setup))
+      // If this fails (offline, server not up yet), assume setup is
+      // not needed rather than blocking the whole app on a check that
+      // couldn't complete -- the normal login flow will surface the
+      // real problem clearly enough on its own.
+      .catch(() => setNeedsSetup(false))
   }, [bootstrap, loadConfig])
 
   // Branding (theme, name, logo) must be in place before first paint
   // of real content -- otherwise every business sees the same
   // hardcoded look for a flash, which is exactly what should never
   // happen again in this app.
-  if (configStatus === 'loading') {
+  if (configStatus === 'loading' || needsSetup === null) {
     return <div className="min-h-screen bg-paper" />
+  }
+
+  if (needsSetup) {
+    return (
+      <BrowserRouter>
+        <SetupPage onComplete={() => setNeedsSetup(false)} />
+      </BrowserRouter>
+    )
   }
 
   return (

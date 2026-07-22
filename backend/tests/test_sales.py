@@ -21,7 +21,6 @@ from app.models.role import Role
 from app.models.sale import Sale
 from app.models.stock_movement import StockMovement
 from app.models.user import User
-from tests.conftest import running_on_sqlite
 
 
 async def _login(client, username: str, password: str) -> str:
@@ -253,28 +252,23 @@ class TestConcurrentSales:
         Two 'cashiers' try to sell from a batch with only 10 units at
         the same time, each requesting 8. Both cannot succeed - only
         one should, and total stock sold must never exceed what
-        existed. This is the row-level-locking guarantee, exercised
-        under real concurrency rather than asserted from the single-
-        threaded FEFO unit tests alone.
+        existed. Exercised under real concurrency rather than asserted
+        from the single-threaded FEFO unit tests alone.
 
-        SQLite does not support SELECT...FOR UPDATE at all -- SQLAlchemy
-        silently omits the clause for that dialect (confirmed by
-        inspecting the compiled SQL), so this test cannot exercise the
-        real locking mechanism there and is skipped. It has been run
-        and passed against real MySQL/InnoDB (matching both production
-        and the MySQL service in ci.yml): two concurrent 8-unit requests
-        against 10 units in stock produced exactly one 201 and one 409,
-        with the batch correctly left at 2 remaining.
+        This does NOT rely on SELECT...FOR UPDATE -- SQLite silently
+        drops that clause entirely (confirmed by inspecting the
+        compiled SQL), so it was never the real guarantee here. What
+        actually prevents overselling is the atomic `UPDATE ...
+        WHERE qty_remaining >= :qty` in apply_allocations(): the
+        second transaction's decrement is evaluated against the row's
+        real state at the moment it runs, not a stale snapshot, and
+        SQLite's busy_timeout (configured in database.py) makes it
+        wait for the first transaction to finish rather than fail
+        instantly with "database is locked". Confirmed directly by
+        reproducing the bug this fix closes: before the atomic UPDATE
+        existed, a Python-level `qty -= amount` on the ORM object let
+        two concurrent decrements silently overwrite each other.
         """
-        if running_on_sqlite():
-            import pytest
-
-            pytest.skip(
-                "SQLite has no row-level locking; SELECT...FOR UPDATE is silently "
-                "dropped by SQLAlchemy's SQLite dialect. Verified against real "
-                "MySQL/InnoDB instead - see docstring."
-            )
-
         product_id = await _make_product_with_batch(price=10.0, qty=10)
         token = await _login(client, "joe", "pass1234")
         headers = {"Authorization": f"Bearer {token}"}

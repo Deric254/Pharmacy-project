@@ -19,7 +19,6 @@ unreadable the moment the app restarts.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import contextlib
 import json
@@ -95,69 +94,6 @@ def _run_migrations() -> None:
     command.upgrade(alembic_cfg, "head")
 
 
-async def _any_user_exists() -> bool:
-    from sqlalchemy import func, select
-
-    from app.core.database import AsyncSessionLocal
-    from app.models.user import User
-
-    async with AsyncSessionLocal() as db:
-        count = await db.scalar(select(func.count()).select_from(User))
-        return bool(count and count > 0)
-
-
-async def _create_first_user_interactively() -> None:
-    from sqlalchemy import select
-
-    from app.core.database import AsyncSessionLocal
-    from app.core.security import hash_password
-    from app.models.role import Role
-    from app.models.user import User
-
-    print()
-    print("=" * 50)
-    print(" Welcome! Let's set up the owner account.")
-    print("=" * 50)
-    try:
-        full_name = input("Full name (e.g. Jane Doe): ").strip()
-        username = input("Username (e.g. jane): ").strip()
-        while True:
-            password = input("Password (min 8 characters): ").strip()
-            if len(password) >= 8:
-                break
-            print("Too short -- try again.")
-    except EOFError as exc:
-        # No stdin available to read from (a launch method that
-        # doesn't attach a console, or someone piping in nothing). A
-        # raw traceback here would be exactly the "blinks and closes
-        # with nothing readable" failure already found and fixed in
-        # the Windows .bat scripts -- fail with a clear message
-        # instead, and let the person retry from a real terminal.
-        print()
-        print("[ERROR] Could not read setup input -- no console input is")
-        print("connected to this process. Run Pharmacy-ERP.exe from a normal")
-        print("terminal/command prompt window, not silently in the background.")
-        raise SystemExit(1) from exc
-    except KeyboardInterrupt:
-        print("\nSetup cancelled.")
-        raise SystemExit(1) from None
-
-    async with AsyncSessionLocal() as db:
-        role_result = await db.execute(select(Role).where(Role.name == "ChemistOwner"))
-        role = role_result.scalar_one()
-        db.add(
-            User(
-                full_name=full_name,
-                username=username,
-                hashed_password=hash_password(password),
-                role_id=role.id,
-            )
-        )
-        await db.commit()
-    print(f"Created '{username}'. You can log in with that now.")
-    print()
-
-
 def _wait_for_server_then_open_browser(port: int) -> None:
     import urllib.error
     import urllib.request
@@ -175,11 +111,50 @@ def _wait_for_server_then_open_browser(port: int) -> None:
     print(f"[WARNING] Server did not respond after 30s. Try opening {url} manually.")
 
 
+def _already_running_instance(port: int) -> bool:
+    """
+    True if something on this port is already answering as THIS app
+    (not just "something" -- a stray unrelated program on the same
+    port should still produce a clear error, not be silently treated
+    as us). Checked by hitting /health and confirming the JSON shape
+    matches what app.main.health() actually returns.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as response:
+            if response.status != 200:
+                return False
+            body = json.loads(response.read())
+            return isinstance(body, dict) and body.get("status") == "ok"
+    except (urllib.error.URLError, OSError, json.JSONDecodeError):
+        return False
+
+
 def main() -> None:
     print("=" * 50)
     print(" Pharmacy ERP")
     print("=" * 50)
     print()
+
+    port = 8000
+
+    # The exact scenario a real bug report showed: a leftover backend
+    # window from earlier testing still running on this port, then the
+    # packaged exe launched on top of it. Failing loudly there is the
+    # wrong response -- if it's genuinely already us and already
+    # healthy, there's nothing to set up, just open the browser to it.
+    if _already_running_instance(port):
+        print(f"Pharmacy ERP is already running at http://127.0.0.1:{port}")
+        print("Opening your browser...")
+        webbrowser.open(f"http://127.0.0.1:{port}")
+        print()
+        print("This window can be closed -- it isn't the one running the app.")
+        with contextlib.suppress(EOFError):
+            input("Press Enter to close this window...")
+        return
 
     data_dir = _app_data_dir()
     print(f"Data directory: {data_dir}")
@@ -187,12 +162,8 @@ def main() -> None:
 
     _run_migrations()
 
-    if not asyncio.run(_any_user_exists()):
-        asyncio.run(_create_first_user_interactively())
-
     import uvicorn
 
-    port = 8000
     threading.Thread(target=_wait_for_server_then_open_browser, args=(port,), daemon=True).start()
 
     print()
@@ -207,7 +178,19 @@ def main() -> None:
     # matches.
     from app.main import app
 
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
+    try:
+        uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
+    except OSError as exc:
+        if exc.errno in (10048, 98):  # Windows / POSIX "address already in use"
+            print()
+            print("=" * 50)
+            print(f" Something else on this computer is already using port {port},")
+            print(" and it isn't another copy of Pharmacy ERP (already checked).")
+            print(" Close whatever that is, or restart your computer, then try again.")
+            print("=" * 50)
+            input("Press Enter to close this window...")
+            raise SystemExit(1) from exc
+        raise
 
 
 if __name__ == "__main__":

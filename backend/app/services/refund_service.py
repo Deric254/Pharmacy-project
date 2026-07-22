@@ -100,6 +100,7 @@ class RefundService:
         self.db.add(
             AuditLog(
                 user_id=processed_by.id,
+                user_name_snapshot=processed_by.full_name,
                 action="sale.refunded",
                 entity_type="refund",
                 entity_id=str(refund.id),

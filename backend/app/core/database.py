@@ -44,24 +44,48 @@ engine = create_async_engine(
 
 
 @event.listens_for(engine.sync_engine, "connect")
-def _enable_sqlite_foreign_keys(dbapi_connection: Any, _connection_record: object) -> None:
+def _configure_sqlite_pragmas(dbapi_connection: Any, _connection_record: object) -> None:
     """
-    SQLite does not enforce foreign key constraints by default -- a
-    real, permanent gap now that SQLite is this app's only backend
-    (previously accepted because MySQL, the production target, always
-    enforced them). Without this, the database would silently accept
-    e.g. a stock batch pointing at a nonexistent product, relying
-    entirely on application-level checks with no database-level
-    backstop. Set on every new connection, since SQLite's PRAGMAs are
-    per-connection, not persistent in the database file itself.
+    Every PRAGMA here is per-connection (SQLite doesn't persist these
+    in the database file itself, except journal_mode, which is
+    idempotent to re-set), so this runs on every new connection, not
+    once at startup.
 
-    dump_restore.py explicitly toggles this OFF for the duration of a
-    restore (deleting and reinserting every table necessarily violates
-    FKs transiently) and back ON afterward -- that toggle only matters
-    at all because this is on by default everywhere else.
+    - foreign_keys=ON: SQLite does not enforce foreign key constraints
+      by default -- a real, permanent gap now that SQLite is this
+      app's only backend (previously accepted because MySQL, the
+      production target, always enforced them). Without this, the
+      database would silently accept e.g. a stock batch pointing at a
+      nonexistent product, relying entirely on application-level
+      checks with no database-level backstop. dump_restore.py
+      explicitly toggles this OFF for the duration of a restore
+      (deleting and reinserting every table necessarily violates FKs
+      transiently) and back ON afterward -- that toggle only matters
+      at all because this is on by default everywhere else.
+
+    - journal_mode=WAL: this app's real scenario is a handful of
+      concurrent users on one machine, not a single writer. WAL mode
+      is what actually matters there -- readers no longer block
+      writers and writers no longer block readers, leaving only
+      writer-vs-writer contention, which busy_timeout above already
+      handles by making the second writer wait instead of erroring.
+      The default rollback-journal mode blocks readers during any
+      write, which is the wrong tradeoff for this app's actual usage.
+
+    - synchronous=FULL: the setting most tempting to skip for a little
+      extra write throughput. Costs real performance; buys a genuine
+      guarantee that a committed transaction survives actual power
+      loss, not just a process crash (a crashed process's writes are
+      already safe via the OS page cache either way -- this is
+      specifically about the machine itself losing power mid-write,
+      a real possibility for a desktop app that isn't necessarily
+      running behind a UPS). Given this app's standing bar -- a
+      recorded sale must never be lost -- this is worth paying for.
     """
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=FULL")
     cursor.close()
 
 

@@ -42,6 +42,7 @@ class UserService:
         self.db.add(
             AuditLog(
                 user_id=created_by.id if created_by else None,
+                user_name_snapshot=created_by.full_name if created_by else None,
                 action="user.created",
                 entity_type="user",
                 entity_id=str(user.id),
@@ -84,6 +85,7 @@ class UserService:
         self.db.add(
             AuditLog(
                 user_id=deactivated_by.id,
+                user_name_snapshot=deactivated_by.full_name,
                 action="user.deactivated",
                 entity_type="user",
                 entity_id=str(user_id),

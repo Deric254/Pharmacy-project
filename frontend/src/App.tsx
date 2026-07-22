@@ -15,6 +15,7 @@ import { StockTakesPage } from './pages/StockTakesPage'
 import { CustomersPage } from './pages/CustomersPage'
 import { ReportsPage } from './pages/ReportsPage'
 import { RolesPage } from './pages/RolesPage'
+import { AuditLogPage } from './pages/AuditLogPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { UsersPage } from './pages/UsersPage'
 import { BackupsPage } from './pages/BackupsPage'
@@ -128,6 +129,14 @@ export function App() {
             element={
               <RequirePermission code="roles.manage">
                 <RolesPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="audit"
+            element={
+              <RequirePermission code="audit.view">
+                <AuditLogPage />
               </RequirePermission>
             }
           />

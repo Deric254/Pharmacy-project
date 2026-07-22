@@ -20,6 +20,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/reports', label: 'Reports', permission: 'reports.view' },
   { to: '/settings', label: 'Settings', permission: 'config.edit' },
   { to: '/roles', label: 'Roles & Permissions', permission: 'roles.manage' },
+  { to: '/audit', label: 'Audit Trail', permission: 'audit.view' },
   { to: '/users', label: 'Staff Accounts', permission: 'users.manage' },
   { to: '/backups', label: 'Backups', permission: 'backups.manage' },
   { to: '/ai-assistant', label: 'AI Assistant', permission: 'ai.use' },

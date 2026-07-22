@@ -32,6 +32,8 @@ Thumbs.db
 # DB
 *.sqlite3
 *.db
+*.db-shm
+*.db-wal
 mysql_data/
 
 # Downloaded automatically by windows/download-redis.ps1 -- never committed

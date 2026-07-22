@@ -517,6 +517,26 @@ export interface FirstUserCreate {
   password: string
 }
 
+export interface AuditLogOut {
+  id: number
+  user_id: number | null
+  user_name_snapshot: string | null
+  action: string
+  entity_type: string
+  entity_id: string
+  old_value: string | null
+  new_value: string | null
+  ip_address: string | null
+  created_at: string
+}
+
+export interface AuditLogPage {
+  entries: AuditLogOut[]
+  total: number
+  limit: number
+  offset: number
+}
+
 export interface ApiErrorBody {
   detail?: string | { msg: string; loc: (string | number)[] }[]
 }

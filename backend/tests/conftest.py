@@ -92,6 +92,7 @@ async def seeded_roles():
                 "ai.use",
                 "backups.manage",
                 "roles.manage",
+                "audit.view",
             ]
         }
         db.add_all(perms.values())

@@ -58,6 +58,7 @@ class RoleService:
         self.db.add(
             AuditLog(
                 user_id=created_by.id,
+                user_name_snapshot=created_by.full_name,
                 action="role.created",
                 entity_type="role",
                 entity_id=str(role.id),
@@ -92,6 +93,7 @@ class RoleService:
         self.db.add(
             AuditLog(
                 user_id=updated_by.id,
+                user_name_snapshot=updated_by.full_name,
                 action="role.updated",
                 entity_type="role",
                 entity_id=str(role.id),
@@ -130,6 +132,7 @@ class RoleService:
         self.db.add(
             AuditLog(
                 user_id=deleted_by.id,
+                user_name_snapshot=deleted_by.full_name,
                 action="role.deleted",
                 entity_type="role",
                 entity_id=str(role.id),

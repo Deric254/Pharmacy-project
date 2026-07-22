@@ -55,6 +55,7 @@ class BusinessConfigService:
                 self.db.add(
                     AuditLog(
                         user_id=admin.id,
+                        user_name_snapshot=admin.full_name,
                         action="config.updated",
                         entity_type="business_config",
                         entity_id="1",

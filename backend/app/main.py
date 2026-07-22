@@ -30,6 +30,7 @@ from app import __version__
 # variable defined further down in this same module.
 from app import models as _models  # noqa: F401
 from app.api.v1.ai import router as ai_router
+from app.api.v1.audit_logs import router as audit_logs_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.backups import router as backups_router
 from app.api.v1.business_config import router as business_config_router
@@ -152,6 +153,7 @@ app.include_router(backups_router, prefix=settings.api_v1_prefix)
 app.include_router(users_router, prefix=settings.api_v1_prefix)
 app.include_router(roles_router, prefix=settings.api_v1_prefix)
 app.include_router(setup_router, prefix=settings.api_v1_prefix)
+app.include_router(audit_logs_router, prefix=settings.api_v1_prefix)
 app.include_router(websocket_router, prefix=settings.api_v1_prefix)
 
 

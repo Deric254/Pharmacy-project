@@ -51,6 +51,7 @@ class AuthService:
             self.db.add(
                 AuditLog(
                     user_id=user.id if user else None,
+                    user_name_snapshot=user.full_name if user else None,
                     action="login.failed",
                     entity_type="user",
                     entity_id=username,
@@ -66,6 +67,7 @@ class AuthService:
         self.db.add(
             AuditLog(
                 user_id=user.id,
+                user_name_snapshot=user.full_name,
                 action="login.success",
                 entity_type="user",
                 entity_id=str(user.id),
@@ -167,9 +169,11 @@ class AuthService:
         for session in sessions:
             session.revoked_at = func.now()
             self.db.add(session)
+        user = await self.db.get(User, user_id)
         self.db.add(
             AuditLog(
                 user_id=user_id,
+                user_name_snapshot=user.full_name if user else None,
                 action="auth.refresh_token_reuse_detected",
                 entity_type="user",
                 entity_id=str(user_id),
@@ -217,6 +221,7 @@ class AuthService:
         self.db.add(
             AuditLog(
                 user_id=user.id,
+                user_name_snapshot=user.full_name,
                 action="password.self_reset",
                 entity_type="user",
                 entity_id=str(user.id),
@@ -236,6 +241,7 @@ class AuthService:
         self.db.add(
             AuditLog(
                 user_id=admin.id,
+                user_name_snapshot=admin.full_name,
                 action="password.admin_reset",
                 entity_type="user",
                 entity_id=str(user.id),

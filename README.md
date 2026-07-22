@@ -162,40 +162,52 @@ As of the last full run: 252 backend tests passing, 0 failing, 93.6%
 coverage. Frontend: `cd frontend && npx tsc -b && npx oxlint && npm run build`.
 
 
-## Commit convention (this drives versioning — required, not optional)
+## Commit convention (still worth following, no longer required)
 
-Every commit message must follow **Conventional Commits**:
+**Every push to `main` now cuts a release, regardless of commit message.**
+Conventional Commits still matter for getting the *right-sized* bump —
+without them, every push just forces a patch bump instead:
 
 | Prefix | Effect on next release |
 |---|---|
 | `fix: ...` | PATCH bump (1.2.3 → 1.2.4) |
 | `feat: ...` | MINOR bump (1.2.3 → 1.3.0) |
 | `feat!: ...` or a `BREAKING CHANGE:` footer | MAJOR bump (1.2.3 → 2.0.0) |
-| `chore:`, `docs:`, `test:`, `refactor:` | no release triggered |
+| anything else (`chore:`, `fixed stuff`, no prefix at all) | PATCH bump anyway |
+
+This is a deliberate tradeoff: a purely cosmetic push still bumps the
+version and publishes a release, in exchange for never having to
+remember a specific prefix to get a real, downloadable installer out of
+a push. Verified directly, not just configured: reproduced both cases
+against a real local semantic-release run before this went in — a plain
+commit message correctly still triggers a release (forced patch bump),
+and a real `feat:` commit still gets the correctly-sized minor bump, not
+just a patch, so writing proper commit messages is never wasted effort.
 
 ## Release process (automatic — do not hand-edit versions)
 
 1. Push to `main`.
-2. **CI workflow** runs lint, type-check, migrations-against-test-DB, and
-   tests with coverage. If anything fails, the pipeline stops here —
-   nothing broken can ever reach a release.
-3. **Release workflow** runs only after CI succeeds. It reads commit
-   messages since the last tag, bumps the version (`app/__init__.py` +
-   `pyproject.toml`), updates `CHANGELOG.md`, creates a git tag (`vX.Y.Z`),
-   and publishes a GitHub Release — all automatic, no manual version edits.
-4. **Only if a release was actually cut** (i.e. there were release-worthy
-   commits — a docs-only push cuts no release and this step is skipped
-   entirely), a second job builds the Windows executable: checks out the
-   exact tagged commit, builds the frontend, bundles everything via
-   PyInstaller (`pyinstaller/pharmacy-erp.spec`) into one `Pharmacy-ERP.exe`.
+2. **CI workflow** runs lint, type-check, migrations-against-a-fresh-
+   SQLite-DB, and tests with coverage. If anything fails, the pipeline
+   stops here — nothing broken can ever reach a release.
+3. **Release workflow** runs only after CI succeeds. It bumps the version
+   (`app/__init__.py` + `pyproject.toml`, correctly sized if the commits
+   used Conventional Commits, patch otherwise), updates `CHANGELOG.md`,
+   creates a git tag (`vX.Y.Z`), and publishes a GitHub Release — all
+   automatic, no manual version edits, every push.
+4. A second job then builds the Windows executable: checks out the exact
+   tagged commit, builds the frontend, bundles everything via PyInstaller
+   (`pyinstaller/pharmacy-erp.spec`) into one `Pharmacy-ERP.exe`.
 5. **The built exe is actually run** on the Windows runner before it's
-   trusted with anything — real first-run input piped in, waits for
-   `/health`, performs a real login against the account it just created.
-   If any of that fails, the release build fails loudly rather than
-   silently attaching a broken exe to the release. Only after that passes
-   does the build continue: the same exe gets wrapped into a real Windows
-   installer via Electron, both get renamed with the version, and both
-   are uploaded as release assets.
+   trusted with anything — real HTTP calls, not piped console input
+   (the exe has no console prompts left to pipe into): waits for
+   `/health`, drives the real `/api/v1/setup/first-user` endpoint the
+   web UI itself uses, then performs a real login against the account it
+   just created. If any of that fails, the release build fails loudly
+   rather than silently attaching a broken exe to the release. Only
+   after that passes does the build continue: the same exe gets wrapped
+   into a real Windows installer via Electron, both get renamed with the
+   version, and both are uploaded as release assets.
 
 You never manually edit a version number. If you did, the next automated
 release would immediately overwrite it based on commit history — so don't

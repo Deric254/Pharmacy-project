@@ -105,9 +105,20 @@ class TestSecretsNeverLeakInResponses:
 class TestJWTTampering:
     async def test_tampered_signature_is_rejected(self, client, owner_user):
         token = await _login(client, "lucy", "S3curePass!")
-        # Flip the last character of the signature -- structurally still
-        # looks like a JWT (three dot-separated segments) but invalid.
-        tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+        # Flip a character well before the end of the signature, not
+        # the very last one. The last character of a base64url-encoded
+        # HS256 signature sits in a partial final group with unused
+        # padding bits -- confirmed directly that ~1 in 20 possible
+        # replacement characters there decode to the byte-for-byte
+        # IDENTICAL signature, making the token not actually tampered
+        # at all (a real, occasional CI failure this caused, not
+        # flakiness). Position -6 sits inside a full group, where
+        # every character maps to a unique output -- confirmed
+        # directly that every possible replacement there changes the
+        # decoded bytes.
+        pos = -6
+        replacement = "A" if token[pos] != "A" else "B"
+        tampered = token[:pos] + replacement + token[pos + 1 :]
 
         r = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {tampered}"})
         assert r.status_code == 401

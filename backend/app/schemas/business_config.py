@@ -42,7 +42,7 @@ class BusinessConfigUpdate(BaseModel):
 
     business_name: str | None = Field(default=None, min_length=1, max_length=120)
     slogan: str | None = Field(default=None, max_length=255)
-    logo_url: str | None = Field(default=None, max_length=500)
+    logo_url: str | None = Field(default=None, max_length=3_000_000)
     theme_name: ThemeName | None = None
     primary_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
     secondary_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")

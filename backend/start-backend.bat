@@ -35,6 +35,21 @@ for /f "usebackq tokens=1,* delims==" %%A in (".env") do (
     if not "%%A"=="" set "%%A=%%B"
 )
 
+rem --- Check for an already-healthy instance before trying to bind ---
+rem A leftover backend from an earlier run/test session sitting on this
+rem port is the single most common reason this crashes -- confirmed by
+rem an actual bug report showing exactly this raw, unreadable error.
+rem If something here already answers correctly, there's nothing to
+rem start; just say so and stop, instead of failing to bind and
+rem printing a confusing crash.
+for /f %%H in ('powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\windows\check-backend-health.ps1"') do set ALREADY_HEALTHY=%%H
+if "!ALREADY_HEALTHY!"=="yes" (
+    echo [OK] Pharmacy ERP is already running at http://localhost:8000
+    echo Nothing to start -- this window can be closed.
+    pause
+    exit /b 0
+)
+
 echo Starting the backend on http://localhost:8000 ...
 echo ^(Ctrl+C to stop, or just close this window^)
 echo.

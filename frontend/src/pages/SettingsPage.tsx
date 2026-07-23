@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react'
 import { useConfigStore } from '../config/store'
 import { configApi } from '../api/config'
 import { ApiError } from '../api/client'
@@ -11,6 +11,7 @@ export function SettingsPage() {
   const [businessName, setBusinessName] = useState(config?.business_name ?? '')
   const [slogan, setSlogan] = useState(config?.slogan ?? '')
   const [logoUrl, setLogoUrl] = useState(config?.logo_url ?? '')
+  const [logoError, setLogoError] = useState<string | null>(null)
   const [currency, setCurrency] = useState(config?.currency ?? 'USD')
   const [selectedTheme, setSelectedTheme] = useState(config?.theme_name ?? 'ledger')
   const [saving, setSaving] = useState(false)
@@ -23,6 +24,37 @@ export function SettingsPage() {
   function previewTheme(themeName: string) {
     setSelectedTheme(themeName)
     applyTheme(themeName) // live preview, before saving
+  }
+
+  const MAX_LOGO_FILE_BYTES = 2 * 1024 * 1024 // 2MB raw -- comfortably under the
+  // backend's stored-string limit even after base64's ~33% size inflation
+
+  function handleLogoFileChange(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = '' // allow choosing the exact same file again later
+    if (!file) return
+
+    setLogoError(null)
+
+    if (!file.type.startsWith('image/')) {
+      setLogoError("That file doesn't look like an image. Choose a PNG or JPG.")
+      return
+    }
+    if (file.size > MAX_LOGO_FILE_BYTES) {
+      setLogoError('That image is too large (max 2MB). Try a smaller or more compressed file.')
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setLogoUrl(reader.result)
+      }
+    }
+    reader.onerror = () => {
+      setLogoError('Could not read that file. Try a different image.')
+    }
+    reader.readAsDataURL(file)
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -77,13 +109,49 @@ export function SettingsPage() {
               className="w-full border border-rule bg-paper px-3 py-2 outline-none focus-visible:border-brass"
             />
           </Field>
-          <Field label="Logo URL">
-            <input
-              value={logoUrl}
-              onChange={(e) => setLogoUrl(e.target.value)}
-              placeholder="https://... (leave blank to use the default mark)"
-              className="w-full border border-rule bg-paper px-3 py-2 outline-none focus-visible:border-brass"
-            />
+          <Field label="Logo">
+            <div className="flex items-center gap-4">
+              <div className="flex h-16 w-16 shrink-0 items-center justify-center border border-rule bg-paper">
+                {logoUrl ? (
+                  <img src={logoUrl} alt="" className="h-full w-full object-contain" />
+                ) : (
+                  <span className="text-2xl text-ink-soft" aria-hidden="true">
+                    ℞
+                  </span>
+                )}
+              </div>
+              <div className="flex-1 space-y-2">
+                <div className="flex items-center gap-2">
+                  <label className="inline-block cursor-pointer border border-rule bg-paper px-3 py-1.5 text-sm hover:bg-panel">
+                    Choose image…
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleLogoFileChange}
+                      className="sr-only"
+                    />
+                  </label>
+                  {logoUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setLogoUrl('')}
+                      className="text-sm text-stamp-red underline decoration-dotted underline-offset-2"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+                {logoError && (
+                  <p role="alert" className="text-xs text-stamp-red">
+                    {logoError}
+                  </p>
+                )}
+                <p className="text-xs text-ink-soft">
+                  PNG or JPG, square works best. Stored directly in the app -- no separate
+                  file or web link needed.
+                </p>
+              </div>
+            </div>
           </Field>
           <Field label="Currency code">
             <input

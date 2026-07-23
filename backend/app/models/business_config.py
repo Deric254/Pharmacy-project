@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String, func
+from sqlalchemy import DateTime, Float, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -24,7 +24,12 @@ class BusinessConfig(Base):
 
     business_name: Mapped[str] = mapped_column(String(120), default="My Pharmacy")
     slogan: Mapped[str] = mapped_column(String(255), default="")
-    logo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Text, not String(500) -- this holds either a real URL or an
+    # embedded data: URI (a base64-encoded logo image), and the latter
+    # is routinely tens of thousands of characters. A short VARCHAR
+    # limit here would silently truncate or reject a real uploaded
+    # logo, corrupting it rather than failing loudly.
+    logo_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # One of the built-in theme presets (see frontend/src/theme/themes.ts
     # for the actual palettes) -- a business picks a starting point here,

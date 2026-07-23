@@ -54,24 +54,27 @@ echo [OK] Python and Node found.
 echo.
 
 rem --- Icon check, informational only -- never blocks the build ------
-if not exist "%~dp0electron\build\icon.ico" (
-    echo [INFO] No custom icon found at electron\build\icon.ico
-    echo This build will use Electron's generic default icon everywhere
-    echo ^(installer, shortcuts, taskbar^).
+if exist "%~dp0electron\build\icon.ico" (
+    echo [OK] Custom icon found -- this build will be branded with it.
     echo.
-    echo To brand this installer for a specific business: put a real
-    echo multi-resolution .ico file ^(16/32/48/256px bundled inside one
-    echo file^) at that exact path, then run this script again.
+) else if exist "%~dp0electron\build\logo.png" (
+    echo [OK] logo.png found -- this will be converted to the installer
+    echo icon automatically in a moment.
+    echo.
+) else (
+    echo [INFO] No logo found. This build will use Electron's generic
+    echo default icon everywhere ^(installer, shortcuts, taskbar^).
+    echo.
+    echo To brand this installer for a specific business: put a square
+    echo PNG image at electron\build\logo.png and run this script again
+    echo -- it converts automatically, no other tool needed.
     echo.
     set /p CONTINUE_NO_ICON="Continue with the default icon? (Y/N): "
     if /i not "!CONTINUE_NO_ICON!"=="Y" (
-        echo Cancelled. Add the icon and re-run when ready.
+        echo Cancelled. Add electron\build\logo.png and re-run when ready.
         pause
         exit /b 0
     )
-    echo.
-) else (
-    echo [OK] Custom icon found -- this build will be branded with it.
     echo.
 )
 
@@ -128,6 +131,23 @@ if errorlevel 1 (
 cd ..
 echo [OK] Backend environment ready.
 echo.
+
+if exist "electron\build\logo.png" if not exist "electron\build\icon.ico" (
+    echo ===============================================
+    echo  Converting electron\build\logo.png to icon.ico
+    echo ===============================================
+    cd backend
+    call .venv\Scripts\activate.bat
+    python -m scripts.make_icon ..\electron\build\logo.png
+    if errorlevel 1 (
+        echo [ERROR] Icon conversion failed. See the output above.
+        cd ..
+        pause
+        exit /b 1
+    )
+    cd ..
+    echo.
+)
 
 echo ===============================================
 echo  Step 3/4: Building the backend executable

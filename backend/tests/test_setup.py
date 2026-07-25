@@ -31,7 +31,13 @@ class TestCreateFirstUser:
     async def test_creates_the_owner_account(self, client, seeded_roles):
         r = await client.post(
             "/api/v1/setup/first-user",
-            json={"full_name": "Lucy Kangai", "username": "lucy", "password": "S3curePass!"},
+            json={
+                "full_name": "Lucy Kangai",
+                "username": "lucy",
+                "password": "S3curePass!",
+                "security_question": "Test question?",
+                "security_answer": "Test answer",
+            },
         )
         assert r.status_code == 204
 
@@ -48,7 +54,13 @@ class TestCreateFirstUser:
     async def test_status_flips_to_false_after_creation(self, client, seeded_roles):
         await client.post(
             "/api/v1/setup/first-user",
-            json={"full_name": "Lucy Kangai", "username": "lucy", "password": "S3curePass!"},
+            json={
+                "full_name": "Lucy Kangai",
+                "username": "lucy",
+                "password": "S3curePass!",
+                "security_question": "Test question?",
+                "security_answer": "Test answer",
+            },
         )
         status = await client.get("/api/v1/setup/status")
         assert status.json()["needs_setup"] is False
@@ -56,13 +68,25 @@ class TestCreateFirstUser:
     async def test_cannot_run_twice(self, client, seeded_roles):
         first = await client.post(
             "/api/v1/setup/first-user",
-            json={"full_name": "Lucy Kangai", "username": "lucy", "password": "S3curePass!"},
+            json={
+                "full_name": "Lucy Kangai",
+                "username": "lucy",
+                "password": "S3curePass!",
+                "security_question": "Test question?",
+                "security_answer": "Test answer",
+            },
         )
         assert first.status_code == 204
 
         second = await client.post(
             "/api/v1/setup/first-user",
-            json={"full_name": "Someone Else", "username": "intruder", "password": "AnotherPass1"},
+            json={
+                "full_name": "Someone Else",
+                "username": "intruder",
+                "password": "AnotherPass1",
+                "security_question": "Test question?",
+                "security_answer": "Test answer",
+            },
         )
         assert second.status_code == 409
 
@@ -76,7 +100,13 @@ class TestCreateFirstUser:
         """
         r = await client.post(
             "/api/v1/setup/first-user",
-            json={"full_name": "Intruder", "username": "intruder", "password": "AnotherPass1"},
+            json={
+                "full_name": "Intruder",
+                "username": "intruder",
+                "password": "AnotherPass1",
+                "security_question": "Test question?",
+                "security_answer": "Test answer",
+            },
         )
         assert r.status_code == 409
 
@@ -91,11 +121,23 @@ class TestCreateFirstUser:
         results = await asyncio.gather(
             client.post(
                 "/api/v1/setup/first-user",
-                json={"full_name": "A", "username": "usera", "password": "PasswordA1"},
+                json={
+                    "full_name": "A",
+                    "username": "usera",
+                    "password": "PasswordA1",
+                    "security_question": "Test question?",
+                    "security_answer": "Test answer",
+                },
             ),
             client.post(
                 "/api/v1/setup/first-user",
-                json={"full_name": "B", "username": "userb", "password": "PasswordB1"},
+                json={
+                    "full_name": "B",
+                    "username": "userb",
+                    "password": "PasswordB1",
+                    "security_question": "Test question?",
+                    "security_answer": "Test answer",
+                },
             ),
             return_exceptions=True,
         )
@@ -105,14 +147,26 @@ class TestCreateFirstUser:
     async def test_password_too_short_rejected(self, client, seeded_roles):
         r = await client.post(
             "/api/v1/setup/first-user",
-            json={"full_name": "Lucy", "username": "lucy", "password": "short"},
+            json={
+                "full_name": "Lucy",
+                "username": "lucy",
+                "password": "short",
+                "security_question": "Test question?",
+                "security_answer": "Test answer",
+            },
         )
         assert r.status_code == 422
 
     async def test_username_too_short_rejected(self, client, seeded_roles):
         r = await client.post(
             "/api/v1/setup/first-user",
-            json={"full_name": "Lucy", "username": "ab", "password": "S3curePass!"},
+            json={
+                "full_name": "Lucy",
+                "username": "ab",
+                "password": "S3curePass!",
+                "security_question": "Test question?",
+                "security_answer": "Test answer",
+            },
         )
         assert r.status_code == 422
 
@@ -120,6 +174,12 @@ class TestCreateFirstUser:
         # The whole point: reachable with zero Authorization header.
         r = await client.post(
             "/api/v1/setup/first-user",
-            json={"full_name": "Lucy", "username": "lucy", "password": "S3curePass!"},
+            json={
+                "full_name": "Lucy",
+                "username": "lucy",
+                "password": "S3curePass!",
+                "security_question": "Test question?",
+                "security_answer": "Test answer",
+            },
         )
         assert r.status_code == 204

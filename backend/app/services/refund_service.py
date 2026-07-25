@@ -20,8 +20,11 @@ implementation would miss:
    money quietly leave the till with no matching stock movement.
 """
 
+from typing import Any, cast
+
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit_log import AuditLog
@@ -134,13 +137,30 @@ class RefundService:
     async def _restock_batch(
         self, batch_id: int, quantity: int, refund_id: int, created_by_user_id: int
     ) -> None:
-        result = await self.db.execute(
-            select(MedicineBatch).where(MedicineBatch.id == batch_id).with_for_update()
+        # The real guarantee against two concurrent refunds racing on
+        # the same batch -- or a stock take starting to lock this
+        # batch in the gap between a check and a write -- is this
+        # atomic UPDATE, not row-locking (SQLite silently drops
+        # SELECT...FOR UPDATE entirely, so a plan of "SELECT, check in
+        # Python, then UPDATE" was never actually safe here, same as
+        # the stock-decrement and PO-transition bugs already found and
+        # fixed this session). The lock-check is folded directly into
+        # the WHERE clause instead of a separate read beforehand.
+        result = cast(
+            "CursorResult[Any]",
+            await self.db.execute(
+                update(MedicineBatch)
+                .where(
+                    MedicineBatch.id == batch_id,
+                    MedicineBatch.locked_by_stock_take_id.is_(None),
+                )
+                .values(qty_remaining=MedicineBatch.qty_remaining + quantity)
+            ),
         )
-        batch = result.scalar_one_or_none()
-        if batch is None:
-            raise HTTPException(status_code=404, detail=f"Batch {batch_id} not found")
-        if batch.locked_by_stock_take_id is not None:
+        if result.rowcount == 0:
+            batch = await self.db.get(MedicineBatch, batch_id)
+            if batch is None:
+                raise HTTPException(status_code=404, detail=f"Batch {batch_id} not found")
             raise HTTPException(
                 status_code=409,
                 detail=(
@@ -150,10 +170,9 @@ class RefundService:
                 ),
             )
 
-        batch.qty_remaining += quantity
         self.db.add(
             StockMovement(
-                batch_id=batch.id,
+                batch_id=batch_id,
                 movement_type=MovementType.RETURN,
                 quantity_delta=quantity,
                 reference=f"refund:{refund_id}",

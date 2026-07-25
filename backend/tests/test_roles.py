@@ -82,6 +82,8 @@ class TestCreateRole:
                 "username": "newpharm",
                 "password": "SafePass123",
                 "role_id": role_id,
+                "security_question": "Test question?",
+                "security_answer": "Test answer",
             },
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -228,6 +230,8 @@ class TestDeleteRole:
                 "username": "pharm1",
                 "password": "SafePass123",
                 "role_id": role_id,
+                "security_question": "Test question?",
+                "security_answer": "Test answer",
             },
             headers={"Authorization": f"Bearer {token}"},
         )

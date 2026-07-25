@@ -8,6 +8,7 @@ Customer tests. The properties that matter:
      in isolation.
 """
 
+import asyncio
 from datetime import date
 
 from app.core.database import AsyncSessionLocal
@@ -303,3 +304,44 @@ class TestLoyaltyPoints:
 
         r = await client.get(f"/api/v1/customers/{customer_id}", headers=headers)
         assert r.json()["loyalty_points"] == 30  # 10 points x 3 sales
+
+    async def test_two_concurrent_sales_for_the_same_customer_both_award_points(
+        self, client, employee_user
+    ):
+        """
+        The actual bug this closes: awarding points was a Python-level
+        `customer.loyalty_points += points_earned`, the same lost-
+        update risk already found and fixed for stock decrements, PO
+        transitions, refund restocks, and stock-take closes this
+        session. Two sales attaching the same customer near-
+        simultaneously (plausible for a busy pharmacy) could silently
+        lose one sale's worth of points with no error at all.
+        """
+        await _enable_loyalty(rate=1.0)
+        product_id = await _make_product_with_batch(price=10.0)
+        token = await _login(client, "joe", "pass1234")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        customer_resp = await client.post(
+            "/api/v1/customers", json={"name": "Concurrent Customer"}, headers=headers
+        )
+        customer_id = customer_resp.json()["id"]
+
+        async def make_sale():
+            return await client.post(
+                "/api/v1/sales",
+                json={
+                    "items": [{"product_id": product_id, "quantity": 1}],
+                    "payments": [{"method": "CASH", "amount": 10.0}],
+                    "customer_id": customer_id,
+                },
+                headers=headers,
+            )
+
+        results = await asyncio.gather(make_sale(), make_sale(), return_exceptions=True)
+        status_codes = [r.status_code for r in results if not isinstance(r, Exception)]
+        assert status_codes.count(201) == 2  # both sales genuinely succeed
+
+        r = await client.get(f"/api/v1/customers/{customer_id}", headers=headers)
+        # 10 points each, both must land -- not 10 (one award lost).
+        assert r.json()["loyalty_points"] == 20

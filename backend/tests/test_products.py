@@ -151,3 +151,43 @@ class TestBatchCreation:
             headers={"Authorization": f"Bearer {employee_token}"},
         )
         assert r.status_code == 403
+
+
+class TestProductExport:
+    async def _login(self, client, username: str, password: str) -> str:
+        r = await client.post(
+            "/api/v1/auth/login", json={"username": username, "password": password}
+        )
+        assert r.status_code == 200, r.text
+        return str(r.json()["access_token"])
+
+    async def test_excel_export_returns_a_real_spreadsheet(self, client, owner_user):
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        await client.post(
+            "/api/v1/products",
+            json={"name": "Exportable Product", "default_selling_price": 5.0},
+            headers=headers,
+        )
+
+        r = await client.get("/api/v1/products?export=excel", headers=headers)
+        assert r.status_code == 200
+        assert (
+            r.headers["content-type"]
+            == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        assert len(r.content) > 0
+
+        # A genuine .xlsx file is a real zip archive -- confirms this
+        # is an actual spreadsheet, not just bytes with the right
+        # content-type header slapped on.
+        import io
+        import zipfile
+
+        assert zipfile.is_zipfile(io.BytesIO(r.content))
+
+    async def test_json_export_is_still_the_default(self, client, owner_user):
+        token = await self._login(client, "lucy", "S3curePass!")
+        r = await client.get("/api/v1/products", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("application/json")

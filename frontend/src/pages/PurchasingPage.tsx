@@ -262,6 +262,11 @@ function CreatePOModal({
 
         {lines.length > 0 && (
           <div className="space-y-2">
+            <div className="grid grid-cols-[1fr_80px_100px] gap-2 text-xs uppercase tracking-wide text-ink-soft">
+              <span>Product</span>
+              <span>Qty</span>
+              <span>Cost/unit</span>
+            </div>
             {lines.map((line, idx) => (
               <div key={line.product.id} className="ruled-row grid grid-cols-[1fr_80px_100px] gap-2 pb-2 text-sm">
                 <span className="truncate">{line.product.name}</span>
@@ -273,6 +278,7 @@ function CreatePOModal({
                     const qty = Number(e.target.value)
                     setLines((prev) => prev.map((l, i) => (i === idx ? { ...l, qty } : l)))
                   }}
+                  aria-label={`Quantity for ${line.product.name}`}
                   className="figure border border-rule px-2 py-1"
                 />
                 <input
@@ -284,6 +290,7 @@ function CreatePOModal({
                     const cost = Number(e.target.value)
                     setLines((prev) => prev.map((l, i) => (i === idx ? { ...l, cost } : l)))
                   }}
+                  aria-label={`Cost per unit for ${line.product.name}`}
                   className="figure border border-rule px-2 py-1"
                 />
               </div>
@@ -462,12 +469,14 @@ function PODetailModal({
       <p className="mb-1 text-sm">
         Supplier: <span className="font-medium">{supplierName}</span>
       </p>
-      <p className="mb-3 text-sm text-ink-soft">Status: {po.status}</p>
+      <p className="mb-3 text-sm text-ink-soft">
+        Status: {COLUMNS.find((c) => c.status === po.status)?.label ?? po.status}
+      </p>
 
       <ul className="mb-4 divide-y divide-rule border border-rule">
         {po.items.map((item) => (
           <li key={item.id} className="flex justify-between px-3 py-2 text-sm">
-            <span>Product #{item.product_id}</span>
+            <span>{item.product_name}</span>
             <span className="figure">
               {item.quantity_ordered} @ {formatCurrency(item.unit_cost_expected)}
               {item.quantity_received !== null && (
@@ -595,65 +604,87 @@ function ReceiveForm({
       </p>
       <form onSubmit={handleSubmit} className="space-y-3">
         {po.items.map((item) => (
-          <div key={item.id} className="grid grid-cols-2 gap-2 border border-rule p-2 text-sm">
-            <p className="col-span-2">
-              Product #{item.product_id} (ordered {item.quantity_ordered})
+          <div key={item.id} className="border border-rule p-3 text-sm">
+            <p className="mb-2 font-medium">
+              {item.product_name}{' '}
+              <span className="font-normal text-ink-soft">
+                (ordered {item.quantity_ordered})
+              </span>
             </p>
-            <input
-              placeholder="Batch number"
-              value={lines[item.id].batch_number}
-              onChange={(e) =>
-                setLines((prev) => ({
-                  ...prev,
-                  [item.id]: { ...prev[item.id], batch_number: e.target.value },
-                }))
-              }
-              className="border border-rule px-2 py-1"
-            />
-            <input
-              type="date"
-              value={lines[item.id].expiry_date}
-              onChange={(e) =>
-                setLines((prev) => ({
-                  ...prev,
-                  [item.id]: { ...prev[item.id], expiry_date: e.target.value },
-                }))
-              }
-              className="border border-rule px-2 py-1"
-            />
-            <input
-              type="number"
-              min={0}
-              value={lines[item.id].quantity_received}
-              onChange={(e) =>
-                setLines((prev) => ({
-                  ...prev,
-                  [item.id]: {
-                    ...prev[item.id],
-                    quantity_received: Number(e.target.value),
-                  },
-                }))
-              }
-              placeholder="Qty received"
-              className="figure border border-rule px-2 py-1"
-            />
-            <input
-              type="number"
-              min={0}
-              step={0.01}
-              value={lines[item.id].unit_cost_actual}
-              onChange={(e) =>
-                setLines((prev) => ({
-                  ...prev,
-                  [item.id]: {
-                    ...prev[item.id],
-                    unit_cost_actual: Number(e.target.value),
-                  },
-                }))
-              }
-              placeholder="Actual unit cost"
-              className="figure border border-rule px-2 py-1"
-            />
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block">
+                <span className="block text-xs uppercase tracking-wide text-ink-soft">
+                  Batch number
+                </span>
+                <input
+                  value={lines[item.id].batch_number}
+                  onChange={(e) =>
+                    setLines((prev) => ({
+                      ...prev,
+                      [item.id]: { ...prev[item.id], batch_number: e.target.value },
+                    }))
+                  }
+                  className="mt-1 w-full border border-rule px-2 py-1"
+                />
+              </label>
+              <label className="block">
+                <span className="block text-xs uppercase tracking-wide text-ink-soft">
+                  Expiry date
+                </span>
+                <input
+                  type="date"
+                  value={lines[item.id].expiry_date}
+                  onChange={(e) =>
+                    setLines((prev) => ({
+                      ...prev,
+                      [item.id]: { ...prev[item.id], expiry_date: e.target.value },
+                    }))
+                  }
+                  className="mt-1 w-full border border-rule px-2 py-1"
+                />
+              </label>
+              <label className="block">
+                <span className="block text-xs uppercase tracking-wide text-ink-soft">
+                  Quantity received
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  value={lines[item.id].quantity_received}
+                  onChange={(e) =>
+                    setLines((prev) => ({
+                      ...prev,
+                      [item.id]: {
+                        ...prev[item.id],
+                        quantity_received: Number(e.target.value),
+                      },
+                    }))
+                  }
+                  className="figure mt-1 w-full border border-rule px-2 py-1"
+                />
+              </label>
+              <label className="block">
+                <span className="block text-xs uppercase tracking-wide text-ink-soft">
+                  Actual unit cost
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={lines[item.id].unit_cost_actual}
+                  onChange={(e) =>
+                    setLines((prev) => ({
+                      ...prev,
+                      [item.id]: {
+                        ...prev[item.id],
+                        unit_cost_actual: Number(e.target.value),
+                      },
+                    }))
+                  }
+                  className="figure mt-1 w-full border border-rule px-2 py-1"
+                />
+              </label>
+            </div>
           </div>
         ))}
 

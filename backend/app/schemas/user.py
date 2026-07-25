@@ -6,8 +6,8 @@ class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=80)
     password: str = Field(min_length=8)
     role_id: int
-    security_question: str | None = Field(default=None, max_length=255)
-    security_answer: str | None = Field(default=None, max_length=255)
+    security_question: str = Field(min_length=1, max_length=255)
+    security_answer: str = Field(min_length=1, max_length=255)
 
 
 class UserListItemOut(BaseModel):

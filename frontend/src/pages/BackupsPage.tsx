@@ -42,14 +42,7 @@ export function BackupsPage() {
       await backupsApi.run()
       setReloadKey((k) => k + 1)
     } catch (err) {
-      if (err instanceof ApiError && err.message.toLowerCase().includes('not connected')) {
-        // Point straight at the fix instead of just showing the raw
-        // error -- "not connected" on its own tells you what's wrong
-        // but not what to do about it.
-        setShowConnect(true)
-      } else {
-        setError(err instanceof ApiError ? err.message : 'Backup failed to run.')
-      }
+      setError(err instanceof ApiError ? err.message : 'Backup failed to run.')
     } finally {
       setRunning(false)
     }
@@ -61,25 +54,25 @@ export function BackupsPage() {
         <h1 className="font-display text-2xl text-ink">Backups</h1>
         <div className="flex gap-2">
           <button
-            onClick={() => setShowConnect(true)}
-            className="border border-rule px-3 py-1.5 text-sm text-ink-soft hover:border-brass"
-          >
-            Connect Google Drive
-          </button>
-          <button
             onClick={() => void handleRunBackup()}
             disabled={running}
             className="border border-ink bg-ink px-3 py-1.5 text-sm text-paper disabled:opacity-50"
           >
             {running ? 'Backing up…' : 'Back up now'}
           </button>
+          <button
+            onClick={() => setShowConnect(true)}
+            className="border border-rule px-3 py-1.5 text-sm text-ink-soft hover:border-brass"
+          >
+            Also back up to Google Drive…
+          </button>
         </div>
       </header>
       <p className="mb-6 text-sm text-ink-soft">
         Every sale, every batch, every coin recorded in this system lives in one database. A
-        backup is the only thing standing between a hard-drive failure and losing all of it —
-        run one before anything risky, and check this list occasionally to make sure they're
-        actually succeeding, not just scheduled.
+        backup is the only thing standing between a hard-drive failure and losing all of it.
+        "Back up now" saves a copy on this computer immediately — no setup, no internet needed.
+        Connecting Google Drive is entirely optional, for anyone who also wants an off-site copy.
       </p>
 
       {error && (
@@ -97,7 +90,7 @@ export function BackupsPage() {
                 <StatusBadge status={b.status} />
               </p>
               <p className="text-xs text-ink-soft">
-                {b.provider}
+                {b.provider === 'LOCAL_FILE' ? 'On this computer' : 'Google Drive'}
                 {b.size_bytes !== null && ` · ${formatBytes(b.size_bytes)}`}
                 {b.restored_at && ` · restored ${new Date(b.restored_at).toLocaleString()}`}
               </p>

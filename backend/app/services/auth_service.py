@@ -202,6 +202,23 @@ class AuthService:
             self.db.add(session)
             await self.db.commit()
 
+    GENERIC_SECURITY_QUESTION = "Security question"
+
+    async def get_security_question(self, username: str) -> str:
+        """
+        Never reveals whether a username exists or has a question set
+        -- returns the same generic placeholder either way, exactly
+        the same principle already applied in
+        reset_password_via_security_question's error handling. A real
+        question is only ever returned for an account that genuinely
+        has one.
+        """
+        result = await self.db.execute(select(User).where(User.username == username))
+        user = result.scalar_one_or_none()
+        if user is None or user.security_question is None:
+            return self.GENERIC_SECURITY_QUESTION
+        return user.security_question
+
     async def reset_password_via_security_question(
         self, username: str, security_answer: str, new_password: str
     ) -> None:
@@ -218,6 +235,7 @@ class AuthService:
             raise generic_error
 
         user.hashed_password = hash_password(new_password)
+        user.must_change_password = False
         self.db.add(
             AuditLog(
                 user_id=user.id,
@@ -229,15 +247,30 @@ class AuthService:
         )
         await self.db.commit()
 
-    async def admin_reset_password(
-        self, admin: User, target_user_id: int, new_password: str
-    ) -> None:
+    async def admin_reset_password(self, admin: User, target_user_id: int) -> str:
+        """
+        Returns the generated temp password, for the admin to relay to
+        the locked-out person out of band. The admin never chooses or
+        learns their REAL password -- must_change_password forces a
+        genuine change before the temp one is usable for anything else.
+        """
         result = await self.db.execute(select(User).where(User.id == target_user_id))
         user = result.scalar_one_or_none()
         if user is None:
             raise HTTPException(status_code=404, detail="User not found")
 
-        user.hashed_password = hash_password(new_password)
+        if not await self._can_reset(admin, user):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "You can only reset passwords for accounts with fewer permissions "
+                    "than your own."
+                ),
+            )
+
+        temp_password = self.generate_temp_password()
+        user.hashed_password = hash_password(temp_password)
+        user.must_change_password = True
         self.db.add(
             AuditLog(
                 user_id=admin.id,
@@ -246,6 +279,51 @@ class AuthService:
                 entity_type="user",
                 entity_id=str(user.id),
                 new_value=f"reset_by_admin_id={admin.id}",
+            )
+        )
+        await self.db.commit()
+        return temp_password
+
+    async def _can_reset(self, actor: User, target: User) -> bool:
+        """
+        Owner-tier (holds roles.manage) can reset anyone, including
+        other owner-tier accounts -- restricting that would create
+        exactly the lockout scenario this whole feature exists to
+        prevent, if a business ever has more than one owner account.
+        Admin-tier (holds users.manage but not roles.manage) can reset
+        anyone who ISN'T also admin-tier or above -- an Administrator
+        resetting another Administrator or the Owner is exactly the
+        gap this closes.
+
+        Deliberately based on permissions actually held, not role name
+        or role_id -- roles are admin-configurable (see role_service.py),
+        so a hierarchy keyed to the literal strings "Administrator" or
+        "Employee" would silently stop applying to any custom role.
+        """
+        actor_codes = {p.code for p in actor.role.permissions}
+        target_codes = {p.code for p in target.role.permissions}
+
+        if "roles.manage" in actor_codes:
+            return True
+        if "users.manage" in actor_codes:
+            return "users.manage" not in target_codes
+        return False
+
+    async def change_own_password(
+        self, user: User, current_password: str, new_password: str
+    ) -> None:
+        if not verify_password(current_password, user.hashed_password):
+            raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+        user.hashed_password = hash_password(new_password)
+        user.must_change_password = False
+        self.db.add(
+            AuditLog(
+                user_id=user.id,
+                user_name_snapshot=user.full_name,
+                action="password.changed",
+                entity_type="user",
+                entity_id=str(user.id),
             )
         )
         await self.db.commit()

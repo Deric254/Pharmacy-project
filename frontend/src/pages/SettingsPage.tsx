@@ -3,6 +3,7 @@ import { useConfigStore } from '../config/store'
 import { configApi } from '../api/config'
 import { ApiError } from '../api/client'
 import { THEMES, applyTheme } from '../theme/themes'
+import { useUpdateCheck } from '../lib/updateCheck'
 
 export function SettingsPage() {
   const config = useConfigStore((s) => s.config)
@@ -216,6 +217,51 @@ export function SettingsPage() {
           {saving ? 'Saving…' : 'Save settings'}
         </button>
       </form>
+
+      <section className="ledger-panel mt-6 space-y-3 p-4">
+        <h2 className="text-xs uppercase tracking-wide text-ink-soft">Software updates</h2>
+        <UpdateSection />
+      </section>
+    </div>
+  )
+}
+
+function UpdateSection() {
+  const { info, checking, checkNow } = useUpdateCheck()
+
+  return (
+    <div className="flex items-center justify-between text-sm">
+      <div>
+        {info ? (
+          <p>
+            A newer version is available:{' '}
+            <span className="figure">
+              {info.currentVersion} → {info.latestVersion}
+            </span>
+          </p>
+        ) : (
+          <p className="text-ink-soft">You're on the latest version, or none is known yet.</p>
+        )}
+      </div>
+      <div className="flex gap-2">
+        {info && (
+          <a
+            href={info.downloadUrl ?? info.releaseUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="border border-ink bg-ink px-3 py-1.5 text-paper"
+          >
+            {info.downloadUrl ? 'Download update' : 'View release'}
+          </a>
+        )}
+        <button
+          onClick={() => void checkNow()}
+          disabled={checking}
+          className="border border-rule px-3 py-1.5 text-ink-soft hover:border-brass disabled:opacity-50"
+        >
+          {checking ? 'Checking…' : 'Check for updates'}
+        </button>
+      </div>
     </div>
   )
 }

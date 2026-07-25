@@ -10,6 +10,7 @@ accounted for":
      not just a money event.
 """
 
+import asyncio
 from datetime import date
 
 from sqlalchemy import select
@@ -140,6 +141,52 @@ class TestCreateRefund:
             movements = movement_result.scalars().all()
             assert len(movements) == 1
             assert movements[0].quantity_delta == 5
+
+    async def test_two_concurrent_refunds_against_the_same_batch_both_restock(
+        self, client, owner_user
+    ):
+        """
+        The actual bug this closes: restocking used to be a Python-level
+        `batch.qty_remaining += quantity` guarded only by
+        SELECT...FOR UPDATE, which SQLite silently drops entirely (the
+        same false-safety pattern already found and fixed for the
+        stock-decrement and PO-transition races this session). Two
+        refunds landing on the same batch at once could see the same
+        starting quantity and the second commit would silently
+        overwrite the first's correct increment, losing a real restock
+        with no error at all.
+        """
+        product_id = await _make_product_with_batch(price=10.0, qty=20)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        sale_a = await _make_sale(client, token, product_id, 5, 10.0)
+        sale_b = await _make_sale(client, token, product_id, 5, 10.0)
+
+        async def refund(sale: dict) -> object:
+            sale_item = sale["items"][0]
+            return await client.post(
+                f"/api/v1/sales/{sale['id']}/refunds",
+                json={
+                    "reason": "CUSTOMER_RETURN",
+                    "method": "CASH",
+                    "items": [{"sale_item_id": sale_item["id"], "quantity": 5}],
+                },
+                headers=headers,
+            )
+
+        results = await asyncio.gather(refund(sale_a), refund(sale_b), return_exceptions=True)
+        status_codes = [r.status_code for r in results if not isinstance(r, Exception)]
+        assert status_codes.count(201) == 2  # both refunds genuinely succeed, no lost update
+
+        async with AsyncSessionLocal() as db:
+            batch_result = await db.execute(
+                select(MedicineBatch).where(MedicineBatch.product_id == product_id)
+            )
+            batch = batch_result.scalar_one()
+            # Started at 20, sold 10 total (two sales of 5), refunded
+            # both back -- must be 20 again, not 15 (one restock lost).
+            assert batch.qty_remaining == 20
 
     async def test_refund_without_restock_pays_back_but_leaves_stock_alone(
         self, client, owner_user

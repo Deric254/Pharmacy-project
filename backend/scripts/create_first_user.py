@@ -35,7 +35,14 @@ from app.models.user import User
 VALID_ROLES = ("Employee", "Administrator", "ChemistOwner")
 
 
-async def create_first_user(full_name: str, username: str, role_name: str, password: str) -> None:
+async def create_first_user(
+    full_name: str,
+    username: str,
+    role_name: str,
+    password: str,
+    security_question: str,
+    security_answer: str,
+) -> None:
     async with AsyncSessionLocal() as db:
         existing_count = await db.scalar(select(func.count()).select_from(User))
         if existing_count and existing_count > 0:
@@ -62,6 +69,8 @@ async def create_first_user(full_name: str, username: str, role_name: str, passw
             username=username,
             hashed_password=hash_password(password),
             role_id=role.id,
+            security_question=security_question,
+            security_answer_hash=hash_password(security_answer),
         )
         db.add(user)
         await db.commit()
@@ -84,7 +93,25 @@ def main() -> None:
         print("Passwords did not match.", file=sys.stderr)
         raise SystemExit(1)
 
-    asyncio.run(create_first_user(args.full_name, args.username, args.role, password))
+    print()
+    print("A security question is required -- it's the only way to recover")
+    print("this specific account's password later without another admin's help.")
+    security_question = input(
+        "Security question (e.g. 'What was your first pet's name?'): "
+    ).strip()
+    if not security_question:
+        print("A security question is required.", file=sys.stderr)
+        raise SystemExit(1)
+    security_answer = getpass.getpass("Answer: ")
+    if not security_answer:
+        print("An answer is required.", file=sys.stderr)
+        raise SystemExit(1)
+
+    asyncio.run(
+        create_first_user(
+            args.full_name, args.username, args.role, password, security_question, security_answer
+        )
+    )
 
 
 if __name__ == "__main__":

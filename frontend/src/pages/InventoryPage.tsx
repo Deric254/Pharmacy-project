@@ -2,13 +2,16 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { inventoryApi, productsApi } from '../api/domain'
 import { useAuthStore } from '../auth/store'
 import { useCurrencyFormatter } from '../lib/currency'
-import { ApiError } from '../api/client'
+import { ApiError, downloadExport } from '../api/client'
+import { Modal } from '../components/Modal'
 import type {
   AdjustmentReason,
   BatchOut,
   ExpiringBatchOut,
   LowStockProductOut,
+  ProductCreate,
   ProductOut,
+  ProductUpdate,
   ReconciliationIssueOut,
   StockValuationOut,
 } from '../types/api'
@@ -25,6 +28,7 @@ const ADJUSTMENT_REASONS: AdjustmentReason[] = [
 export function InventoryPage() {
   const hasPermission = useAuthStore((s) => s.hasPermission)
   const canAdjust = hasPermission('inventory.adjust')
+  const canManageProducts = hasPermission('products.manage')
   const formatCurrency = useCurrencyFormatter()
 
   const [lowStock, setLowStock] = useState<LowStockProductOut[]>([])
@@ -61,12 +65,20 @@ export function InventoryPage() {
     <div className="p-6">
       <header className="mb-6 flex items-center justify-between">
         <h1 className="font-display text-2xl text-ink">Inventory</h1>
-        <button
-          onClick={() => setReloadKey((k) => k + 1)}
-          className="border border-rule px-3 py-1 text-sm text-ink-soft hover:border-brass"
-        >
-          Refresh
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => void downloadExport('/products', {}, 'excel')}
+            className="border border-rule px-3 py-1 text-sm text-ink-soft hover:border-brass"
+          >
+            Export to Excel
+          </button>
+          <button
+            onClick={() => setReloadKey((k) => k + 1)}
+            className="border border-rule px-3 py-1 text-sm text-ink-soft hover:border-brass"
+          >
+            Refresh
+          </button>
+        </div>
       </header>
 
       {error && (
@@ -81,6 +93,10 @@ export function InventoryPage() {
           {valuation ? formatCurrency(valuation.total_value) : loading ? '…' : '—'}
         </p>
       </div>
+
+      {canManageProducts && (
+        <ProductManagementPanel onChanged={() => setReloadKey((k) => k + 1)} />
+      )}
 
       {canAdjust && (
         <AdjustmentPanel onAdjusted={() => setReloadKey((k) => k + 1)} />
@@ -367,5 +383,313 @@ function ReconciliationPanel() {
         </ul>
       )}
     </div>
+  )
+}
+
+function ProductManagementPanel({ onChanged }: { onChanged: () => void }) {
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<ProductOut[]>([])
+  const [showCreate, setShowCreate] = useState(false)
+  const [editing, setEditing] = useState<ProductOut | null>(null)
+  const [confirmDeactivate, setConfirmDeactivate] = useState<ProductOut | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  async function runSearch(q: string) {
+    setError(null)
+    try {
+      setResults(await productsApi.list(q))
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Search failed.')
+    }
+  }
+
+  useEffect(() => {
+    void runSearch('')
+    // Only on mount -- subsequent searches are user-triggered via the form.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function refreshAfterChange() {
+    void runSearch(query)
+    onChanged()
+  }
+
+  return (
+    <div className="mb-6 ledger-panel p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-xs uppercase tracking-wide text-ink-soft">Products</h2>
+        <button
+          onClick={() => setShowCreate(true)}
+          className="border border-ink bg-ink px-3 py-1 text-xs text-paper"
+        >
+          New product
+        </button>
+      </div>
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          void runSearch(query)
+        }}
+        className="mb-3 flex gap-2"
+      >
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search products by name"
+          className="flex-1 border border-rule bg-paper px-3 py-2 text-sm outline-none focus-visible:border-brass"
+        />
+        <button type="submit" className="border border-rule px-4 py-2 text-sm hover:border-brass">
+          Search
+        </button>
+      </form>
+
+      {error && (
+        <p role="alert" className="mb-2 text-sm text-stamp-red">
+          {error}
+        </p>
+      )}
+
+      <ul className="divide-y divide-rule border border-rule">
+        {results.map((p) => (
+          <li key={p.id} className="flex items-center justify-between px-3 py-2 text-sm">
+            <span className={p.is_active ? '' : 'text-ink-soft line-through'}>{p.name}</span>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setEditing(p)}
+                className="text-xs text-ink-soft underline decoration-dotted"
+              >
+                Edit
+              </button>
+              {p.is_active && (
+                <button
+                  onClick={() => setConfirmDeactivate(p)}
+                  className="text-xs text-stamp-red underline decoration-dotted"
+                >
+                  Deactivate
+                </button>
+              )}
+            </div>
+          </li>
+        ))}
+        {results.length === 0 && (
+          <li className="px-3 py-4 text-center text-sm text-ink-soft">
+            No products match. Try a different search, or add a new one.
+          </li>
+        )}
+      </ul>
+
+      {showCreate && (
+        <ProductFormModal
+          product={null}
+          onClose={() => setShowCreate(false)}
+          onSaved={() => {
+            setShowCreate(false)
+            refreshAfterChange()
+          }}
+        />
+      )}
+      {editing && (
+        <ProductFormModal
+          product={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null)
+            refreshAfterChange()
+          }}
+        />
+      )}
+      {confirmDeactivate && (
+        <ConfirmDeactivateProductModal
+          product={confirmDeactivate}
+          onClose={() => setConfirmDeactivate(null)}
+          onConfirmed={() => {
+            setConfirmDeactivate(null)
+            refreshAfterChange()
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+function ProductFormModal({
+  product,
+  onClose,
+  onSaved,
+}: {
+  product: ProductOut | null
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const isEdit = product !== null
+  const [name, setName] = useState(product?.name ?? '')
+  const [barcode, setBarcode] = useState(product?.barcode ?? '')
+  const [unit, setUnit] = useState(product?.unit ?? 'unit')
+  const [reorderPoint, setReorderPoint] = useState(product?.reorder_point ?? 10)
+  const [price, setPrice] = useState(product?.default_selling_price ?? 0)
+  const [error, setError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    setSubmitting(true)
+    setError(null)
+    try {
+      if (isEdit) {
+        const payload: ProductUpdate = {
+          name,
+          barcode: barcode || null,
+          unit,
+          reorder_point: reorderPoint,
+          default_selling_price: price,
+        }
+        await productsApi.update(product.id, payload)
+      } else {
+        const payload: ProductCreate = {
+          name,
+          barcode: barcode || null,
+          unit,
+          reorder_point: reorderPoint,
+          default_selling_price: price,
+        }
+        await productsApi.create(payload)
+      }
+      onSaved()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not save this product.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Modal title={isEdit ? 'Edit product' : 'New product'} onClose={onClose}>
+      <form onSubmit={(e) => void handleSubmit(e)} className="space-y-3">
+        <label className="block">
+          <span className="block text-xs uppercase tracking-wide text-ink-soft">Name</span>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+            autoFocus
+            className="mt-1 w-full border border-rule bg-paper px-3 py-2"
+          />
+        </label>
+        <label className="block">
+          <span className="block text-xs uppercase tracking-wide text-ink-soft">
+            Barcode (optional)
+          </span>
+          <input
+            value={barcode}
+            onChange={(e) => setBarcode(e.target.value)}
+            className="mt-1 w-full border border-rule bg-paper px-3 py-2"
+          />
+        </label>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block">
+            <span className="block text-xs uppercase tracking-wide text-ink-soft">Unit</span>
+            <input
+              value={unit}
+              onChange={(e) => setUnit(e.target.value)}
+              className="mt-1 w-full border border-rule bg-paper px-3 py-2"
+            />
+          </label>
+          <label className="block">
+            <span className="block text-xs uppercase tracking-wide text-ink-soft">
+              Reorder point
+            </span>
+            <input
+              type="number"
+              min={0}
+              value={reorderPoint}
+              onChange={(e) => setReorderPoint(Number(e.target.value))}
+              className="figure mt-1 w-full border border-rule bg-paper px-3 py-2"
+            />
+          </label>
+        </div>
+        <label className="block">
+          <span className="block text-xs uppercase tracking-wide text-ink-soft">
+            Selling price
+          </span>
+          <input
+            type="number"
+            min={0}
+            step={0.01}
+            value={price}
+            onChange={(e) => setPrice(Number(e.target.value))}
+            className="figure mt-1 w-full border border-rule bg-paper px-3 py-2"
+          />
+        </label>
+
+        <p className="text-xs text-ink-soft">
+          This only creates the product record. Stock is always added through Purchasing, so
+          every unit on the shelf can be traced back to a real order and supplier.
+        </p>
+
+        {error && <p className="text-sm text-stamp-red">{error}</p>}
+
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="border border-rule px-4 py-2 text-sm">
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={submitting}
+            className="border border-ink bg-ink px-4 py-2 text-sm text-paper disabled:opacity-50"
+          >
+            {submitting ? 'Saving…' : isEdit ? 'Save changes' : 'Create product'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+function ConfirmDeactivateProductModal({
+  product,
+  onClose,
+  onConfirmed,
+}: {
+  product: ProductOut
+  onClose: () => void
+  onConfirmed: () => void
+}) {
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  async function handleConfirm() {
+    setBusy(true)
+    setError(null)
+    try {
+      await productsApi.deactivate(product.id)
+      onConfirmed()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not deactivate this product.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal title="Deactivate this product?" onClose={onClose}>
+      <p className="text-sm text-ink-soft">
+        <span className="font-medium text-ink">{product.name}</span> will no longer be sellable
+        or orderable, but its full sales and stock history stays intact — nothing is deleted.
+      </p>
+      {error && <p className="mt-3 text-sm text-stamp-red">{error}</p>}
+      <div className="mt-4 flex justify-end gap-2">
+        <button onClick={onClose} className="border border-rule px-4 py-2 text-sm">
+          Cancel
+        </button>
+        <button
+          onClick={() => void handleConfirm()}
+          disabled={busy}
+          className="border border-ink bg-ink px-4 py-2 text-sm text-paper disabled:opacity-50"
+        >
+          {busy ? 'Deactivating…' : 'Deactivate'}
+        </button>
+      </div>
+    </Modal>
   )
 }

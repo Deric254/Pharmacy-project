@@ -10,20 +10,47 @@ from app.schemas.batch import BatchCreate, BatchOut
 from app.schemas.product import ProductCreate, ProductOut, ProductUpdate
 from app.services.batch_service import BatchService
 from app.services.product_service import ProductService
+from app.services.report_export_service import ExportFormat, build_export_response
 
 router = APIRouter(prefix="/products", tags=["products"])
 
 
 @router.get(
     "",
-    response_model=list[ProductOut],
     dependencies=[Depends(require_permission("inventory.view"))],
 )
 async def list_products(
     db: Annotated[AsyncSession, Depends(get_db)],
     search: str | None = Query(default=None),
-) -> list[ProductOut]:
-    return await ProductService(db).list_all(search=search)
+    export: ExportFormat = "json",
+) -> object:
+    products = await ProductService(db).list_all(search=search)
+    if export == "json":
+        return products
+    headers = [
+        "ID",
+        "Name",
+        "Barcode",
+        "Unit",
+        "Reorder point",
+        "Selling price",
+        "Qty on hand",
+        "Active",
+    ]
+    rows: list[list[object]] = [
+        [
+            p.id,
+            p.name,
+            p.barcode or "",
+            p.unit,
+            p.reorder_point,
+            p.default_selling_price,
+            p.total_qty_available,
+            "Yes" if p.is_active else "No",
+        ]
+        for p in products
+    ]
+    return build_export_response(export, products, "Products", headers, rows)
 
 
 @router.get(

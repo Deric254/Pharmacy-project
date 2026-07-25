@@ -32,9 +32,7 @@ class UserService:
             hashed_password=hash_password(payload.password),
             role_id=role.id,
             security_question=payload.security_question,
-            security_answer_hash=(
-                hash_password(payload.security_answer) if payload.security_answer else None
-            ),
+            security_answer_hash=hash_password(payload.security_answer),
         )
         self.db.add(user)
         await self.db.flush()

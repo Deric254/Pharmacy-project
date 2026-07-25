@@ -87,6 +87,10 @@ class TestPurchaseOrderLifecycle:
         po_id = create_resp.json()["id"]
         item_id = create_resp.json()["items"][0]["id"]
         assert create_resp.json()["status"] == "DRAFT"
+        # The actual bug this closes: a raw product_id with no name at
+        # all, which is what forced the receiving UI to show
+        # "Product #1" instead of something a real person can read.
+        assert create_resp.json()["items"][0]["product_name"] == "PO Test Product"
 
         sent = await client.post(f"/api/v1/purchase-orders/{po_id}/send", headers=headers)
         assert sent.status_code == 200

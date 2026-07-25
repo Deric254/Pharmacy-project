@@ -95,7 +95,7 @@ class TestAuditLogCompleteness:
 
         await client.post(
             "/api/v1/auth/admin-reset-password",
-            json={"user_id": joe_id, "new_password": "newpassword123"},
+            json={"user_id": joe_id},
             headers={"Authorization": f"Bearer {token}"},
         )
 

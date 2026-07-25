@@ -10,6 +10,8 @@ export function SetupPage({ onComplete }: { onComplete: () => void }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [securityQuestion, setSecurityQuestion] = useState('')
+  const [securityAnswer, setSecurityAnswer] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -28,7 +30,13 @@ export function SetupPage({ onComplete }: { onComplete: () => void }) {
 
     setSubmitting(true)
     try {
-      await setupApi.createFirstUser({ full_name: fullName, username, password })
+      await setupApi.createFirstUser({
+        full_name: fullName,
+        username,
+        password,
+        security_question: securityQuestion,
+        security_answer: securityAnswer,
+      })
       onComplete()
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
@@ -129,6 +137,43 @@ export function SetupPage({ onComplete }: { onComplete: () => void }) {
               onChange={(e) => setConfirmPassword(e.target.value)}
               required
               minLength={8}
+              className="mt-1 w-full border border-rule bg-paper px-3 py-2 text-ink outline-none focus-visible:border-brass"
+            />
+          </div>
+
+          <div className="border-t border-rule pt-4">
+            <p className="mb-3 text-xs text-ink-soft">
+              This is what recovers this account if the password is ever forgotten. Since the
+              owner account has no one above it to ask for help, this is the only way back in —
+              choose something only you would know.
+            </p>
+            <label
+              htmlFor="security_question"
+              className="block text-xs uppercase tracking-wide text-ink-soft"
+            >
+              Security question
+            </label>
+            <input
+              id="security_question"
+              value={securityQuestion}
+              onChange={(e) => setSecurityQuestion(e.target.value)}
+              required
+              placeholder="e.g. What was your first pet's name?"
+              className="mt-1 w-full border border-rule bg-paper px-3 py-2 text-ink outline-none focus-visible:border-brass"
+            />
+          </div>
+          <div>
+            <label
+              htmlFor="security_answer"
+              className="block text-xs uppercase tracking-wide text-ink-soft"
+            >
+              Answer
+            </label>
+            <input
+              id="security_answer"
+              value={securityAnswer}
+              onChange={(e) => setSecurityAnswer(e.target.value)}
+              required
               className="mt-1 w-full border border-rule bg-paper px-3 py-2 text-ink outline-none focus-visible:border-brass"
             />
           </div>

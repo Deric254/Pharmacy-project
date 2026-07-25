@@ -112,9 +112,48 @@ class TestConnectGoogleDrive:
 
 
 class TestRunBackup:
-    async def test_run_backup_without_provider_configured_returns_400(self, client, owner_user):
+    async def test_local_backup_requires_no_configuration_at_all(self, client, owner_user):
+        """
+        The actual bug this closes: previously POST /backups/run
+        always required Google Drive connected first, with no offline
+        path at all -- confirmed directly against a real running
+        server before this fix existed. Local is now the default, and
+        needs nothing set up beforehand.
+        """
         token = await _login(client, "lucy", "S3curePass!")
         r = await client.post("/api/v1/backups/run", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 201
+        assert r.json()["status"] == "SUCCESS"
+        assert r.json()["provider"] == "LOCAL_FILE"
+
+    async def test_local_backup_writes_a_real_file_that_can_be_read_back(
+        self, client, owner_user, tmp_path, monkeypatch
+    ):
+        from app.core.config import Settings
+
+        monkeypatch.setattr(Settings, "local_backup_dir", property(lambda self: tmp_path))
+        token = await _login(client, "lucy", "S3curePass!")
+        r = await client.post("/api/v1/backups/run", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 201
+        reference = r.json()["reference"]
+        assert reference is not None
+
+        written_files = list(tmp_path.glob("pharmacy-backup-*.enc"))
+        assert len(written_files) == 1
+        assert written_files[0].read_bytes()  # genuinely has content, not an empty file
+
+    async def test_google_drive_still_requires_connection_when_explicitly_chosen(
+        self, client, owner_user
+    ):
+        # Local being the default doesn't remove the real requirement
+        # for Google Drive specifically -- someone who explicitly asks
+        # for it still needs to have connected it first.
+        token = await _login(client, "lucy", "S3curePass!")
+        r = await client.post(
+            "/api/v1/backups/run",
+            json={"provider": "google_drive"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
         assert r.status_code == 400
         assert "not connected" in r.json()["detail"]
 

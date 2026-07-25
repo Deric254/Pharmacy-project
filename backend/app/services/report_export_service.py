@@ -9,7 +9,9 @@ what an SME pharmacy report actually needs.
 """
 
 import io
+from typing import Literal
 
+from fastapi import Response
 from openpyxl import Workbook
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
@@ -17,6 +19,11 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
+
+ExportFormat = Literal["json", "excel", "pdf"]
+
+_EXCEL_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_PDF_MEDIA_TYPE = "application/pdf"
 
 
 def export_to_excel(
@@ -82,3 +89,38 @@ def _draw_title(canvas: object, title: str) -> None:
     canvas.setFont("Helvetica-Bold", 14)  # type: ignore[attr-defined]
     canvas.drawString(2 * cm, 28 * cm, title)  # type: ignore[attr-defined]
     canvas.restoreState()  # type: ignore[attr-defined]
+
+
+def build_export_response(
+    export: ExportFormat,
+    json_payload: object,
+    title: str,
+    headers: list[str],
+    rows: list[list[object]],
+) -> object:
+    """
+    Shared across every export-capable endpoint (reports, and any raw
+    data list -- Products, Customers, Audit Trail), so each one just
+    supplies its own headers/rows rather than reimplementing this
+    branch. Excel filename is derived from the title, sanitized to
+    ASCII alphanumerics/spaces/hyphens -- title strings come from
+    business-facing labels a user chose, not developer-controlled
+    constants, so this can't be trusted blindly as a filesystem path
+    component.
+    """
+    safe_title = "".join(c for c in title if c.isalnum() or c in " -_")[:100] or "Export"
+    if export == "excel":
+        content = export_to_excel(headers, rows, sheet_title=title)
+        return Response(
+            content=content,
+            media_type=_EXCEL_MEDIA_TYPE,
+            headers={"Content-Disposition": f'attachment; filename="{safe_title}.xlsx"'},
+        )
+    if export == "pdf":
+        content = export_to_pdf(title, headers, rows)
+        return Response(
+            content=content,
+            media_type=_PDF_MEDIA_TYPE,
+            headers={"Content-Disposition": f'attachment; filename="{safe_title}.pdf"'},
+        )
+    return json_payload

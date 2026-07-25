@@ -11,6 +11,7 @@ Stock take tests. The properties that matter:
      publishes a shrinkage event with a sane value/percent.
 """
 
+import asyncio
 import json
 from datetime import date
 
@@ -390,6 +391,39 @@ class TestClose:
         assert r.status_code == 200
         assert r.json()["status"] == "CLOSED"
         assert r.json()["closed_at"] is not None
+
+    async def test_two_concurrent_close_calls_only_one_succeeds(self, client, owner_user):
+        """
+        The actual bug this closes: close() checked "is this already
+        closed?" as a plain read with no atomic guard at all -- two
+        simultaneous close() calls on the same OPEN stock take could
+        both pass that check, both compute shrinkage, and both
+        successfully write CLOSED, the second commit silently
+        overwriting the first's closed_at and (worse) both publishing
+        a StockTakeClosedEvent for what should have been one closure.
+        """
+        product_id, _ = await _make_product_with_batch(qty=30)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        create_resp = await client.post(
+            "/api/v1/stock-takes", json={"product_ids": [product_id]}, headers=headers
+        )
+        stock_take_id = create_resp.json()["id"]
+        item_id = create_resp.json()["items"][0]["id"]
+        await client.post(
+            f"/api/v1/stock-takes/{stock_take_id}/items/{item_id}/count",
+            json={"physical_qty": 30},
+            headers=headers,
+        )
+
+        async def attempt_close():
+            return await client.post(f"/api/v1/stock-takes/{stock_take_id}/close", headers=headers)
+
+        results = await asyncio.gather(attempt_close(), attempt_close(), return_exceptions=True)
+        status_codes = [r.status_code for r in results if not isinstance(r, Exception)]
+        assert status_codes.count(200) == 1
+        assert status_codes.count(400) == 1
 
     async def test_reconciliation_clean_after_close(self, client, owner_user):
         product_id, batch_id = await _make_product_with_batch(qty=30)

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { auditLogsApi } from '../api/audit'
-import { ApiError } from '../api/client'
+import { ApiError, downloadExport } from '../api/client'
 import type { AuditLogOut } from '../types/api'
 
 const PAGE_SIZE = 25
@@ -56,7 +56,26 @@ export function AuditLogPage() {
 
   return (
     <div className="p-6">
-      <h1 className="mb-1 font-display text-2xl text-ink">Audit Trail</h1>
+      <div className="mb-1 flex items-center justify-between">
+        <h1 className="font-display text-2xl text-ink">Audit Trail</h1>
+        <button
+          onClick={() =>
+            void downloadExport(
+              '/audit-logs',
+              {
+                ...(entityType && { entity_type: entityType }),
+                ...(action && { action }),
+                ...(startDate && { start_date: startDate }),
+                ...(endDate && { end_date: endDate }),
+              },
+              'excel',
+            )
+          }
+          className="border border-rule px-3 py-1 text-sm text-ink-soft hover:border-brass"
+        >
+          Export to Excel
+        </button>
+      </div>
       <p className="mb-6 text-sm text-ink-soft">
         Every price change, refund, password reset, and role edit, in order — who did it and
         when. Names shown here are recorded at the time of the action, not looked up fresh, so a

@@ -54,6 +54,8 @@ class SetupService:
                 username=payload.username,
                 hashed_password=hash_password(payload.password),
                 role_id=role.id,
+                security_question=payload.security_question,
+                security_answer_hash=hash_password(payload.security_answer),
             )
         )
         try:

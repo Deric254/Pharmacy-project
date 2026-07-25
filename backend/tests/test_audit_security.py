@@ -212,7 +212,7 @@ class TestCrossUserIsolation:
         token = await _login(client, "joe", "pass1234")
         r = await client.post(
             "/api/v1/auth/admin-reset-password",
-            json={"user_id": 1, "new_password": "hacked12345"},
+            json={"user_id": 1},
             headers={"Authorization": f"Bearer {token}"},
         )
         assert r.status_code == 403

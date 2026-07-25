@@ -17,6 +17,11 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(80), unique=True, index=True)
     hashed_password: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Set whenever an admin/owner generates a temp password on someone's
+    # behalf (see AuthService.admin_reset_password) -- the temp
+    # credential only ever gets someone as far as changing it to a real
+    # password they alone know, never into the app itself.
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
 
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"))
     role: Mapped[Role] = relationship(lazy="selectin")

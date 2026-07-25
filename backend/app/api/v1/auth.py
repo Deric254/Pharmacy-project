@@ -9,8 +9,11 @@ from app.core.rbac import get_current_user, require_permission
 from app.models.user import User
 from app.schemas.auth import (
     AdminResetPasswordRequest,
+    AdminResetPasswordResponse,
+    ChangePasswordRequest,
     ForgotPasswordRequest,
     LoginRequest,
+    SecurityQuestionOut,
     TokenResponse,
     UserOut,
 )
@@ -83,6 +86,14 @@ async def logout(
     response.delete_cookie(REFRESH_COOKIE_NAME, path=REFRESH_COOKIE_PATH)
 
 
+@router.get("/security-question", response_model=SecurityQuestionOut)
+async def get_security_question(
+    username: str, db: Annotated[AsyncSession, Depends(get_db)]
+) -> SecurityQuestionOut:
+    question = await AuthService(db).get_security_question(username)
+    return SecurityQuestionOut(question=question)
+
+
 @router.post("/forgot-password", status_code=204)
 async def forgot_password(
     payload: ForgotPasswordRequest,
@@ -96,16 +107,28 @@ async def forgot_password(
 
 @router.post(
     "/admin-reset-password",
-    status_code=204,
+    response_model=AdminResetPasswordResponse,
     dependencies=[Depends(require_permission("users.manage"))],
 )
 async def admin_reset_password(
     payload: AdminResetPasswordRequest,
     admin: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> None:
+) -> AdminResetPasswordResponse:
     service = AuthService(db)
-    await service.admin_reset_password(admin, payload.user_id, payload.new_password)
+    temp_password = await service.admin_reset_password(admin, payload.user_id)
+    return AdminResetPasswordResponse(temp_password=temp_password)
+
+
+@router.post("/change-password", status_code=204)
+async def change_password(
+    payload: ChangePasswordRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    await AuthService(db).change_own_password(
+        current_user, payload.current_password, payload.new_password
+    )
 
 
 @router.get("/me", response_model=UserOut)
@@ -117,4 +140,5 @@ async def read_current_user(current_user: Annotated[User, Depends(get_current_us
         role_name=current_user.role.name,
         permissions=sorted(p.code for p in current_user.role.permissions),
         is_active=current_user.is_active,
+        must_change_password=current_user.must_change_password,
     )

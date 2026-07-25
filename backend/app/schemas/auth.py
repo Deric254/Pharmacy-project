@@ -17,8 +17,20 @@ class ForgotPasswordRequest(BaseModel):
     new_password: str = Field(min_length=8)
 
 
+class SecurityQuestionOut(BaseModel):
+    question: str
+
+
 class AdminResetPasswordRequest(BaseModel):
     user_id: int
+
+
+class AdminResetPasswordResponse(BaseModel):
+    temp_password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
     new_password: str = Field(min_length=8)
 
 
@@ -29,5 +41,6 @@ class UserOut(BaseModel):
     role_name: str
     permissions: list[str]
     is_active: bool
+    must_change_password: bool
 
     model_config = {"from_attributes": True}

@@ -10,6 +10,7 @@ from app.core.database import Base
 
 
 class BackupProviderName(enum.StrEnum):
+    LOCAL_FILE = "LOCAL_FILE"
     GOOGLE_DRIVE = "GOOGLE_DRIVE"
 
 

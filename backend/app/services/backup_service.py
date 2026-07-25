@@ -3,10 +3,17 @@ Backup service.
 
 `provider_override` is injectable specifically so tests can exercise
 run_backup()/restore_backup() with an in-memory fake provider instead
-of real Google OAuth (which this sandbox can't reach live, same
-constraint as the AI module's third-party APIs). Production code
-leaves it unset and the service loads the connected Google Drive
-token from the database.
+of a real network call (same constraint as the AI module's third-party
+APIs). Production code leaves it unset and the service picks the real
+provider based on what was requested (run_backup) or what a specific
+backup was actually saved with (restore_backup).
+
+Local file is the default provider -- no connection, no setup, closes
+a confirmed bug where every backup required Google Drive connected
+first, with no offline path at all, directly contradicting this app's
+whole design (one computer, no network dependency). Google Drive stays
+available as an optional additional layer for anyone who wants an
+off-site copy too.
 
 Restore is confirmation-gated (the request must explicitly set
 confirm=true) and verifies the downloaded manifest matches what was
@@ -36,8 +43,14 @@ from app.services.backup.dump_restore import (
     serialize_dump,
 )
 from app.services.backup.google_drive import GoogleDriveBackupProvider
+from app.services.backup.local_file import LocalFileBackupProvider
 
 _settings = get_settings()
+
+_PROVIDER_REQUEST_MAP = {
+    "local": BackupProviderName.LOCAL_FILE,
+    "google_drive": BackupProviderName.GOOGLE_DRIVE,
+}
 
 
 class BackupService:
@@ -67,13 +80,15 @@ class BackupService:
             )
         await self.db.commit()
 
-    async def run_backup(self, user: User) -> BackupLogOut:
+    async def run_backup(self, user: User, provider_choice: str = "local") -> BackupLogOut:
+        provider_name = _PROVIDER_REQUEST_MAP[provider_choice]
+
         dump = await dump_all_tables(self.db)
         manifest = compute_manifest(dump)
         plaintext = serialize_dump(dump)
         encrypted_payload = encrypt_bytes(plaintext)
 
-        provider = await self._get_provider()
+        provider = await self._resolve_provider(provider_name)
         filename = f"pharmacy-backup-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}.enc"
 
         try:
@@ -81,7 +96,7 @@ class BackupService:
         except BackupProviderError as exc:
             log = BackupLog(
                 status=BackupStatus.FAILED,
-                provider=BackupProviderName.GOOGLE_DRIVE,
+                provider=provider_name,
                 error_message=str(exc),
                 created_by_user_id=user.id,
             )
@@ -93,7 +108,7 @@ class BackupService:
 
         log = BackupLog(
             status=BackupStatus.SUCCESS,
-            provider=BackupProviderName.GOOGLE_DRIVE,
+            provider=provider_name,
             reference=reference,
             manifest_json=json.dumps(manifest),
             size_bytes=len(encrypted_payload),
@@ -122,7 +137,11 @@ class BackupService:
         if log.status != BackupStatus.SUCCESS or log.reference is None:
             raise HTTPException(status_code=400, detail="Only a successful backup can be restored")
 
-        provider = await self._get_provider()
+        # Restoring uses whatever provider this specific backup was
+        # actually saved with -- not a fresh choice. A backup made
+        # locally must be read back from local disk regardless of
+        # whether Google Drive happens to be connected right now.
+        provider = await self._resolve_provider(log.provider)
         try:
             encrypted_payload = await provider.download(log.reference)
         except BackupProviderError as exc:
@@ -158,9 +177,12 @@ class BackupService:
             manifest_matched=manifest_matched,
         )
 
-    async def _get_provider(self) -> BackupProvider:
+    async def _resolve_provider(self, provider_name: BackupProviderName) -> BackupProvider:
         if self._provider_override is not None:
             return self._provider_override
+
+        if provider_name == BackupProviderName.LOCAL_FILE:
+            return LocalFileBackupProvider(_settings.local_backup_dir)
 
         result = await self.db.execute(
             select(BackupOAuthToken).where(

@@ -11,10 +11,13 @@ from app.schemas.backup import (
     ConnectGoogleDriveRequest,
     RestoreRequest,
     RestoreResult,
+    RunBackupRequest,
 )
 from app.services.backup_service import BackupService
 
 router = APIRouter(prefix="/backups", tags=["backups"])
+
+_DEFAULT_RUN_BACKUP_REQUEST = RunBackupRequest()
 
 
 @router.get("", response_model=list[BackupLogOut])
@@ -38,8 +41,9 @@ async def connect_google_drive(
 async def run_backup(
     user: Annotated[User, Depends(require_permission("backups.manage"))],
     db: Annotated[AsyncSession, Depends(get_db)],
+    payload: RunBackupRequest = _DEFAULT_RUN_BACKUP_REQUEST,
 ) -> BackupLogOut:
-    return await BackupService(db).run_backup(user)
+    return await BackupService(db).run_backup(user, payload.provider)
 
 
 @router.post("/{backup_id}/restore", response_model=RestoreResult)

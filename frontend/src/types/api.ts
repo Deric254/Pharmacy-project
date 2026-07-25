@@ -9,6 +9,7 @@ export interface UserOut {
   role_name: string
   permissions: string[]
   is_active: boolean
+  must_change_password: boolean
 }
 
 export interface TokenResponse {
@@ -27,6 +28,25 @@ export interface ProductOut {
   is_active: boolean
   created_at: string
   total_qty_available: number
+}
+
+export interface ProductCreate {
+  name: string
+  barcode?: string | null
+  unit?: string
+  category_id?: number | null
+  reorder_point?: number
+  default_selling_price?: number
+}
+
+export interface ProductUpdate {
+  name?: string
+  barcode?: string | null
+  unit?: string
+  category_id?: number | null
+  reorder_point?: number
+  default_selling_price?: number
+  is_active?: boolean
 }
 
 export interface BatchOut {
@@ -218,6 +238,7 @@ export interface PurchaseOrderCreate {
 export interface PurchaseOrderItemOut {
   id: number
   product_id: number
+  product_name: string
   quantity_ordered: number
   unit_cost_expected: number
   quantity_received: number | null
@@ -458,11 +479,26 @@ export interface UserCreate {
   username: string
   password: string
   role_id: number
-  security_question?: string | null
-  security_answer?: string | null
+  security_question: string
+  security_answer: string
 }
 
-export type BackupProviderName = 'GOOGLE_DRIVE'
+export interface AdminResetPasswordResponse {
+  temp_password: string
+}
+
+export interface ChangePasswordRequest {
+  current_password: string
+  new_password: string
+}
+
+export interface ForgotPasswordRequest {
+  username: string
+  security_answer: string
+  new_password: string
+}
+
+export type BackupProviderName = 'LOCAL_FILE' | 'GOOGLE_DRIVE'
 export type BackupStatus = 'SUCCESS' | 'FAILED'
 
 export interface BackupLogOut {
@@ -515,6 +551,8 @@ export interface FirstUserCreate {
   full_name: string
   username: string
   password: string
+  security_question: string
+  security_answer: string
 }
 
 export interface AuditLogOut {

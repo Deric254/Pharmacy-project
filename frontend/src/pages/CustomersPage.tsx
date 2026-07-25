@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { customersApi } from '../api/domain'
 import { useCurrencyFormatter } from '../lib/currency'
-import { ApiError } from '../api/client'
+import { ApiError, downloadExport } from '../api/client'
 import { Modal } from '../components/Modal'
 import type { CustomerOut, PurchaseHistoryEntryOut } from '../types/api'
 
@@ -36,12 +36,20 @@ export function CustomersPage() {
     <div className="p-6">
       <header className="mb-6 flex items-center justify-between">
         <h1 className="font-display text-2xl text-ink">Customers</h1>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="border border-ink bg-ink px-3 py-1.5 text-sm text-paper"
-        >
-          New customer
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => void downloadExport('/customers', {}, 'excel')}
+            className="border border-rule px-3 py-1.5 text-sm text-ink-soft hover:border-brass"
+          >
+            Export to Excel
+          </button>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="border border-ink bg-ink px-3 py-1.5 text-sm text-paper"
+          >
+            New customer
+          </button>
+        </div>
       </header>
 
       <form onSubmit={handleSearch} className="mb-4 flex gap-2">

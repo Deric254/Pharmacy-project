@@ -31,54 +31,73 @@ function isNewer(latest: string, current: string): boolean {
   return false
 }
 
-export function useUpdateCheck(): UpdateInfo | null {
+export interface UpdateCheckResult {
+  info: UpdateInfo | null
+  checking: boolean
+  checkNow: () => Promise<void>
+}
+
+async function fetchLatestReleaseInfo(): Promise<UpdateInfo | null> {
+  const healthRes = await fetch('/health')
+  if (!healthRes.ok) return null
+  const health = (await healthRes.json()) as { version: string }
+
+  const releaseRes = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`)
+  if (!releaseRes.ok) return null // no releases yet, rate-limited, offline -- fine, just skip
+  const release = (await releaseRes.json()) as GithubRelease
+
+  if (!isNewer(release.tag_name, health.version)) return null
+
+  // Specifically the installer (Pharmacy-ERP-Setup-*.exe), not just
+  // any .exe -- a release attaches both the installer and the raw
+  // backend exe it wraps (the latter exists only so Electron has
+  // something to bundle, never meant as a public download), and an
+  // in-app update banner should only ever point someone at the one
+  // real users are meant to run.
+  const installerAsset = release.assets.find(
+    (a) => a.name.startsWith('Pharmacy-ERP-Setup-') && a.name.endsWith('.exe'),
+  )
+  return {
+    currentVersion: health.version,
+    latestVersion: normalizeVersion(release.tag_name),
+    downloadUrl: installerAsset?.browser_download_url ?? null,
+    releaseUrl: release.html_url,
+  }
+}
+
+export function useUpdateCheck(): UpdateCheckResult {
   const [info, setInfo] = useState<UpdateInfo | null>(null)
+  const [checking, setChecking] = useState(false)
+
+  async function checkNow() {
+    setChecking(true)
+    try {
+      const result = await fetchLatestReleaseInfo()
+      setInfo(result)
+    } catch {
+      // Update checks are informational, never load-bearing -- any
+      // failure (offline, GitHub API down, rate-limited) just means
+      // no banner shows, not an error the user needs to see.
+    } finally {
+      setChecking(false)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
-
-    async function check() {
-      try {
-        const healthRes = await fetch('/health')
-        if (!healthRes.ok) return
-        const health = (await healthRes.json()) as { version: string }
-
-        const releaseRes = await fetch(
-          `https://api.github.com/repos/${REPO}/releases/latest`,
-        )
-        if (!releaseRes.ok) return // no releases yet, rate-limited, offline -- fine, just skip
-        const release = (await releaseRes.json()) as GithubRelease
-
-        if (cancelled) return
-        if (!isNewer(release.tag_name, health.version)) return
-
-        // Specifically the installer (Pharmacy-ERP-Setup-*.exe), not
-        // just any .exe -- a release attaches both the installer and
-        // the raw backend exe it wraps (the latter exists only so
-        // Electron has something to bundle, never meant as a public
-        // download), and an in-app update banner should only ever
-        // point someone at the one real users are meant to run.
-        const installerAsset = release.assets.find(
-          (a) => a.name.startsWith('Pharmacy-ERP-Setup-') && a.name.endsWith('.exe'),
-        )
-        setInfo({
-          currentVersion: health.version,
-          latestVersion: normalizeVersion(release.tag_name),
-          downloadUrl: installerAsset?.browser_download_url ?? null,
-          releaseUrl: release.html_url,
-        })
-      } catch {
-        // Update checks are informational, never load-bearing -- any
-        // failure (offline, GitHub API down, rate-limited) just means
-        // no banner shows, not an error the user needs to see.
-      }
-    }
-
-    void check()
+    fetchLatestReleaseInfo()
+      .then((result) => {
+        if (!cancelled) setInfo(result)
+      })
+      .catch(() => {
+        // Same as above -- silent on failure, this is the automatic
+        // once-per-session check, not a user-initiated action that
+        // needs feedback either way.
+      })
     return () => {
       cancelled = true
     }
   }, [])
 
-  return info
+  return { info, checking, checkNow }
 }

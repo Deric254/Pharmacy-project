@@ -1,7 +1,8 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuthStore } from '../auth/store'
 import { useConfigStore } from '../config/store'
-import { useUpdateCheck } from '../lib/updateCheck'
+import { useUpdateCheck, type UpdateInfo } from '../lib/updateCheck'
+import { formatRoleName } from '../lib/roleDisplay'
 import { Logo } from './Logo'
 
 interface NavItem {
@@ -10,20 +11,38 @@ interface NavItem {
   permission: string | null
 }
 
-const NAV_ITEMS: NavItem[] = [
-  { to: '/', label: 'Dashboard', permission: null },
-  { to: '/pos', label: 'Point of Sale', permission: 'sales.create' },
-  { to: '/inventory', label: 'Inventory', permission: 'inventory.view' },
-  { to: '/purchasing', label: 'Purchasing', permission: 'purchasing.create_po' },
-  { to: '/stock-takes', label: 'Stock Takes', permission: 'stocktake.perform' },
-  { to: '/customers', label: 'Customers', permission: 'sales.create' },
-  { to: '/reports', label: 'Reports', permission: 'reports.view' },
-  { to: '/settings', label: 'Settings', permission: 'config.edit' },
-  { to: '/roles', label: 'Roles & Permissions', permission: 'roles.manage' },
-  { to: '/audit', label: 'Audit Trail', permission: 'audit.view' },
-  { to: '/users', label: 'Staff Accounts', permission: 'users.manage' },
-  { to: '/backups', label: 'Backups', permission: 'backups.manage' },
-  { to: '/ai-assistant', label: 'AI Assistant', permission: 'ai.use' },
+interface NavSection {
+  label: string | null
+  items: NavItem[]
+}
+
+const NAV_SECTIONS: NavSection[] = [
+  {
+    label: null, // Dashboard sits alone, above any section label
+    items: [{ to: '/', label: 'Dashboard', permission: null }],
+  },
+  {
+    label: 'Operations',
+    items: [
+      { to: '/pos', label: 'Point of Sale', permission: 'sales.create' },
+      { to: '/inventory', label: 'Inventory', permission: 'inventory.view' },
+      { to: '/purchasing', label: 'Purchasing', permission: 'purchasing.create_po' },
+      { to: '/stock-takes', label: 'Stock Takes', permission: 'stocktake.perform' },
+      { to: '/customers', label: 'Customers', permission: 'sales.create' },
+      { to: '/reports', label: 'Reports', permission: 'reports.view' },
+      { to: '/ai-assistant', label: 'AI Assistant', permission: 'ai.use' },
+    ],
+  },
+  {
+    label: 'Administration',
+    items: [
+      { to: '/settings', label: 'Settings', permission: 'config.edit' },
+      { to: '/roles', label: 'Roles & Permissions', permission: 'roles.manage' },
+      { to: '/users', label: 'Staff Accounts', permission: 'users.manage' },
+      { to: '/audit', label: 'Audit Trail', permission: 'audit.view' },
+      { to: '/backups', label: 'Backups', permission: 'backups.manage' },
+    ],
+  },
 ]
 
 export function AppShell() {
@@ -31,11 +50,14 @@ export function AppShell() {
   const hasPermission = useAuthStore((s) => s.hasPermission)
   const logout = useAuthStore((s) => s.logout)
   const businessName = useConfigStore((s) => s.config?.business_name ?? 'Pharmacy System')
-  const updateInfo = useUpdateCheck()
+  const { info: updateInfo } = useUpdateCheck()
 
-  const visibleItems = NAV_ITEMS.filter(
-    (item) => item.permission === null || hasPermission(item.permission),
-  )
+  const visibleSections = NAV_SECTIONS.map((section) => ({
+    ...section,
+    items: section.items.filter(
+      (item) => item.permission === null || hasPermission(item.permission),
+    ),
+  })).filter((section) => section.items.length > 0)
 
   return (
     <div className="flex min-h-screen bg-paper text-ink">
@@ -44,27 +66,40 @@ export function AppShell() {
           <Logo className="h-7 w-7 shrink-0" />
           <span className="truncate font-display text-base">{businessName}</span>
         </div>
-        <nav className="flex-1 space-y-0.5 p-2">
-          {visibleItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === '/'}
-              className={({ isActive }) =>
-                `block px-3 py-2 text-sm ${
-                  isActive
-                    ? 'border-l-2 border-brass bg-paper font-medium text-ink'
-                    : 'border-l-2 border-transparent text-ink-soft hover:bg-paper'
-                }`
-              }
-            >
-              {item.label}
-            </NavLink>
+        <nav className="flex-1 space-y-3 p-2">
+          {visibleSections.map((section) => (
+            <div key={section.label ?? 'root'}>
+              {section.label && (
+                <p className="px-3 pb-1 text-xs uppercase tracking-wide text-ink-soft">
+                  {section.label}
+                </p>
+              )}
+              <div className="space-y-0.5">
+                {section.items.map((item) => (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    end={item.to === '/'}
+                    className={({ isActive }) =>
+                      `block px-3 py-2 text-sm ${
+                        isActive
+                          ? 'border-l-2 border-brass bg-paper font-medium text-ink'
+                          : 'border-l-2 border-transparent text-ink-soft hover:bg-paper'
+                      }`
+                    }
+                  >
+                    {item.label}
+                  </NavLink>
+                ))}
+              </div>
+            </div>
           ))}
         </nav>
         <div className="border-t border-rule p-3">
           <p className="truncate text-sm font-medium">{user?.full_name}</p>
-          <p className="text-xs text-ink-soft">{user?.role_name}</p>
+          <p className="text-xs text-ink-soft">
+            {user?.role_name && formatRoleName(user.role_name)}
+          </p>
           <button
             onClick={() => void logout()}
             className="mt-2 text-xs text-stamp-red underline decoration-dotted underline-offset-2"
@@ -81,7 +116,7 @@ export function AppShell() {
   )
 }
 
-function UpdateBanner({ info }: { info: ReturnType<typeof useUpdateCheck> }) {
+function UpdateBanner({ info }: { info: UpdateInfo }) {
   if (!info) return null
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-brass bg-brass-soft/30 px-4 py-2 text-sm">

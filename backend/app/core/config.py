@@ -9,6 +9,7 @@ runtime data stored in the `business_config` table, not app config.
 """
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -46,6 +47,24 @@ class Settings(BaseSettings):
     # need to set these.
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = ""
+
+    @property
+    def local_backup_dir(self) -> Path:
+        """
+        A `backups/` folder next to the actual database file, wherever
+        that happens to be -- %LOCALAPPDATA%\\PharmacyERP on the
+        desktop app, or right next to dev.db during local development.
+        Deriving it from database_url (rather than duplicating
+        desktop_main.py's separate app-data-directory logic) means
+        this works correctly regardless of platform or launch mode.
+        """
+        prefix = "sqlite+aiosqlite:///"
+        if not self.database_url.startswith(prefix):
+            # SQLite is this app's only supported database now; this
+            # is just a safe fallback, not an expected real case.
+            return Path("backups")
+        db_path = Path(self.database_url[len(prefix) :]).resolve()
+        return db_path.parent / "backups"
 
 
 @lru_cache

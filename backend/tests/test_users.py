@@ -19,6 +19,8 @@ class TestCreateUser:
                 "username": "newhire",
                 "password": "SafePass123",
                 "role_id": 1,
+                "security_question": "Test question?",
+                "security_answer": "Test answer",
             },
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -37,6 +39,8 @@ class TestCreateUser:
                 "username": "newcashier",
                 "password": "SafePass123",
                 "role_id": seeded_roles["Employee"],
+                "security_question": "Test question?",
+                "security_answer": "Test answer",
             },
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -67,6 +71,8 @@ class TestCreateUser:
                 "username": "lucy",
                 "password": "SafePass123",
                 "role_id": seeded_roles["Employee"],
+                "security_question": "Test question?",
+                "security_answer": "Test answer",
             },
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -85,6 +91,8 @@ class TestCreateUser:
                 "username": "someone",
                 "password": "SafePass123",
                 "role_id": 999999,
+                "security_question": "Test question?",
+                "security_answer": "Test answer",
             },
             headers={"Authorization": f"Bearer {token}"},
         )

@@ -5,6 +5,16 @@ smoke testing — that's exactly why it's captured here permanently
 instead of only being verified once by hand.
 """
 
+from app.core.database import AsyncSessionLocal
+from app.core.security import hash_password
+from app.models.user import User
+
+
+async def _login(client, username: str, password: str) -> str:
+    r = await client.post("/api/v1/auth/login", json={"username": username, "password": password})
+    assert r.status_code == 200, r.text
+    return str(r.json()["access_token"])
+
 
 class TestLogin:
     async def test_wrong_password_returns_401(self, client, owner_user):
@@ -214,6 +224,218 @@ class TestForgotPassword:
         # owner_user fixture never set a security question, so this
         # must fail without revealing that fact directly.
         assert r.status_code == 400
+
+    async def test_security_question_lookup_returns_the_real_question(self, client, seeded_roles):
+        async with AsyncSessionLocal() as db:
+            u = User(
+                full_name="Has A Question",
+                username="hasq",
+                hashed_password=hash_password("pass12345"),
+                role_id=seeded_roles["Employee"],
+                security_question="What was your first pet's name?",
+                security_answer_hash=hash_password("Rex"),
+            )
+            db.add(u)
+            await db.commit()
+
+        r = await client.get("/api/v1/auth/security-question", params={"username": "hasq"})
+        assert r.status_code == 200
+        assert r.json()["question"] == "What was your first pet's name?"
+
+    async def test_security_question_lookup_never_reveals_unknown_username(self, client):
+        # A nonexistent username must return the exact same generic
+        # response as an account with no question set -- the whole
+        # point is not letting this endpoint be used to enumerate
+        # which usernames are real.
+        r = await client.get(
+            "/api/v1/auth/security-question", params={"username": "definitely-not-a-real-user"}
+        )
+        assert r.status_code == 200
+        assert r.json()["question"] == "Security question"
+
+    async def test_security_question_lookup_never_reveals_missing_question(
+        self, client, owner_user
+    ):
+        # owner_user has no security question set -- same generic
+        # response as a nonexistent username, not a different one.
+        r = await client.get("/api/v1/auth/security-question", params={"username": "lucy"})
+        assert r.status_code == 200
+        assert r.json()["question"] == "Security question"
+
+    async def test_full_forgot_password_cycle_with_a_real_question(self, client, seeded_roles):
+        async with AsyncSessionLocal() as db:
+            u = User(
+                full_name="Has A Question",
+                username="hasq",
+                hashed_password=hash_password("oldpass123"),
+                role_id=seeded_roles["Employee"],
+                security_question="What was your first pet's name?",
+                security_answer_hash=hash_password("Rex"),
+            )
+            db.add(u)
+            await db.commit()
+
+        question = await client.get("/api/v1/auth/security-question", params={"username": "hasq"})
+        assert question.json()["question"] == "What was your first pet's name?"
+
+        reset = await client.post(
+            "/api/v1/auth/forgot-password",
+            json={"username": "hasq", "security_answer": "Rex", "new_password": "brandNewPass1"},
+        )
+        assert reset.status_code == 204
+
+        login = await client.post(
+            "/api/v1/auth/login", json={"username": "hasq", "password": "brandNewPass1"}
+        )
+        assert login.status_code == 200
+
+
+class TestHierarchicalPasswordReset:
+    """
+    The actual gap this closes, confirmed before the fix existed: any
+    users.manage holder (Administrator included) could reset ANY
+    user's password, including the Owner's, with the admin directly
+    choosing -- and therefore knowing -- that person's real password.
+    """
+
+    async def test_owner_can_reset_administrator(self, client, owner_user, administrator_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        r = await client.post(
+            "/api/v1/auth/admin-reset-password",
+            json={"user_id": administrator_user.id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200
+        assert len(r.json()["temp_password"]) > 0
+
+    async def test_owner_can_reset_employee(self, client, owner_user, employee_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        r = await client.post(
+            "/api/v1/auth/admin-reset-password",
+            json={"user_id": employee_user.id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200
+
+    async def test_administrator_can_reset_employee(
+        self, client, administrator_user, employee_user
+    ):
+        token = await _login(client, "sam", "AdminPass1")
+        r = await client.post(
+            "/api/v1/auth/admin-reset-password",
+            json={"user_id": employee_user.id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200
+
+    async def test_administrator_cannot_reset_owner(self, client, administrator_user, owner_user):
+        """The exact gap: an Administrator resetting the Owner's password."""
+        token = await _login(client, "sam", "AdminPass1")
+        r = await client.post(
+            "/api/v1/auth/admin-reset-password",
+            json={"user_id": owner_user.id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 403
+
+    async def test_administrator_cannot_reset_another_administrator(
+        self, client, administrator_user, seeded_roles
+    ):
+        async with AsyncSessionLocal() as db:
+            other_admin = User(
+                full_name="Other Admin",
+                username="pat",
+                hashed_password=hash_password("AdminPass2"),
+                role_id=seeded_roles["Administrator"],
+            )
+            db.add(other_admin)
+            await db.commit()
+            await db.refresh(other_admin)
+
+        token = await _login(client, "sam", "AdminPass1")
+        r = await client.post(
+            "/api/v1/auth/admin-reset-password",
+            json={"user_id": other_admin.id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 403
+
+    async def test_the_generated_temp_password_actually_works_for_login(
+        self, client, owner_user, employee_user
+    ):
+        token = await _login(client, "lucy", "S3curePass!")
+        reset = await client.post(
+            "/api/v1/auth/admin-reset-password",
+            json={"user_id": employee_user.id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        temp_password = reset.json()["temp_password"]
+
+        login = await client.post(
+            "/api/v1/auth/login", json={"username": "joe", "password": temp_password}
+        )
+        assert login.status_code == 200
+
+    async def test_admin_reset_sets_must_change_password(self, client, owner_user, employee_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        reset = await client.post(
+            "/api/v1/auth/admin-reset-password",
+            json={"user_id": employee_user.id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        temp_password = reset.json()["temp_password"]
+
+        joe_token = await _login(client, "joe", temp_password)
+        me = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {joe_token}"})
+        assert me.json()["must_change_password"] is True
+
+    async def test_changing_password_clears_must_change_password(
+        self, client, owner_user, employee_user
+    ):
+        token = await _login(client, "lucy", "S3curePass!")
+        reset = await client.post(
+            "/api/v1/auth/admin-reset-password",
+            json={"user_id": employee_user.id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        temp_password = reset.json()["temp_password"]
+        joe_token = await _login(client, "joe", temp_password)
+
+        change = await client.post(
+            "/api/v1/auth/change-password",
+            json={"current_password": temp_password, "new_password": "joesRealPassword1"},
+            headers={"Authorization": f"Bearer {joe_token}"},
+        )
+        assert change.status_code == 204
+
+        me = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {joe_token}"})
+        assert me.json()["must_change_password"] is False
+
+        # And the new real password actually works, replacing the temp one.
+        relogin = await client.post(
+            "/api/v1/auth/login", json={"username": "joe", "password": "joesRealPassword1"}
+        )
+        assert relogin.status_code == 200
+
+    async def test_change_password_requires_the_correct_current_password(
+        self, client, employee_user
+    ):
+        token = await _login(client, "joe", "pass1234")
+        r = await client.post(
+            "/api/v1/auth/change-password",
+            json={"current_password": "wrong-password", "new_password": "newRealPassword1"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 400
+
+    async def test_admin_reset_is_rejected_for_nonexistent_user(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        r = await client.post(
+            "/api/v1/auth/admin-reset-password",
+            json={"user_id": 999999},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 404
 
 
 class TestLoginRateLimiting:

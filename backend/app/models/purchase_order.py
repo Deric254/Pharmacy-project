@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+
+if TYPE_CHECKING:
+    from app.models.product import Product
 
 
 class PurchaseOrderStatus(enum.StrEnum):
@@ -65,3 +69,13 @@ class PurchaseOrderItem(Base):
     quantity_received: Mapped[int | None] = mapped_column(Integer, nullable=True)
     unit_cost_actual: Mapped[float | None] = mapped_column(nullable=True)
     batch_id: Mapped[int | None] = mapped_column(ForeignKey("medicine_batches.id"), nullable=True)
+
+    product: Mapped[Product] = relationship(lazy="selectin")
+
+    @property
+    def product_name(self) -> str:
+        # Only safe to access because every query that serializes this
+        # into an API response eager-loads .product explicitly (see
+        # purchasing_service.py) -- otherwise this would trigger a lazy
+        # load outside the async session context and crash.
+        return self.product.name

@@ -10,6 +10,7 @@ interface AuthState {
   logout: () => Promise<void>
   bootstrap: () => Promise<void>
   hasPermission: (code: string) => boolean
+  refreshUser: () => Promise<void>
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -49,5 +50,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch {
       set({ user: null, status: 'anonymous' })
     }
+  },
+
+  refreshUser: async () => {
+    const user = await authApi.me()
+    set({ user })
   },
 }))

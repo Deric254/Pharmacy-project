@@ -34,6 +34,7 @@ Thumbs.db
 *.db
 *.db-shm
 *.db-wal
+backups/
 mysql_data/
 
 # Downloaded automatically by windows/download-redis.ps1 -- never committed

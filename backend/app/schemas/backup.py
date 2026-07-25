@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -7,6 +8,13 @@ from app.models.backup import BackupProviderName, BackupStatus
 
 class ConnectGoogleDriveRequest(BaseModel):
     refresh_token: str = Field(min_length=1)
+
+
+class RunBackupRequest(BaseModel):
+    # Defaults to local -- no connection required, this is what closes
+    # the confirmed bug where every backup attempt needed Google Drive
+    # connected first with no offline path at all.
+    provider: Literal["local", "google_drive"] = "local"
 
 
 class BackupLogOut(BaseModel):

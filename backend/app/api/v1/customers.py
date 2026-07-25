@@ -7,6 +7,7 @@ from app.core.database import get_db
 from app.core.rbac import require_permission
 from app.schemas.customer import CustomerCreate, CustomerOut, PurchaseHistoryEntryOut
 from app.services.customer_service import CustomerService
+from app.services.report_export_service import ExportFormat, build_export_response
 
 # Gated with sales.create (not a new permission) -- looking up or
 # registering a customer is a normal part of the checkout flow, so
@@ -16,14 +17,20 @@ from app.services.customer_service import CustomerService
 router = APIRouter(prefix="/customers", tags=["customers"])
 
 
-@router.get(
-    "", response_model=list[CustomerOut], dependencies=[Depends(require_permission("sales.create"))]
-)
+@router.get("", dependencies=[Depends(require_permission("sales.create"))])
 async def list_customers(
     db: Annotated[AsyncSession, Depends(get_db)],
     search: str | None = Query(default=None),
-) -> list[CustomerOut]:
-    return await CustomerService(db).list_all(search=search)
+    export: ExportFormat = "json",
+) -> object:
+    customers = await CustomerService(db).list_all(search=search)
+    if export == "json":
+        return customers
+    headers = ["ID", "Name", "Phone", "Email", "Loyalty points"]
+    rows: list[list[object]] = [
+        [c.id, c.name, c.phone or "", c.email or "", c.loyalty_points] for c in customers
+    ]
+    return build_export_response(export, customers, "Customers", headers, rows)
 
 
 @router.post(

@@ -16,9 +16,11 @@ but is more obviously correct as "trust what was physically counted."
 """
 
 from datetime import UTC, datetime
+from typing import Any, cast
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import StockTakeClosedEvent, publish
@@ -149,6 +151,24 @@ class StockTakeService:
                 ),
             )
 
+        # The real guarantee against two concurrent close() calls both
+        # succeeding -- claimed atomically before any of the
+        # shrinkage/unlock work below, so a losing concurrent call
+        # fails fast instead of redundantly doing that work for a
+        # close that's about to be rejected. Not row-locking: this
+        # service never used SELECT...FOR UPDATE to begin with, so
+        # this was a genuinely unguarded race, not a false-safety one.
+        claim_result = cast(
+            "CursorResult[Any]",
+            await self.db.execute(
+                update(StockTake)
+                .where(StockTake.id == stock_take_id, StockTake.status != StockTakeStatus.CLOSED)
+                .values(status=StockTakeStatus.CLOSED, closed_at=datetime.now(UTC))
+            ),
+        )
+        if claim_result.rowcount == 0:
+            raise HTTPException(status_code=400, detail="Stock take is already closed")
+
         shrinkage_value = 0.0
         expected_value = 0.0
         for item in stock_take.items:
@@ -163,10 +183,8 @@ class StockTakeService:
             if variance < 0:
                 shrinkage_value += abs(variance) * batch.cost_price
 
-        stock_take.status = StockTakeStatus.CLOSED
-        stock_take.closed_at = datetime.now(UTC)
         await self.db.commit()
-        await self.db.refresh(stock_take, attribute_names=["items"])
+        await self.db.refresh(stock_take, attribute_names=["items", "status", "closed_at"])
 
         shrinkage_percent = (shrinkage_value / expected_value * 100) if expected_value > 0 else 0.0
         await publish(

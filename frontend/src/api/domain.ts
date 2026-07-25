@@ -10,7 +10,9 @@ import type {
   KanbanBoard,
   LowStockProductOut,
   PaymentRecordRequest,
+  ProductCreate,
   ProductOut,
+  ProductUpdate,
   PurchaseHistoryEntryOut,
   PurchaseOrderCreate,
   PurchaseOrderOut,
@@ -35,6 +37,10 @@ export const productsApi = {
   getByBarcode: (barcode: string) =>
     api.get<ProductOut>(`/products/barcode/${encodeURIComponent(barcode)}`),
   batches: (productId: number) => api.get<BatchOut[]>(`/products/${productId}/batches`),
+  create: (payload: ProductCreate) => api.post<ProductOut>('/products', payload),
+  update: (productId: number, payload: ProductUpdate) =>
+    api.patch<ProductOut>(`/products/${productId}`, payload),
+  deactivate: (productId: number) => api.delete<void>(`/products/${productId}`),
 }
 
 export const salesApi = {

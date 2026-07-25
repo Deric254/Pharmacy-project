@@ -1,9 +1,11 @@
 import type { ReactNode } from 'react'
 import { Navigate } from 'react-router-dom'
 import { useAuthStore } from './store'
+import { MustChangePasswordPage } from './MustChangePasswordPage'
 
 export function RequireAuth({ children }: { children: ReactNode }) {
   const status = useAuthStore((s) => s.status)
+  const user = useAuthStore((s) => s.user)
 
   if (status === 'loading') {
     return (
@@ -14,6 +16,9 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   }
   if (status === 'anonymous') {
     return <Navigate to="/login" replace />
+  }
+  if (user?.must_change_password) {
+    return <MustChangePasswordPage />
   }
   return <>{children}</>
 }

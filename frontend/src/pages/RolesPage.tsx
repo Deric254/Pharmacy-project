@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { rolesApi } from '../api/roles'
 import { ApiError } from '../api/client'
+import { formatRoleName } from '../lib/roleDisplay'
 import type { PermissionOut, RoleDetailOut } from '../types/api'
 
 export function RolesPage() {
@@ -66,7 +67,7 @@ export function RolesPage() {
           >
             <div>
               <p className="font-medium">
-                {role.name}
+                {formatRoleName(role.name)}
                 {role.is_system && (
                   <span className="ml-2 text-xs uppercase tracking-wide text-ink-soft">
                     built-in

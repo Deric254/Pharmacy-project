@@ -13,8 +13,11 @@ roll back a completed sale.
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business_config import BusinessConfig
@@ -106,5 +109,18 @@ async def award_loyalty_points(
     if customer is None:
         return  # customer_id was valid at sale time; defensive no-op if since deleted
 
-    customer.loyalty_points += points_earned
+    # Real guarantee against two sales attaching the same customer
+    # near-simultaneously silently losing one sale's worth of points --
+    # the same class of bug already found and fixed for stock
+    # decrements, PO transitions, refund restocks, and stock-take
+    # closes this session. A plain `customer.loyalty_points +=` here
+    # would have the exact same lost-update risk.
+    cast(
+        "CursorResult[Any]",
+        await db.execute(
+            update(Customer)
+            .where(Customer.id == customer_id)
+            .values(loyalty_points=Customer.loyalty_points + points_earned)
+        ),
+    )
     await db.commit()

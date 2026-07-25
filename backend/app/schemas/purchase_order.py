@@ -47,6 +47,7 @@ class ReceivingVarianceOut(BaseModel):
 class PurchaseOrderItemOut(BaseModel):
     id: int
     product_id: int
+    product_name: str
     quantity_ordered: int
     unit_cost_expected: float
     quantity_received: int | None

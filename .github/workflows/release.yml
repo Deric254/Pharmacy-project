@@ -162,7 +162,7 @@ jobs:
           echo "Exe is up. Driving the real setup flow, then verifying login works end-to-end..."
           setup_status=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:8000/api/v1/setup/first-user \
             -H "Content-Type: application/json" \
-            -d '{"full_name":"CI Smoke Test","username":"smoketest","password":"SmokeTestPass123"}')
+            -d '{"full_name":"CI Smoke Test","username":"smoketest","password":"SmokeTestPass123","security_question":"CI question?","security_answer":"CI answer"}')
           if [ "$setup_status" != "204" ]; then
             echo "::error::Setup smoke test got HTTP $setup_status from /setup/first-user, expected 204 -- failing the release rather than shipping a broken asset."
             kill "$EXE_PID" 2>/dev/null || true

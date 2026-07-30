@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { productsApi, salesApi } from '../api/domain'
 import { useCurrencyFormatter } from '../lib/currency'
 import type { PaymentMethod, ProductOut, SaleOut } from '../types/api'
@@ -27,20 +27,29 @@ export function PosPage() {
   )
   const estimatedTotal = Math.max(0, estimatedSubtotal - discount)
 
-  async function handleSearch(e: FormEvent) {
-    e.preventDefault()
-    if (!query.trim()) return
+  // Live search: results update automatically as the cashier types, no
+  // button press or Enter required. Debounced by 300ms so a fast typist
+  // (or a barcode scanner, which types the whole code near-instantly)
+  // doesn't fire a request per keystroke -- one request lands shortly
+  // after typing pauses.
+  useEffect(() => {
+    if (!query.trim()) {
+      setResults([])
+      return
+    }
     setSearching(true)
     setError(null)
-    try {
-      const products = await productsApi.list(query.trim())
-      setResults(products)
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Search failed.')
-    } finally {
-      setSearching(false)
-    }
-  }
+    const timer = setTimeout(() => {
+      productsApi
+        .list(query.trim())
+        .then(setResults)
+        .catch((err: unknown) => {
+          setError(err instanceof ApiError ? err.message : 'Search failed.')
+        })
+        .finally(() => setSearching(false))
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [query])
 
   function addToCart(product: ProductOut) {
     setCart((prev) => {
@@ -62,8 +71,12 @@ export function PosPage() {
     setCart((prev) => prev.map((l) => (l.product.id === productId ? { ...l, quantity } : l)))
   }
 
+  const submittingRef = useRef(false)
+
   async function handleCheckout() {
     if (cart.length === 0) return
+    if (submittingRef.current) return // synchronous guard against a very fast double-click
+    submittingRef.current = true
     setCheckingOut(true)
     setError(null)
     try {
@@ -81,6 +94,7 @@ export function PosPage() {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Checkout failed. Nothing was charged.')
     } finally {
+      submittingRef.current = false
       setCheckingOut(false)
     }
   }
@@ -93,21 +107,14 @@ export function PosPage() {
     <div className="grid h-screen grid-cols-[1fr_360px]">
       <div className="overflow-y-auto p-6">
         <h1 className="mb-4 font-display text-2xl text-ink">Point of Sale</h1>
-        <form onSubmit={handleSearch} className="mb-4 flex gap-2">
+        <form onSubmit={(e: FormEvent) => e.preventDefault()} className="mb-4">
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search by name or scan barcode"
-            className="flex-1 border border-rule bg-panel px-3 py-2 outline-none focus-visible:border-brass"
+            className="w-full border border-rule bg-panel px-3 py-2 outline-none focus-visible:border-brass"
             autoFocus
           />
-          <button
-            type="submit"
-            disabled={searching}
-            className="border border-ink bg-ink px-4 py-2 text-paper disabled:opacity-50"
-          >
-            {searching ? 'Searching…' : 'Search'}
-          </button>
         </form>
 
         {error && (
@@ -129,8 +136,19 @@ export function PosPage() {
                 {formatCurrency(product.default_selling_price)}
               </p>
               <p className="text-xs text-ink-soft">{product.total_qty_available} in stock</p>
+              {product.margin_percent !== null && (
+                <p className="text-xs text-stamp-green">
+                  {product.margin_percent.toFixed(0)}% margin
+                </p>
+              )}
             </button>
           ))}
+          {searching && results.length === 0 && (
+            <p className="col-span-full text-sm text-ink-soft">Searching…</p>
+          )}
+          {!searching && query.trim() && results.length === 0 && (
+            <p className="col-span-full text-sm text-ink-soft">No products match "{query}".</p>
+          )}
         </div>
       </div>
 

@@ -10,6 +10,7 @@ Inventory tests. The properties that matter:
      publishes stock.low - proving the event hook, not just the query.
 """
 
+import asyncio
 import json
 from datetime import date, timedelta
 
@@ -274,6 +275,40 @@ class TestAdjustments:
         )
         assert r.status_code == 201
         assert r.json()["qty_remaining_after"] == 13
+
+    async def test_two_concurrent_adjustments_both_apply(self, client, owner_user):
+        """
+        The actual bug this closes: adjustment used
+        SELECT...FOR UPDATE, which SQLite silently drops entirely (the
+        same false-safety pattern already found and fixed for stock
+        decrements, PO transitions, refund restocks, stock-take
+        closes, and loyalty points this session). Two adjustments to
+        the same batch landing at once -- two managers independently
+        correcting the same miscount, say -- could see the same
+        starting quantity and the second commit would silently
+        overwrite the first's correct result.
+        """
+        product_id = await _make_product("Concurrent Adjustment Product")
+        batch_id = await _add_batch(product_id, qty=50)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        async def adjust(delta: int):
+            return await client.post(
+                "/api/v1/inventory/adjustments",
+                json={"batch_id": batch_id, "quantity_delta": delta, "reason": "MISCOUNT"},
+                headers=headers,
+            )
+
+        results = await asyncio.gather(adjust(5), adjust(3), return_exceptions=True)
+        status_codes = [r.status_code for r in results if not isinstance(r, Exception)]
+        assert status_codes.count(201) == 2  # both adjustments genuinely succeed
+
+        async with AsyncSessionLocal() as db:
+            batch = await db.get(MedicineBatch, batch_id)
+            # Started at 50, +5 and +3 both must land -- not 53 or 55
+            # (one adjustment silently lost), exactly 58.
+            assert batch.qty_remaining == 58
 
 
 class TestReconciliation:

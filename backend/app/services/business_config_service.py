@@ -39,6 +39,7 @@ class BusinessConfigService:
             return BusinessConfigOut.model_validate(json.loads(cached))
 
         config = await self._get_or_create_row()
+        await self.db.commit()
         out = self._to_schema(config)
         await redis_client.set(CACHE_KEY, out.model_dump_json(), ex=CACHE_TTL_SECONDS)
         return out
@@ -81,8 +82,8 @@ class BusinessConfigService:
         if config is None:
             config = BusinessConfig(id=1)
             self.db.add(config)
-            await self.db.commit()
-            await self.db.refresh(config)
+            await self.db.flush()
+            await self.db.refresh(config, attribute_names=["updated_at"])
         return config
 
     @staticmethod

@@ -8,6 +8,7 @@ import type {
   AdjustmentReason,
   BatchOut,
   ExpiringBatchOut,
+  ImportRowError,
   LowStockProductOut,
   ProductCreate,
   ProductOut,
@@ -390,6 +391,7 @@ function ProductManagementPanel({ onChanged }: { onChanged: () => void }) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<ProductOut[]>([])
   const [showCreate, setShowCreate] = useState(false)
+  const [showImport, setShowImport] = useState(false)
   const [editing, setEditing] = useState<ProductOut | null>(null)
   const [confirmDeactivate, setConfirmDeactivate] = useState<ProductOut | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -418,12 +420,26 @@ function ProductManagementPanel({ onChanged }: { onChanged: () => void }) {
     <div className="mb-6 ledger-panel p-4">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-xs uppercase tracking-wide text-ink-soft">Products</h2>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="border border-ink bg-ink px-3 py-1 text-xs text-paper"
-        >
-          New product
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => void productsApi.downloadImportTemplate()}
+            className="border border-rule px-3 py-1 text-xs text-ink-soft hover:border-brass"
+          >
+            Download template
+          </button>
+          <button
+            onClick={() => setShowImport(true)}
+            className="border border-rule px-3 py-1 text-xs text-ink-soft hover:border-brass"
+          >
+            Import from Excel
+          </button>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="border border-ink bg-ink px-3 py-1 text-xs text-paper"
+          >
+            New product
+          </button>
+        </div>
       </div>
 
       <form
@@ -505,6 +521,15 @@ function ProductManagementPanel({ onChanged }: { onChanged: () => void }) {
           onClose={() => setConfirmDeactivate(null)}
           onConfirmed={() => {
             setConfirmDeactivate(null)
+            refreshAfterChange()
+          }}
+        />
+      )}
+      {showImport && (
+        <ImportModal
+          onClose={() => setShowImport(false)}
+          onImported={() => {
+            setShowImport(false)
             refreshAfterChange()
           }}
         />
@@ -622,6 +647,29 @@ function ProductFormModal({
           />
         </label>
 
+        {isEdit && product.current_cost !== null && (
+          <label className="block">
+            <span className="block text-xs uppercase tracking-wide text-ink-soft">
+              Or set by markup % (cost is {product.current_cost.toFixed(2)})
+            </span>
+            <div className="mt-1 flex items-center gap-2">
+              <input
+                type="number"
+                min={0}
+                step={1}
+                placeholder="e.g. 40"
+                onChange={(e) => {
+                  const markupPercent = Number(e.target.value)
+                  const cost = product.current_cost ?? 0
+                  setPrice(Math.round(cost * (1 + markupPercent / 100) * 100) / 100)
+                }}
+                className="figure w-24 border border-rule bg-paper px-3 py-2"
+              />
+              <span className="text-sm text-ink-soft">% → price becomes {price.toFixed(2)}</span>
+            </div>
+          </label>
+        )}
+
         <p className="text-xs text-ink-soft">
           This only creates the product record. Stock is always added through Purchasing, so
           every unit on the shelf can be traced back to a real order and supplier.
@@ -688,6 +736,120 @@ function ConfirmDeactivateProductModal({
           className="border border-ink bg-ink px-4 py-2 text-sm text-paper disabled:opacity-50"
         >
           {busy ? 'Deactivating…' : 'Deactivate'}
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
+function ImportModal({ onClose, onImported }: { onClose: () => void; onImported: () => void }) {
+  const [file, setFile] = useState<File | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [rowErrors, setRowErrors] = useState<ImportRowError[] | null>(null)
+  const [genericError, setGenericError] = useState<string | null>(null)
+  const [successCount, setSuccessCount] = useState<number | null>(null)
+
+  async function handleImport() {
+    if (!file) return
+    setSubmitting(true)
+    setRowErrors(null)
+    setGenericError(null)
+    try {
+      const result = await productsApi.importFromExcel(file)
+      setSuccessCount(result.created)
+    } catch (err) {
+      if (err instanceof ApiError && err.body?.detail && typeof err.body.detail === 'object' && !Array.isArray(err.body.detail)) {
+        setRowErrors(err.body.detail.errors ?? null)
+        setGenericError(err.body.detail.message)
+      } else {
+        setGenericError(err instanceof ApiError ? err.message : 'Import failed.')
+      }
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  if (successCount !== null) {
+    return (
+      <Modal title="Import complete" onClose={onImported}>
+        <p className="text-sm text-ink-soft">
+          {successCount} product{successCount === 1 ? '' : 's'} imported successfully.
+        </p>
+        <div className="mt-4 flex justify-end">
+          <button
+            onClick={onImported}
+            className="border border-ink bg-ink px-4 py-2 text-sm text-paper"
+          >
+            Done
+          </button>
+        </div>
+      </Modal>
+    )
+  }
+
+  return (
+    <Modal title="Import products from Excel" onClose={onClose}>
+      <p className="text-sm text-ink-soft">
+        Use the template's dropdowns and number formats, and nothing here can be malformed. If
+        anything is still wrong when you upload, nothing is imported until it's fixed — never a
+        partial import.
+      </p>
+
+      <label className="mt-3 block">
+        <span className="block text-xs uppercase tracking-wide text-ink-soft">
+          Choose file
+        </span>
+        <input
+          type="file"
+          accept=".xlsx"
+          onChange={(e) => {
+            setFile(e.target.files?.[0] ?? null)
+            setRowErrors(null)
+            setGenericError(null)
+          }}
+          className="mt-1 w-full border border-rule bg-paper px-3 py-2 text-sm"
+        />
+      </label>
+
+      {genericError && (
+        <p role="alert" className="mt-3 text-sm text-stamp-red">
+          {genericError}
+        </p>
+      )}
+
+      {rowErrors && rowErrors.length > 0 && (
+        <div className="mt-3 max-h-64 overflow-y-auto border border-rule">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-panel">
+              <tr>
+                <th className="px-2 py-1 font-medium">Row</th>
+                <th className="px-2 py-1 font-medium">Field</th>
+                <th className="px-2 py-1 font-medium">Problem</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-rule">
+              {rowErrors.map((e, idx) => (
+                <tr key={idx}>
+                  <td className="figure px-2 py-1">{e.row || '—'}</td>
+                  <td className="px-2 py-1">{e.field}</td>
+                  <td className="px-2 py-1">{e.message}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="mt-4 flex justify-end gap-2">
+        <button onClick={onClose} className="border border-rule px-4 py-2 text-sm">
+          Cancel
+        </button>
+        <button
+          onClick={() => void handleImport()}
+          disabled={!file || submitting}
+          className="border border-ink bg-ink px-4 py-2 text-sm text-paper disabled:opacity-50"
+        >
+          {submitting ? 'Importing…' : 'Import'}
         </button>
       </div>
     </Modal>

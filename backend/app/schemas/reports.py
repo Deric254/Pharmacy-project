@@ -85,3 +85,44 @@ class StockTakeHistoryEntry(BaseModel):
 
 class StockTakeHistoryOut(BaseModel):
     entries: list[StockTakeHistoryEntry]
+
+
+class TopProductEntry(BaseModel):
+    product_id: int
+    name: str
+    quantity_sold: int
+    revenue: float
+
+
+class TopCustomerEntry(BaseModel):
+    customer_id: int
+    name: str
+    sale_count: int
+    revenue: float
+    # Running total as % of all revenue in the period -- the real Pareto number.
+    cumulative_percent: float
+
+
+class TopCustomersOut(BaseModel):
+    entries: list[TopCustomerEntry]
+    total_revenue: float
+
+
+class KpiDashboardOut(BaseModel):
+    start_date: date
+    end_date: date
+
+    revenue: float
+    transaction_count: int
+    average_basket: float
+    revenue_change_percent: float | None  # vs the immediately preceding period of equal length
+
+    # None entirely for anyone without reports.view_profit -- not
+    # zeroed out, which would look like a real (bad) number rather
+    # than "you can't see this".
+    profit: float | None
+    profit_margin_percent: float | None
+
+    top_products: list[TopProductEntry]
+    low_stock_count: int
+    expiring_soon_count: int

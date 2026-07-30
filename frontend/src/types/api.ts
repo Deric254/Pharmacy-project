@@ -28,6 +28,10 @@ export interface ProductOut {
   is_active: boolean
   created_at: string
   total_qty_available: number
+  current_cost: number | null
+  margin_amount: number | null
+  margin_percent: number | null
+  markup_percent: number | null
 }
 
 export interface ProductCreate {
@@ -113,6 +117,7 @@ export interface SaleCreate {
 export interface SaleItemOut {
   id: number
   product_id: number
+  product_name: string
   batch_id: number
   quantity: number
   unit_price: number
@@ -135,6 +140,22 @@ export interface SaleOut {
   created_at: string
   items: SaleItemOut[]
   payments: PaymentOut[]
+}
+
+export interface SaleListItemOut {
+  id: number
+  cashier_name: string
+  customer_name: string | null
+  item_count: number
+  total_amount: number
+  created_at: string
+}
+
+export interface SalePage {
+  entries: SaleListItemOut[]
+  total: number
+  limit: number
+  offset: number
 }
 
 export interface LowStockProductOut {
@@ -357,6 +378,27 @@ export interface SalesSummaryEntry {
   total_discount: number
 }
 
+export interface TopProductEntry {
+  product_id: number
+  name: string
+  quantity_sold: number
+  revenue: number
+}
+
+export interface KpiDashboardOut {
+  start_date: string
+  end_date: string
+  revenue: number
+  transaction_count: number
+  average_basket: number
+  revenue_change_percent: number | null
+  profit: number | null
+  profit_margin_percent: number | null
+  top_products: TopProductEntry[]
+  low_stock_count: number
+  expiring_soon_count: number
+}
+
 export interface SalesSummaryOut {
   entries: SalesSummaryEntry[]
   total_revenue: number
@@ -575,6 +617,15 @@ export interface AuditLogPage {
   offset: number
 }
 
+export interface ImportRowError {
+  row: number
+  field: string
+  message: string
+}
+
 export interface ApiErrorBody {
-  detail?: string | { msg: string; loc: (string | number)[] }[]
+  detail?:
+    | string
+    | { msg: string; loc: (string | number)[] }[]
+    | { message: string; errors?: ImportRowError[] }
 }

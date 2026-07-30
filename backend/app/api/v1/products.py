@@ -1,18 +1,48 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, UploadFile
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.rbac import require_permission
 from app.models.user import User
 from app.schemas.batch import BatchCreate, BatchOut
-from app.schemas.product import ProductCreate, ProductOut, ProductUpdate
+from app.schemas.product import BulkImportResult, ProductCreate, ProductOut, ProductUpdate
 from app.services.batch_service import BatchService
+from app.services.product_import_service import bulk_import, generate_import_template
 from app.services.product_service import ProductService
 from app.services.report_export_service import ExportFormat, build_export_response
 
 router = APIRouter(prefix="/products", tags=["products"])
+
+_EXCEL_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@router.get(
+    "/import-template",
+    dependencies=[Depends(require_permission("products.manage"))],
+)
+async def download_import_template() -> Response:
+    content = generate_import_template()
+    return Response(
+        content=content,
+        media_type=_EXCEL_MEDIA_TYPE,
+        headers={"Content-Disposition": 'attachment; filename="product-import-template.xlsx"'},
+    )
+
+
+@router.post(
+    "/import",
+    response_model=BulkImportResult,
+    status_code=201,
+    dependencies=[Depends(require_permission("products.manage"))],
+)
+async def import_products(
+    file: UploadFile, db: Annotated[AsyncSession, Depends(get_db)]
+) -> BulkImportResult:
+    file_bytes = await file.read()
+    return await bulk_import(db, file_bytes)
 
 
 @router.get(

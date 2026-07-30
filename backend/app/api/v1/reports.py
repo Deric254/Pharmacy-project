@@ -6,15 +6,21 @@ from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.rbac import require_permission
+from app.core.rbac import get_current_user, require_permission
 from app.models.user import User
 from app.schemas.reports import (
     FastSlowMoversOut,
+    KpiDashboardOut,
     ProfitReportOut,
     ReceivingDiscrepancyReportOut,
     StockTakeHistoryOut,
+    TopCustomersOut,
 )
-from app.services.report_export_service import export_to_excel, export_to_pdf
+from app.services.report_export_service import (
+    export_to_excel,
+    export_to_pdf,
+    generate_profit_loss_pdf,
+)
 from app.services.report_service import ReportService
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -64,6 +70,19 @@ def _export_or_json(
     return json_payload
 
 
+@router.get("/kpi-dashboard", response_model=KpiDashboardOut)
+async def kpi_dashboard(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    _: Annotated[User, Depends(require_permission("reports.view"))],
+    start_date: date,
+    end_date: date,
+) -> KpiDashboardOut:
+    user_permission_codes = {p.code for p in current_user.role.permissions}
+    include_profit = "reports.view_profit" in user_permission_codes
+    return await ReportService(db).kpi_dashboard(start_date, end_date, include_profit)
+
+
 @router.get("/sales")
 async def sales_summary(
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -94,6 +113,73 @@ async def profit_report(
     # client discovery form); a downloadable copy would leave the audit
     # trail entirely. Kept JSON-only, no export param.
     return await ReportService(db).profit_report(start_date, end_date)
+
+
+@router.get(
+    "/profit-loss-pdf",
+    dependencies=[Depends(require_permission("reports.view_profit"))],
+)
+async def profit_loss_pdf(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+    start_date: date,
+    end_date: date,
+) -> Response:
+    from app.models.audit_log import AuditLog
+    from app.services.business_config_service import BusinessConfigService
+
+    result = await ReportService(db).profit_report(start_date, end_date)
+    config = await BusinessConfigService(db).get()
+
+    content = generate_profit_loss_pdf(
+        business_name=config.business_name,
+        start_date=start_date.isoformat(),
+        end_date=end_date.isoformat(),
+        revenue=result.total_revenue,
+        cost_of_goods_sold=result.total_cost,
+        gross_profit=result.total_profit,
+        gross_margin_percent=result.profit_margin_percent,
+        currency=config.currency,
+    )
+
+    # This is the one place profit data can leave the system as a
+    # file -- logged specifically so there's always a record of who
+    # exported it and when, preserving the audit-trail concern that
+    # kept this JSON-only until a PDF was explicitly asked for.
+    db.add(
+        AuditLog(
+            user_id=user.id,
+            user_name_snapshot=user.full_name,
+            action="reports.profit_pdf_exported",
+            entity_type="report",
+            entity_id=f"{start_date}:{end_date}",
+        )
+    )
+    await db.commit()
+
+    return Response(
+        content=content,
+        media_type=_PDF_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="Profit-and-Loss-{start_date}-to-{end_date}.pdf"'
+            )
+        },
+    )
+
+
+@router.get(
+    "/top-customers",
+    response_model=TopCustomersOut,
+    dependencies=[Depends(require_permission("reports.view"))],
+)
+async def top_customers(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    start_date: date,
+    end_date: date,
+    limit: int = 20,
+) -> TopCustomersOut:
+    return await ReportService(db).top_customers(start_date, end_date, limit)
 
 
 @router.get("/expired-stock")

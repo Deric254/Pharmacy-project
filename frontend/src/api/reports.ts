@@ -2,6 +2,7 @@ import { api, downloadExport } from './client'
 import type {
   ExpiredStockReportOut,
   FastSlowMoversOut,
+  KpiDashboardOut,
   ProfitReportOut,
   ReceivingDiscrepancyReportOut,
   SalesSummaryOut,
@@ -9,6 +10,11 @@ import type {
 } from '../types/api'
 
 export const reportsApi = {
+  kpiDashboard: (startDate: string, endDate: string) =>
+    api.get<KpiDashboardOut>('/reports/kpi-dashboard', {
+      start_date: startDate,
+      end_date: endDate,
+    }),
   salesSummary: (startDate: string, endDate: string, groupBy: 'day' | 'month') =>
     api.get<SalesSummaryOut>('/reports/sales', {
       start_date: startDate,

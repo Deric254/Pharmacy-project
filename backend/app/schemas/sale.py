@@ -41,6 +41,7 @@ class SaleCreate(BaseModel):
 class SaleItemOut(BaseModel):
     id: int
     product_id: int
+    product_name: str
     batch_id: int
     quantity: int
     unit_price: float
@@ -69,3 +70,19 @@ class SaleOut(BaseModel):
     payments: list[PaymentOut]
 
     model_config = {"from_attributes": True}
+
+
+class SaleListItemOut(BaseModel):
+    id: int
+    cashier_name: str
+    customer_name: str | None
+    item_count: int
+    total_amount: float
+    created_at: datetime
+
+
+class SalePage(BaseModel):
+    entries: list[SaleListItemOut]
+    total: int
+    limit: int
+    offset: int

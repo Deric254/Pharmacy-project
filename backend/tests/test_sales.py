@@ -9,7 +9,7 @@ Sales tests. The two properties that actually matter for a POS:
 """
 
 import asyncio
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import select
 
@@ -30,7 +30,7 @@ async def _login(client, username: str, password: str) -> str:
 
 
 async def _make_product_with_batch(
-    price: float = 10.0, qty: int = 20, expiry: str = "2027-01-01"
+    price: float = 10.0, qty: int = 20, expiry: str = "2027-01-01", cost: float | None = None
 ) -> int:
     async with AsyncSessionLocal() as db:
         product = Product(name="Amoxicillin 500mg", default_selling_price=price)
@@ -43,7 +43,7 @@ async def _make_product_with_batch(
                 expiry_date=date.fromisoformat(expiry),
                 qty_received=qty,
                 qty_remaining=qty,
-                cost_price=price / 2,
+                cost_price=cost if cost is not None else price / 2,
             )
         )
         await db.commit()
@@ -295,3 +295,277 @@ class TestConcurrentSales:
             )
             batch = batch_result.scalar_one()
             assert batch.qty_remaining == 2  # 10 - 8, never negative, never double-sold
+
+
+class TestNoSaleAtALoss:
+    async def test_selling_below_cost_is_rejected(self, client, employee_user):
+        # Selling price 10.0, but this batch cost 15.0 -- a real loss.
+        product_id = await _make_product_with_batch(price=10.0, qty=20, cost=15.0)
+        token = await _login(client, "joe", "pass1234")
+
+        r = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 5}],
+                "payments": [{"method": "CASH", "amount": 50.0}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 400
+        assert "loss" in r.json()["detail"].lower()
+
+    async def test_rejected_sale_never_touches_stock(self, client, employee_user):
+        """
+        The real guarantee, not just the error code: a sale rejected
+        for selling at a loss must leave stock completely untouched --
+        no partial decrement snuck through before the check.
+        """
+        product_id = await _make_product_with_batch(price=10.0, qty=20, cost=15.0)
+        token = await _login(client, "joe", "pass1234")
+
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 5}],
+                "payments": [{"method": "CASH", "amount": 50.0}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        async with AsyncSessionLocal() as db:
+            batch_result = await db.execute(
+                select(MedicineBatch).where(MedicineBatch.product_id == product_id)
+            )
+            batch = batch_result.scalar_one()
+            assert batch.qty_remaining == 20  # untouched, not 15
+
+    async def test_selling_at_exactly_cost_is_allowed_not_a_loss(self, client, employee_user):
+        # Break-even isn't a loss -- price == cost must be allowed.
+        product_id = await _make_product_with_batch(price=10.0, qty=20, cost=10.0)
+        token = await _login(client, "joe", "pass1234")
+
+        r = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 5}],
+                "payments": [{"method": "CASH", "amount": 50.0}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 201
+
+    async def test_selling_above_cost_is_allowed(self, client, employee_user):
+        product_id = await _make_product_with_batch(price=10.0, qty=20, cost=4.0)
+        token = await _login(client, "joe", "pass1234")
+
+        r = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 5}],
+                "payments": [{"method": "CASH", "amount": 50.0}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 201
+
+
+class TestListSales:
+    """
+    The actual gap this closes: there was no way to browse past sales
+    at all, only fetch one by already knowing its exact ID -- a real
+    pharmacy owner could never look at what they sold yesterday
+    through the API at all before this existed.
+    """
+
+    async def test_lists_real_sales_with_correct_names_and_totals(
+        self, client, owner_user, employee_user
+    ):
+        product_id = await _make_product_with_batch(price=10.0)
+        token = await _login(client, "joe", "pass1234")
+        owner_token = await _login(client, "lucy", "S3curePass!")
+
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 2}],
+                "payments": [{"method": "CASH", "amount": 20.0}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        r = await client.get("/api/v1/sales", headers={"Authorization": f"Bearer {owner_token}"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 1
+        entry = body["entries"][0]
+        assert entry["cashier_name"] == "Cashier Joe"
+        assert entry["customer_name"] is None
+        assert entry["total_amount"] == 20.0
+        assert entry["item_count"] == 1
+
+    async def test_newest_sales_first(self, client, owner_user, employee_user):
+        product_id = await _make_product_with_batch(price=10.0)
+        token = await _login(client, "joe", "pass1234")
+
+        first = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 10.0}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        second = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 10.0}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        r = await client.get("/api/v1/sales", headers={"Authorization": f"Bearer {token}"})
+        ids = [e["id"] for e in r.json()["entries"]]
+        assert ids[0] == second.json()["id"]
+        assert ids[1] == first.json()["id"]
+
+    async def test_date_range_filter_excludes_sales_outside_it(
+        self, client, owner_user, employee_user
+    ):
+        product_id = await _make_product_with_batch(price=10.0)
+        token = await _login(client, "joe", "pass1234")
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 10.0}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        two_days_ago = (date.today() - timedelta(days=2)).isoformat()
+        r = await client.get(
+            "/api/v1/sales",
+            params={"start_date": two_days_ago, "end_date": yesterday},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.json()["total"] == 0
+
+    async def test_requires_permission(self, client, employee_user):
+        # joe has sales.create, matching what create_sale itself requires
+        token = await _login(client, "joe", "pass1234")
+        r = await client.get("/api/v1/sales", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200
+
+
+class TestExpiredStockNeverSold:
+    """
+    The actual gap this closes: FEFO correctly ordered by soonest-
+    expiry-first, but never actually excluded stock that had already
+    expired outright -- a genuine patient-safety issue, not just a
+    consistency one. Expired batches must never be sellable, full
+    stop, regardless of how FEFO would otherwise have ranked them.
+    """
+
+    async def test_batch_expired_yesterday_cannot_be_sold(self, client, owner_user):
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        product_id = await _make_product_with_batch(price=10.0, qty=20, expiry=yesterday)
+        token = await _login(client, "lucy", "S3curePass!")
+
+        r = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 10.0}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 409
+
+    async def test_batch_expiring_today_can_still_be_sold(self, client, owner_user):
+        today = date.today().isoformat()
+        product_id = await _make_product_with_batch(price=10.0, qty=20, expiry=today)
+        token = await _login(client, "lucy", "S3curePass!")
+
+        r = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 10.0}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 201
+
+    async def test_expired_batch_is_skipped_in_favor_of_a_valid_later_one(self, client, owner_user):
+        """
+        A real mixed scenario: one expired batch and one valid batch
+        for the same product. FEFO must skip the expired one entirely
+        and fulfill from the valid batch, not fail outright just
+        because an expired batch happened to sort first.
+        """
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        product_id = await _make_product_with_batch(price=10.0, qty=5, expiry=yesterday)
+
+        async with AsyncSessionLocal() as db:
+            db.add(
+                MedicineBatch(
+                    product_id=product_id,
+                    batch_number="VALID1",
+                    expiry_date=date(2027, 1, 1),
+                    qty_received=20,
+                    qty_remaining=20,
+                    cost_price=5.0,
+                )
+            )
+            await db.commit()
+
+        token = await _login(client, "lucy", "S3curePass!")
+        r = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 3}],
+                "payments": [{"method": "CASH", "amount": 30.0}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 201
+
+        async with AsyncSessionLocal() as db:
+            expired_result = await db.execute(
+                select(MedicineBatch).where(MedicineBatch.batch_number == "B1")
+            )
+            valid_result = await db.execute(
+                select(MedicineBatch).where(MedicineBatch.batch_number == "VALID1")
+            )
+            # The expired batch must be completely untouched -- all 3
+            # units came from the valid batch instead.
+            assert expired_result.scalar_one().qty_remaining == 5
+            assert valid_result.scalar_one().qty_remaining == 17
+
+
+class TestDiscountCannotExceedSubtotal:
+    async def test_clear_error_not_a_confusing_payment_mismatch(self, client, owner_user):
+        """
+        Not a safety fix (a negative total could never actually be
+        paid, since payments can never be negative either) -- purely
+        a clarity fix. Before this, an over-large discount produced a
+        confusing "payment total doesn't match" error instead of
+        naming the actual problem.
+        """
+        product_id = await _make_product_with_batch(price=10.0, qty=20)
+        token = await _login(client, "lucy", "S3curePass!")
+
+        r = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 0.01}],
+                "discount_amount": 50.0,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 400
+        assert "discount" in r.json()["detail"].lower()
+        assert "exceed" in r.json()["detail"].lower()

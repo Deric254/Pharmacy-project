@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -7,7 +8,7 @@ from app.core.database import get_db
 from app.core.rbac import require_permission
 from app.models.user import User
 from app.schemas.refund import RefundOut, RefundRequest
-from app.schemas.sale import SaleCreate, SaleOut
+from app.schemas.sale import SaleCreate, SaleOut, SalePage
 from app.services.refund_service import RefundService
 from app.services.sale_service import SaleService
 
@@ -21,6 +22,17 @@ async def create_sale(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SaleOut:
     return await SaleService(db).create_sale(payload, cashier)
+
+
+@router.get("", response_model=SalePage, dependencies=[Depends(require_permission("sales.create"))])
+async def list_sales(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    start_date: date | None = None,
+    end_date: date | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> SalePage:
+    return await SaleService(db).list_sales(start_date, end_date, limit, offset)
 
 
 @router.get(

@@ -38,26 +38,45 @@ class StockTakeService:
         self.db = db
 
     async def initiate(self, payload: StockTakeCreate, user: User) -> StockTakeOut:
-        query = select(MedicineBatch).where(
-            MedicineBatch.qty_remaining > 0, MedicineBatch.locked_by_stock_take_id.is_(None)
-        )
-        if payload.product_ids:
-            query = query.where(MedicineBatch.product_id.in_(payload.product_ids))
+        stock_take = StockTake(initiated_by_user_id=user.id, notes=payload.notes)
+        self.db.add(stock_take)
+        await self.db.flush()
 
-        result = await self.db.execute(query)
-        batches = result.scalars().all()
+        # The real guarantee against two concurrent initiate() calls
+        # racing on overlapping batches -- an atomic UPDATE claims only
+        # whatever is genuinely still unlocked at the exact moment it
+        # runs, not whatever a plain SELECT happened to see moments
+        # earlier. A losing concurrent call simply claims fewer (or
+        # zero) batches; it can never silently steal a batch another
+        # stock take already locked.
+        claim_conditions = [
+            MedicineBatch.qty_remaining > 0,
+            MedicineBatch.locked_by_stock_take_id.is_(None),
+        ]
+        if payload.product_ids:
+            claim_conditions.append(MedicineBatch.product_id.in_(payload.product_ids))
+
+        await self.db.execute(
+            update(MedicineBatch)
+            .where(*claim_conditions)
+            .values(locked_by_stock_take_id=stock_take.id)
+        )
+
+        # The actual claimed set -- never assumed to match what was
+        # requested, since a concurrent call may have already claimed
+        # some of these batches first.
+        claimed_result = await self.db.execute(
+            select(MedicineBatch).where(MedicineBatch.locked_by_stock_take_id == stock_take.id)
+        )
+        batches = claimed_result.scalars().all()
         if not batches:
+            await self.db.rollback()
             raise HTTPException(
                 status_code=400,
                 detail="No eligible (unlocked, in-stock) batches found for this scope",
             )
 
-        stock_take = StockTake(initiated_by_user_id=user.id, notes=payload.notes)
-        self.db.add(stock_take)
-        await self.db.flush()
-
         for batch in batches:
-            batch.locked_by_stock_take_id = stock_take.id
             self.db.add(
                 StockTakeItem(
                     stock_take_id=stock_take.id,
@@ -70,6 +89,23 @@ class StockTakeService:
         await self.db.commit()
         await self.db.refresh(stock_take, attribute_names=["items", "started_at"])
         return StockTakeOut.model_validate(stock_take)
+
+    async def _claim_approval(self, item_id: int, user_id: int) -> bool:
+        """
+        Atomically claims approval for one stock-take item. Returns
+        False if it was already approved (by this same request's
+        caller or a concurrent one) -- the caller must not apply the
+        variance or write a StockMovement in that case.
+        """
+        result = cast(
+            "CursorResult[Any]",
+            await self.db.execute(
+                update(StockTakeItem)
+                .where(StockTakeItem.id == item_id, StockTakeItem.approved_at.is_(None))
+                .values(approved_by_user_id=user_id, approved_at=datetime.now(UTC))
+            ),
+        )
+        return result.rowcount > 0
 
     async def submit_count(
         self, stock_take_id: int, item_id: int, payload: CountSubmit, user: User
@@ -99,9 +135,8 @@ class StockTakeService:
             item.approved_by_user_id = user.id
             item.approved_at = datetime.now(UTC)
         elif abs(variance) <= SELF_APPROVE_THRESHOLD:
-            item.approved_by_user_id = user.id
-            item.approved_at = datetime.now(UTC)
-            await self._apply_variance(item, variance, user)
+            if await self._claim_approval(item.id, user.id):
+                await self._apply_variance(item, variance, user)
         # else: left pending -- approved_at stays null until a manager
         # calls approve_variance().
 
@@ -116,16 +151,14 @@ class StockTakeService:
 
         if item.physical_qty is None:
             raise HTTPException(status_code=400, detail="Item has not been counted yet")
-        if item.approved_at is not None:
-            raise HTTPException(status_code=400, detail="Item is already approved")
 
         variance = item.physical_qty - item.expected_qty
-        item.approved_by_user_id = user.id
-        item.approved_at = datetime.now(UTC)
+        if not await self._claim_approval(item.id, user.id):
+            raise HTTPException(status_code=400, detail="Item is already approved")
         await self._apply_variance(item, variance, user)
 
         await self.db.commit()
-        await self.db.refresh(item)
+        await self.db.refresh(item, attribute_names=["approved_at", "approved_by_user_id"])
         return StockTakeItemOut.model_validate(item)
 
     async def close(self, stock_take_id: int, user: User) -> StockTakeOut:

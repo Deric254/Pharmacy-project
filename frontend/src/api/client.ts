@@ -31,7 +31,8 @@ export class ApiError extends Error {
 function extractMessage(body: ApiErrorBody | null, fallback: string): string {
   if (!body?.detail) return fallback
   if (typeof body.detail === 'string') return body.detail
-  return body.detail.map((e) => e.msg).join('; ')
+  if (Array.isArray(body.detail)) return body.detail.map((e) => e.msg).join('; ')
+  return body.detail.message
 }
 
 // Multiple requests can 401 at the same moment (e.g. a page that fires
@@ -134,6 +135,53 @@ export const api = {
   delete: <T>(path: string) => apiRequest<T>(path, { method: 'DELETE' }),
 }
 
+async function rawUpload<T>(path: string, file: File): Promise<T> {
+  const headers: Record<string, string> = {}
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`
+  // Deliberately no Content-Type here -- the browser sets multipart/
+  // form-data with the correct boundary itself; setting it manually
+  // breaks the upload.
+
+  const formData = new FormData()
+  formData.append('file', file)
+
+  const res = await fetch(`/api/v1${path}`, {
+    method: 'POST',
+    headers,
+    credentials: 'include',
+    body: formData,
+  })
+
+  let parsedBody: ApiErrorBody | null = null
+  const text = await res.text()
+  if (text) {
+    try {
+      parsedBody = JSON.parse(text)
+    } catch {
+      parsedBody = null
+    }
+  }
+
+  if (!res.ok) {
+    throw new ApiError(res.status, extractMessage(parsedBody, res.statusText), parsedBody)
+  }
+  return parsedBody as T
+}
+
+export async function uploadFile<T>(path: string, file: File): Promise<T> {
+  try {
+    return await rawUpload<T>(path, file)
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) {
+      const refreshed = await doRefresh()
+      if (refreshed) {
+        return await rawUpload<T>(path, file)
+      }
+    }
+    throw err
+  }
+}
+
 /**
  * Excel/PDF exports return a binary file with a real filename in
  * Content-Disposition, not JSON -- the generic `api` client (which
@@ -143,22 +191,12 @@ export const api = {
  * export-capable list (Reports, Products, Customers, Audit Trail),
  * not reports-specific despite where it was originally written.
  */
-export async function downloadExport(
-  path: string,
-  query: Record<string, string | number>,
-  format: 'excel' | 'pdf',
-): Promise<void> {
-  const url = new URL(`/api/v1${path}`, window.location.origin)
-  for (const [key, value] of Object.entries(query)) {
-    url.searchParams.set(key, String(value))
-  }
-  url.searchParams.set('export', format)
-
+async function fetchAndDownload(path: string, fallbackFilename: string): Promise<void> {
   const headers: Record<string, string> = {}
   const token = getAccessToken()
   if (token) headers.Authorization = `Bearer ${token}`
 
-  const res = await fetch(url.pathname + url.search, { headers, credentials: 'include' })
+  const res = await fetch(path, { headers, credentials: 'include' })
   if (!res.ok) {
     let message = res.statusText
     try {
@@ -172,7 +210,7 @@ export async function downloadExport(
 
   const disposition = res.headers.get('Content-Disposition') ?? ''
   const filenameMatch = /filename="?([^"]+)"?/.exec(disposition)
-  const filename = filenameMatch?.[1] ?? `export.${format === 'excel' ? 'xlsx' : 'pdf'}`
+  const filename = filenameMatch?.[1] ?? fallbackFilename
 
   const blob = await res.blob()
   const objectUrl = URL.createObjectURL(blob)
@@ -183,4 +221,21 @@ export async function downloadExport(
   link.click()
   link.remove()
   URL.revokeObjectURL(objectUrl)
+}
+
+export async function downloadExport(
+  path: string,
+  query: Record<string, string | number>,
+  format: 'excel' | 'pdf',
+): Promise<void> {
+  const url = new URL(`/api/v1${path}`, window.location.origin)
+  for (const [key, value] of Object.entries(query)) {
+    url.searchParams.set(key, String(value))
+  }
+  url.searchParams.set('export', format)
+  await fetchAndDownload(url.pathname + url.search, `export.${format === 'excel' ? 'xlsx' : 'pdf'}`)
+}
+
+export async function downloadFile(path: string, fallbackFilename: string): Promise<void> {
+  await fetchAndDownload(`/api/v1${path}`, fallbackFilename)
 }

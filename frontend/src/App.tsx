@@ -9,6 +9,7 @@ import { LoginPage } from './pages/LoginPage'
 import { SetupPage } from './pages/SetupPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { PosPage } from './pages/PosPage'
+import { SalesPage } from './pages/SalesPage'
 import { InventoryPage } from './pages/InventoryPage'
 import { PurchasingPage } from './pages/PurchasingPage'
 import { StockTakesPage } from './pages/StockTakesPage'
@@ -73,6 +74,14 @@ export function App() {
             element={
               <RequirePermission code="sales.create">
                 <PosPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="sales"
+            element={
+              <RequirePermission code="sales.create">
+                <SalesPage />
               </RequirePermission>
             }
           />

@@ -319,6 +319,71 @@ class TestRestoreBackup:
         )
         assert r.status_code == 403
 
+    async def test_restoring_an_older_backup_missing_newer_columns_still_works(
+        self, client, owner_user
+    ):
+        """
+        Simulates restoring a genuinely older backup -- taken before a
+        migration added new columns (must_change_password,
+        security_question, security_answer_hash all arrived in later
+        migrations than the earliest users table). The real risk this
+        proves doesn't happen: an old backup silently failing to
+        restore, or restoring with a NOT NULL constraint violation,
+        once the app has moved on to a newer schema. Column-level
+        defaults must apply correctly even when the backed-up row
+        never had that column at all.
+        """
+        fake_provider = FakeBackupProvider()
+        async with AsyncSessionLocal() as db:
+            service = BackupService(db, provider_override=fake_provider)
+            backup = await service.run_backup(owner_user)
+
+        # Same row counts as the real backup (so the manifest check
+        # still passes -- this genuinely is "the same backup", just
+        # missing columns that didn't exist when it was taken), but
+        # the users row simulates the older, pre-migration shape.
+        async with AsyncSessionLocal() as db:
+            from app.services.backup.dump_restore import dump_all_tables
+
+            real_dump = await dump_all_tables(db)
+
+        old_style_dump = dict(real_dump)
+        old_style_dump["users"] = [
+            {
+                key: value
+                for key, value in row.items()
+                if key not in ("must_change_password", "security_question", "security_answer_hash")
+            }
+            for row in real_dump["users"]
+        ]
+
+        assert backup.reference is not None
+        from app.services.backup.dump_restore import serialize_dump
+
+        fake_provider.storage[backup.reference] = encrypt_bytes(serialize_dump(old_style_dump))
+
+        async with AsyncSessionLocal() as db:
+            service = BackupService(db, provider_override=fake_provider)
+            result = await service.restore_backup(backup.id, confirm=True, user=owner_user)
+        assert result.manifest_matched is True
+
+        async with AsyncSessionLocal() as db:
+            from sqlalchemy import text
+
+            row = (
+                await db.execute(
+                    text(
+                        "SELECT must_change_password, security_question FROM users "
+                        "WHERE username='lucy'"
+                    )
+                )
+            ).one()
+            # False (the real column default), not NULL and not a
+            # crash, even though the "old" backup never had this
+            # column at all.
+            assert row[0] == 0
+            assert row[1] is None
+
 
 class TestListBackups:
     async def test_list_backups_shows_both_success_and_failure(self, client, owner_user):

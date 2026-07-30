@@ -11,6 +11,7 @@ together. Keeping this module free of that context is what lets it be
 reused unchanged by Sales, Adjustments, and Transfers later.
 """
 
+from datetime import date
 from typing import Any, cast
 
 from sqlalchemy import select, update
@@ -64,6 +65,7 @@ async def select_batches_fefo(
             MedicineBatch.product_id == product_id,
             MedicineBatch.qty_remaining > 0,
             MedicineBatch.locked_by_stock_take_id.is_(None),
+            MedicineBatch.expiry_date >= date.today(),
         )
         .order_by(MedicineBatch.expiry_date.asc())
     )

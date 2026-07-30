@@ -19,9 +19,11 @@ the DB directly), not something to silently paper over.
 """
 
 from datetime import date, timedelta
+from typing import Any, cast
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import BatchExpiringEvent, StockLowEvent, publish
@@ -120,29 +122,45 @@ class InventoryService:
         )
 
     async def adjust_stock(self, payload: AdjustmentRequest, user: User) -> AdjustmentOut:
-        result = await self.db.execute(
-            select(MedicineBatch).where(MedicineBatch.id == payload.batch_id).with_for_update()
-        )
-        batch = result.scalar_one_or_none()
+        batch = await self.db.get(MedicineBatch, payload.batch_id)
         if batch is None:
             raise HTTPException(status_code=404, detail="Batch not found")
-
-        new_qty = batch.qty_remaining + payload.quantity_delta
-        if new_qty < 0:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Adjustment would take batch {batch.id} negative "
-                    f"({batch.qty_remaining} + {payload.quantity_delta} = {new_qty})"
-                ),
-            )
 
         reason_text = (
             payload.reason.value
             if payload.notes is None
             else f"{payload.reason.value}: {payload.notes}"
         )
-        batch.qty_remaining = new_qty
+
+        # The real guarantee against two concurrent adjustments to the
+        # same batch silently losing one of them -- the WHERE clause
+        # is checked against the row's actual state at the moment the
+        # UPDATE runs, not whatever was read moments earlier. This is
+        # also what correctly prevents a negative result even under a
+        # race: the earlier plain read can no longer be trusted as the
+        # true current value once concurrency is a possibility.
+        result = cast(
+            "CursorResult[Any]",
+            await self.db.execute(
+                update(MedicineBatch)
+                .where(
+                    MedicineBatch.id == payload.batch_id,
+                    MedicineBatch.qty_remaining + payload.quantity_delta >= 0,
+                )
+                .values(qty_remaining=MedicineBatch.qty_remaining + payload.quantity_delta)
+            ),
+        )
+        if result.rowcount == 0:
+            refreshed = await self.db.get(MedicineBatch, payload.batch_id)
+            current_qty = refreshed.qty_remaining if refreshed is not None else 0
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Adjustment would take batch {payload.batch_id} negative "
+                    f"({current_qty} + {payload.quantity_delta} < 0)"
+                ),
+            )
+
         self.db.add(
             StockMovement(
                 batch_id=batch.id,
@@ -153,6 +171,9 @@ class InventoryService:
             )
         )
         await self.db.commit()
+
+        refreshed = await self.db.get(MedicineBatch, payload.batch_id)
+        new_qty = refreshed.qty_remaining if refreshed is not None else 0
 
         return AdjustmentOut(
             batch_id=batch.id,

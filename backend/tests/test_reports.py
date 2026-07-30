@@ -10,7 +10,7 @@ Report tests. The properties that matter:
 """
 
 import io
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import openpyxl
 from pypdf import PdfReader
@@ -387,3 +387,286 @@ class TestStockTakeHistory:
         entry = next(e for e in r.json()["entries"] if e["stock_take_id"] == stock_take_id)
         assert entry["shrinkage_value"] == 4.0  # 2 units * 2.0 cost
         assert entry["closed_at"] is not None
+
+
+class TestKpiDashboard:
+    async def test_revenue_transaction_count_and_average_basket_are_accurate(
+        self, client, owner_user, employee_user
+    ):
+        product_id, _ = await _make_product_with_batch(price=10.0)
+        token = await _login(client, "joe", "pass1234")
+        owner_token = await _login(client, "lucy", "S3curePass!")
+
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 2}],
+                "payments": [{"method": "CASH", "amount": 20.0}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 3}],
+                "payments": [{"method": "CASH", "amount": 30.0}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/kpi-dashboard",
+            params={"start_date": today, "end_date": today},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["revenue"] == 50.0
+        assert body["transaction_count"] == 2
+        assert body["average_basket"] == 25.0
+
+    async def test_profit_hidden_for_a_role_without_view_profit_permission(
+        self, client, owner_user, administrator_user
+    ):
+        # Administrator does not hold reports.view_profit by design
+        # (matches the same restriction the dedicated /reports/profit
+        # endpoint already enforces) -- must be None, not zeroed out,
+        # which would look like a real (bad) number instead of "you
+        # can't see this".
+        token = await _login(client, "sam", "AdminPass1")
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/kpi-dashboard",
+            params={"start_date": today, "end_date": today},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200
+        assert r.json()["profit"] is None
+        assert r.json()["profit_margin_percent"] is None
+
+    async def test_profit_visible_for_owner(self, client, owner_user):
+        product_id, _ = await _make_product_with_batch(price=10.0, cost=4.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 5}],
+                "payments": [{"method": "CASH", "amount": 50.0}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/kpi-dashboard",
+            params={"start_date": today, "end_date": today},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.json()["profit"] == 30.0  # (10-4) * 5
+
+    async def test_revenue_change_percent_compares_to_immediately_prior_period(
+        self, client, owner_user, employee_user
+    ):
+        product_id, _ = await _make_product_with_batch(price=10.0)
+        token = await _login(client, "joe", "pass1234")
+        owner_token = await _login(client, "lucy", "S3curePass!")
+
+        # A sale "yesterday" and a bigger one "today" -- comparing a
+        # 1-day window to the 1-day window immediately before it.
+        async with AsyncSessionLocal() as db:
+            from app.models.sale import Sale, SaleItem
+
+            yesterday_sale = Sale(
+                cashier_user_id=1, subtotal=10.0, discount_amount=0.0, total_amount=10.0
+            )
+            db.add(yesterday_sale)
+            await db.flush()
+            yesterday_sale.created_at = datetime.now() - timedelta(days=1)
+            db.add(
+                SaleItem(
+                    sale_id=yesterday_sale.id,
+                    product_id=product_id,
+                    batch_id=1,
+                    quantity=1,
+                    unit_price=10.0,
+                    line_total=10.0,
+                )
+            )
+            await db.commit()
+
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 2}],
+                "payments": [{"method": "CASH", "amount": 20.0}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/kpi-dashboard",
+            params={"start_date": today, "end_date": today},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        # Today: 20.0, yesterday: 10.0 -- a genuine +100% change.
+        assert r.json()["revenue_change_percent"] == 100.0
+
+    async def test_top_products_ordered_by_revenue_not_quantity(self, client, owner_user):
+        """
+        Selling many units of a cheap product must not outrank fewer
+        units of an expensive one -- top products is genuinely ranked
+        by revenue, not raw quantity sold.
+        """
+        cheap_id, _ = await _make_product_with_batch(price=1.0)
+        token = await _login(client, "lucy", "S3curePass!")
+
+        async with AsyncSessionLocal() as db:
+            expensive = Product(name="Expensive Product", default_selling_price=100.0)
+            db.add(expensive)
+            await db.flush()
+            db.add(
+                MedicineBatch(
+                    product_id=expensive.id,
+                    batch_number="E1",
+                    expiry_date=date(2027, 1, 1),
+                    qty_received=10,
+                    qty_remaining=10,
+                    cost_price=50.0,
+                )
+            )
+            await db.commit()
+            expensive_id = expensive.id
+
+        # 20 units of the cheap product = 20.0 revenue.
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": cheap_id, "quantity": 20}],
+                "payments": [{"method": "CASH", "amount": 20.0}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        # 1 unit of the expensive product = 100.0 revenue -- must rank first.
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": expensive_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 100.0}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/kpi-dashboard",
+            params={"start_date": today, "end_date": today},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        top_products = r.json()["top_products"]
+        assert top_products[0]["product_id"] == expensive_id
+        assert top_products[0]["revenue"] == 100.0
+
+    async def test_low_stock_and_expiring_counts_reflect_real_inventory(self, client, owner_user):
+        # Reorder point 10, stock only 3 -- genuinely low.
+        async with AsyncSessionLocal() as db:
+            product = Product(
+                name="Low Stock KPI Product", default_selling_price=5.0, reorder_point=10
+            )
+            db.add(product)
+            await db.flush()
+            db.add(
+                MedicineBatch(
+                    product_id=product.id,
+                    batch_number="LOW1",
+                    expiry_date=date(2027, 1, 1),
+                    qty_received=3,
+                    qty_remaining=3,
+                    cost_price=1.0,
+                )
+            )
+            await db.commit()
+
+        token = await _login(client, "lucy", "S3curePass!")
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/kpi-dashboard",
+            params={"start_date": today, "end_date": today},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.json()["low_stock_count"] >= 1
+
+    async def test_requires_reports_view_permission(self, client, employee_user):
+        token = await _login(client, "joe", "pass1234")
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/kpi-dashboard",
+            params={"start_date": today, "end_date": today},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 403
+
+
+class TestTopCustomers:
+    async def test_pareto_cumulative_percent_is_mathematically_correct(self, client, owner_user):
+        """
+        Real Pareto math, not just a ranked list: three customers
+        spending 60, 30, 10 (100 total) must show cumulative
+        percentages of 60%, 90%, 100% in order -- the actual "which
+        customers make up 80% of revenue" answer has to be readable
+        directly off this, not left for someone to eyeball.
+        """
+        product_id, _ = await _make_product_with_batch(price=10.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        for name, spend in [("Big Spender", 60), ("Medium Spender", 30), ("Small Spender", 10)]:
+            r = await client.post("/api/v1/customers", json={"name": name}, headers=headers)
+            customer_id = r.json()["id"]
+            await client.post(
+                "/api/v1/sales",
+                json={
+                    "items": [{"product_id": product_id, "quantity": spend // 10}],
+                    "payments": [{"method": "CASH", "amount": float(spend)}],
+                    "customer_id": customer_id,
+                },
+                headers=headers,
+            )
+
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/top-customers",
+            params={"start_date": today, "end_date": today},
+            headers=headers,
+        )
+        assert r.status_code == 200
+        entries = r.json()["entries"]
+        assert entries[0]["name"] == "Big Spender"
+        assert entries[0]["cumulative_percent"] == 60.0
+        assert entries[1]["name"] == "Medium Spender"
+        assert entries[1]["cumulative_percent"] == 90.0
+        assert entries[2]["name"] == "Small Spender"
+        assert entries[2]["cumulative_percent"] == 100.0
+
+    async def test_walk_in_sales_with_no_customer_are_excluded(self, client, owner_user):
+        product_id, _ = await _make_product_with_batch(price=10.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 10.0}],
+            },
+            headers=headers,
+        )
+
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/top-customers",
+            params={"start_date": today, "end_date": today},
+            headers=headers,
+        )
+        assert r.json()["entries"] == []

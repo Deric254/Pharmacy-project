@@ -303,7 +303,8 @@ class TestFallbackChain:
                     context={"product_name": "Amoxicillin", "days_to_expiry": 12},
                 ),
             )
-        assert captured_context == {"product_name": "Amoxicillin", "days_to_expiry": 12}
+        assert captured_context["product_name"] == "Amoxicillin"
+        assert captured_context["days_to_expiry"] == 12
 
 
 class TestPermissions:
@@ -411,3 +412,191 @@ class TestRealAdapterRequestShape:
         except AIProviderError:
             raised = True
         assert raised, "Expected AIProviderError when response doesn't match the expected shape"
+
+
+class TestBusinessContext:
+    """
+    The actual gap this closes: the frontend never sent any context at
+    all, so every AI answer was pure guesswork with zero grounding in
+    the real pharmacy's data. Business context is now built server-
+    side, fresh, on every question -- never trusting whatever a client
+    might claim, and matching the dashboard's own profit-visibility
+    rule exactly.
+    """
+
+    async def test_business_context_is_automatically_included_with_no_client_context(
+        self, client, owner_user
+    ):
+        async with AsyncSessionLocal() as db:
+            db.add(
+                AIProviderKey(
+                    user_id=owner_user.id,
+                    provider=AIProviderName.OPENAI,
+                    encrypted_key=encrypt_secret("key"),
+                    key_hint="key1",
+                    priority=1,
+                )
+            )
+            await db.commit()
+
+        captured_context: dict[str, object] = {}
+
+        class ContextCapturingAdapter:
+            async def ask(self, prompt, context):
+                captured_context.update(context)
+                return AIResponse(text="ok")
+
+        def factory(provider, api_key):
+            return ContextCapturingAdapter()
+
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=factory)
+            await service.ask(owner_user, AIAskRequest(prompt="how is my pharmacy doing today?"))
+
+        # Real business numbers, present even though the client sent
+        # nothing at all -- this is the actual feature.
+        assert "today_revenue" in captured_context
+        assert "today_transaction_count" in captured_context
+        assert "low_stock_product_count" in captured_context
+
+    async def test_client_sent_context_cannot_override_the_real_business_numbers(
+        self, client, owner_user
+    ):
+        async with AsyncSessionLocal() as db:
+            db.add(
+                AIProviderKey(
+                    user_id=owner_user.id,
+                    provider=AIProviderName.OPENAI,
+                    encrypted_key=encrypt_secret("key"),
+                    key_hint="key1",
+                    priority=1,
+                )
+            )
+            await db.commit()
+
+        captured_context: dict[str, object] = {}
+
+        class ContextCapturingAdapter:
+            async def ask(self, prompt, context):
+                captured_context.update(context)
+                return AIResponse(text="ok")
+
+        def factory(provider, api_key):
+            return ContextCapturingAdapter()
+
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=factory)
+            await service.ask(
+                owner_user,
+                AIAskRequest(
+                    prompt="what's my revenue?",
+                    # A spoofing attempt -- must not win over the real number.
+                    context={"today_revenue": 999999999.0},
+                ),
+            )
+
+        assert captured_context["today_revenue"] != 999999999.0
+
+    async def test_profit_excluded_from_context_without_view_profit_permission(
+        self, client, owner_user, administrator_user
+    ):
+        async with AsyncSessionLocal() as db:
+            db.add(
+                AIProviderKey(
+                    user_id=administrator_user.id,
+                    provider=AIProviderName.OPENAI,
+                    encrypted_key=encrypt_secret("key"),
+                    key_hint="key1",
+                    priority=1,
+                )
+            )
+            await db.commit()
+
+        captured_context: dict[str, object] = {}
+
+        class ContextCapturingAdapter:
+            async def ask(self, prompt, context):
+                captured_context.update(context)
+                return AIResponse(text="ok")
+
+        def factory(provider, api_key):
+            return ContextCapturingAdapter()
+
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=factory)
+            await service.ask(administrator_user, AIAskRequest(prompt="how's business?"))
+
+        # Same rule the dashboard enforces -- not leaked into the AI
+        # prompt just because the assistant has a wider data pipe than
+        # the dashboard's own endpoint.
+        assert "today_profit" not in captured_context
+        assert "today_profit_margin_percent" not in captured_context
+
+    async def test_profit_included_in_context_for_owner(self, client, owner_user):
+        async with AsyncSessionLocal() as db:
+            db.add(
+                AIProviderKey(
+                    user_id=owner_user.id,
+                    provider=AIProviderName.OPENAI,
+                    encrypted_key=encrypt_secret("key"),
+                    key_hint="key1",
+                    priority=1,
+                )
+            )
+            await db.commit()
+
+        captured_context: dict[str, object] = {}
+
+        class ContextCapturingAdapter:
+            async def ask(self, prompt, context):
+                captured_context.update(context)
+                return AIResponse(text="ok")
+
+        def factory(provider, api_key):
+            return ContextCapturingAdapter()
+
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=factory)
+            await service.ask(owner_user, AIAskRequest(prompt="how's business?"))
+
+        assert "today_profit" in captured_context
+
+    async def test_business_context_failure_never_breaks_the_assistant(
+        self, client, owner_user, monkeypatch
+    ):
+        """
+        Business context is enrichment, not load-bearing -- if
+        computing it fails for any reason, the assistant must still
+        answer using whatever context it has, never a 500.
+        """
+        async with AsyncSessionLocal() as db:
+            db.add(
+                AIProviderKey(
+                    user_id=owner_user.id,
+                    provider=AIProviderName.OPENAI,
+                    encrypted_key=encrypt_secret("key"),
+                    key_hint="key1",
+                    priority=1,
+                )
+            )
+            await db.commit()
+
+        class AlwaysSucceedsAdapter:
+            async def ask(self, prompt, context):
+                return AIResponse(text="ok despite broken context")
+
+        def factory(provider, api_key):
+            return AlwaysSucceedsAdapter()
+
+        async def broken_kpi_dashboard(*args, **kwargs):
+            raise RuntimeError("simulated failure")
+
+        monkeypatch.setattr(
+            "app.services.report_service.ReportService.kpi_dashboard", broken_kpi_dashboard
+        )
+
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=factory)
+            response = await service.ask(owner_user, AIAskRequest(prompt="test"))
+
+        assert response.answer == "ok despite broken context"

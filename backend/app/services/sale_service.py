@@ -13,8 +13,10 @@ publishes `sale.completed`; everything else subscribes to that event
 and reacts independently, so checkout itself stays fast.
 """
 
+from datetime import date, datetime
+
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import SaleCompletedEvent, publish
@@ -23,7 +25,7 @@ from app.models.product import Product
 from app.models.sale import Payment, Sale, SaleItem
 from app.models.stock_movement import MovementType
 from app.models.user import User
-from app.schemas.sale import SaleCreate, SaleOut
+from app.schemas.sale import SaleCreate, SaleListItemOut, SaleOut, SalePage
 from app.services.customer_service import award_loyalty_points
 from app.services.inventory_service import check_and_publish_low_stock
 from app.services.stock_selection_service import (
@@ -57,10 +59,29 @@ class SaleService:
                 allocations = await select_batches_fefo(
                     self.db, item.product_id, item.quantity, lock=True
                 )
+                for batch, _qty in allocations:
+                    if unit_price < batch.cost_price:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                f'"{product.name}" would sell at a loss: selling price '
+                                f"{unit_price:.2f} is below this stock's cost "
+                                f"{batch.cost_price:.2f}. Raise the selling price or adjust "
+                                "the batch cost before selling this line."
+                            ),
+                        )
                 for allocation in allocations:
                     all_allocations.append((item.product_id, allocation))
 
             total_amount = subtotal - payload.discount_amount
+            if payload.discount_amount > subtotal:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Discount ({payload.discount_amount:.2f}) cannot exceed "
+                        f"the subtotal ({subtotal:.2f})."
+                    ),
+                )
             self._validate_payment_total(payload, total_amount)
 
             sale = Sale(
@@ -139,6 +160,57 @@ class SaleService:
         if sale is None:
             raise HTTPException(status_code=404, detail="Sale not found")
         return SaleOut.model_validate(sale)
+
+    async def list_sales(
+        self,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> SalePage:
+        limit = min(limit, 200)
+
+        query = (
+            select(
+                Sale.id,
+                User.full_name.label("cashier_name"),
+                Customer.name.label("customer_name"),
+                Sale.total_amount,
+                Sale.created_at,
+                func.count(SaleItem.id).label("item_count"),
+            )
+            .join(User, User.id == Sale.cashier_user_id)
+            .outerjoin(Customer, Customer.id == Sale.customer_id)
+            .join(SaleItem, SaleItem.sale_id == Sale.id)
+            .group_by(Sale.id, User.full_name, Customer.name, Sale.total_amount, Sale.created_at)
+            .order_by(Sale.created_at.desc(), Sale.id.desc())
+        )
+        count_query = select(func.count()).select_from(Sale)
+
+        if start_date is not None:
+            start_dt = datetime.combine(start_date, datetime.min.time())
+            query = query.where(Sale.created_at >= start_dt)
+            count_query = count_query.where(Sale.created_at >= start_dt)
+        if end_date is not None:
+            end_dt = datetime.combine(end_date, datetime.max.time())
+            query = query.where(Sale.created_at <= end_dt)
+            count_query = count_query.where(Sale.created_at <= end_dt)
+
+        total = await self.db.scalar(count_query) or 0
+        result = await self.db.execute(query.limit(limit).offset(offset))
+
+        entries = [
+            SaleListItemOut(
+                id=row.id,
+                cashier_name=row.cashier_name,
+                customer_name=row.customer_name,
+                item_count=row.item_count,
+                total_amount=row.total_amount,
+                created_at=row.created_at,
+            )
+            for row in result.all()
+        ]
+        return SalePage(entries=entries, total=total, limit=limit, offset=offset)
 
     async def _load_active_products(self, product_ids: list[int]) -> dict[int, Product]:
         result = await self.db.execute(

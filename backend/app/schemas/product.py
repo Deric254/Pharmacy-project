@@ -1,12 +1,23 @@
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
 
 from app.schemas._money import Money, Quantity
 
 
+def _must_have_real_content(value: str) -> str:
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("Name cannot be empty or just whitespace.")
+    return stripped
+
+
+NonBlankName = Annotated[str, AfterValidator(_must_have_real_content)]
+
+
 class ProductCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=150)
+    name: NonBlankName = Field(min_length=1, max_length=150)
     barcode: str | None = Field(default=None, max_length=64)
     unit: str = Field(default="unit", max_length=30)
     category_id: int | None = None
@@ -15,7 +26,7 @@ class ProductCreate(BaseModel):
 
 
 class ProductUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=150)
+    name: NonBlankName | None = Field(default=None, min_length=1, max_length=150)
     barcode: str | None = Field(default=None, max_length=64)
     unit: str | None = Field(default=None, max_length=30)
     category_id: int | None = None
@@ -36,4 +47,22 @@ class ProductOut(BaseModel):
     created_at: datetime
     total_qty_available: int = 0  # sum across all non-expired batches, populated by service
 
+    # All four populated only when there's real stock to compute a
+    # true cost from -- None rather than a fabricated number when a
+    # product has no batches at all yet.
+    current_cost: float | None = None  # cost of whichever batch would sell next (FEFO)
+    margin_amount: float | None = None  # selling price minus cost, in currency
+    margin_percent: float | None = None  # profit as a % of selling price
+    markup_percent: float | None = None  # profit as a % of cost
+
     model_config = {"from_attributes": True}
+
+
+class ImportRowError(BaseModel):
+    row: int  # 1-indexed spreadsheet row number, matching what the user sees in Excel
+    field: str
+    message: str
+
+
+class BulkImportResult(BaseModel):
+    created: int

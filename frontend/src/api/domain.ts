@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, downloadFile, uploadFile } from './client'
 import type {
   AdjustmentOut,
   AdjustmentRequest,
@@ -24,6 +24,7 @@ import type {
   RefundRequest,
   SaleCreate,
   SaleOut,
+  SalePage,
   StockTakeCreate,
   StockTakeItemOut,
   StockTakeOut,
@@ -41,11 +42,17 @@ export const productsApi = {
   update: (productId: number, payload: ProductUpdate) =>
     api.patch<ProductOut>(`/products/${productId}`, payload),
   deactivate: (productId: number) => api.delete<void>(`/products/${productId}`),
+  downloadImportTemplate: () =>
+    downloadFile('/products/import-template', 'product-import-template.xlsx'),
+  importFromExcel: (file: File) =>
+    uploadFile<{ created: number }>('/products/import', file),
 }
 
 export const salesApi = {
   create: (payload: SaleCreate) => api.post<SaleOut>('/sales', payload),
   get: (id: number) => api.get<SaleOut>(`/sales/${id}`),
+  list: (params: { start_date?: string; end_date?: string; limit?: number; offset?: number }) =>
+    api.get<SalePage>('/sales', params),
   refund: (saleId: number, payload: RefundRequest) =>
     api.post<RefundOut>(`/sales/${saleId}/refunds`, payload),
   listRefunds: (saleId: number) => api.get<RefundOut[]>(`/sales/${saleId}/refunds`),

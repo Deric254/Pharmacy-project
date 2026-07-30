@@ -15,9 +15,10 @@ earlier in this project about MySQL/SQLite divergence.
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.customer import Customer
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
 from app.models.purchase_order import PurchaseOrderItem
@@ -27,6 +28,7 @@ from app.schemas.reports import (
     ExpiredStockEntry,
     ExpiredStockReportOut,
     FastSlowMoversOut,
+    KpiDashboardOut,
     NeverSoldEntry,
     ProductMovementEntry,
     ProfitReportOut,
@@ -36,7 +38,11 @@ from app.schemas.reports import (
     SalesSummaryOut,
     StockTakeHistoryEntry,
     StockTakeHistoryOut,
+    TopCustomerEntry,
+    TopCustomersOut,
+    TopProductEntry,
 )
+from app.services.inventory_service import InventoryService
 
 
 class ReportService:
@@ -247,6 +253,131 @@ class ReportService:
             )
 
         return StockTakeHistoryOut(entries=entries)
+
+    async def kpi_dashboard(
+        self, start_date: date, end_date: date, include_profit: bool
+    ) -> KpiDashboardOut:
+        sales = await self._sales_in_range(start_date, end_date)
+        revenue = sum(s.total_amount for s in sales)
+        transaction_count = len(sales)
+        average_basket = revenue / transaction_count if transaction_count > 0 else 0.0
+
+        # Comparison period: immediately preceding, same length -- "this
+        # week vs last week" regardless of what range was actually
+        # selected, not a fixed lookback window that would compare
+        # mismatched period lengths.
+        period_days = (end_date - start_date).days + 1
+        prior_end = start_date - timedelta(days=1)
+        prior_start = prior_end - timedelta(days=period_days - 1)
+        prior_sales = await self._sales_in_range(prior_start, prior_end)
+        prior_revenue = sum(s.total_amount for s in prior_sales)
+        revenue_change_percent = (
+            ((revenue - prior_revenue) / prior_revenue * 100) if prior_revenue > 0 else None
+        )
+
+        profit: float | None = None
+        profit_margin_percent: float | None = None
+        if include_profit:
+            profit_result = await self.profit_report(start_date, end_date)
+            profit = profit_result.total_profit
+            profit_margin_percent = profit_result.profit_margin_percent
+
+        top_products = await self._top_products_by_revenue(start_date, end_date, limit=5)
+
+        low_stock = await InventoryService(self.db).get_low_stock_products()
+        expiring = await InventoryService(self.db).get_expiring_batches()
+
+        return KpiDashboardOut(
+            start_date=start_date,
+            end_date=end_date,
+            revenue=revenue,
+            transaction_count=transaction_count,
+            average_basket=round(average_basket, 2),
+            revenue_change_percent=(
+                round(revenue_change_percent, 2) if revenue_change_percent is not None else None
+            ),
+            profit=profit,
+            profit_margin_percent=profit_margin_percent,
+            top_products=top_products,
+            low_stock_count=len(low_stock),
+            expiring_soon_count=len(expiring),
+        )
+
+    async def _top_products_by_revenue(
+        self, start_date: date, end_date: date, limit: int
+    ) -> list[TopProductEntry]:
+        sales = await self._sales_in_range(start_date, end_date)
+        sale_ids = [s.id for s in sales]
+        if not sale_ids:
+            return []
+
+        result = await self.db.execute(
+            select(
+                Product.id,
+                Product.name,
+                func.sum(SaleItem.quantity).label("qty"),
+                func.sum(SaleItem.quantity * SaleItem.unit_price).label("revenue"),
+            )
+            .join(SaleItem, SaleItem.product_id == Product.id)
+            .where(SaleItem.sale_id.in_(sale_ids))
+            .group_by(Product.id)
+            .order_by(func.sum(SaleItem.quantity * SaleItem.unit_price).desc())
+            .limit(limit)
+        )
+        return [
+            TopProductEntry(product_id=pid, name=name, quantity_sold=int(qty), revenue=revenue)
+            for pid, name, qty, revenue in result.all()
+        ]
+
+    async def top_customers(
+        self, start_date: date, end_date: date, limit: int = 20
+    ) -> TopCustomersOut:
+        """
+        Ranked by real revenue from actual sales, with a running
+        cumulative percentage -- the real Pareto question ("which
+        customers make up 80% of revenue") is directly answerable from
+        this, not left for someone to eyeball from a bar chart.
+        Customer-less (walk-in, no name recorded) sales are
+        deliberately excluded -- there's no real customer identity to
+        rank there.
+        """
+        sales = await self._sales_in_range(start_date, end_date)
+        sale_ids = [s.id for s in sales]
+        if not sale_ids:
+            return TopCustomersOut(entries=[], total_revenue=0.0)
+
+        result = await self.db.execute(
+            select(
+                Customer.id,
+                Customer.name,
+                func.count(Sale.id).label("sale_count"),
+                func.sum(Sale.total_amount).label("revenue"),
+            )
+            .join(Sale, Sale.customer_id == Customer.id)
+            .where(Sale.id.in_(sale_ids))
+            .group_by(Customer.id)
+            .order_by(func.sum(Sale.total_amount).desc())
+            .limit(limit)
+        )
+        rows = result.all()
+
+        total_revenue = sum(s.total_amount for s in sales)
+        entries = []
+        running_total = 0.0
+        for customer_id, name, sale_count, revenue in rows:
+            running_total += revenue
+            entries.append(
+                TopCustomerEntry(
+                    customer_id=customer_id,
+                    name=name,
+                    sale_count=sale_count,
+                    revenue=revenue,
+                    cumulative_percent=(
+                        round(running_total / total_revenue * 100, 1) if total_revenue > 0 else 0.0
+                    ),
+                )
+            )
+        return TopCustomersOut(entries=entries, total_revenue=total_revenue)
 
     async def _sales_in_range(self, start_date: date, end_date: date) -> list[Sale]:
         start_dt = datetime.combine(start_date, datetime.min.time())

@@ -124,3 +124,83 @@ def build_export_response(
             headers={"Content-Disposition": f'attachment; filename="{safe_title}.pdf"'},
         )
     return json_payload
+
+
+def generate_profit_loss_pdf(
+    business_name: str,
+    start_date: str,
+    end_date: str,
+    revenue: float,
+    cost_of_goods_sold: float,
+    gross_profit: float,
+    gross_margin_percent: float,
+    currency: str,
+) -> bytes:
+    """
+    A real, honest Gross Profit statement -- not a full P&L. This
+    system has no expense-tracking module anywhere (no rent, salaries,
+    utilities, or any other overhead is recorded), so a true net-profit
+    P&L cannot be honestly produced. Rather than silently omit that and
+    let "Gross Profit" masquerade as "Net Profit", the statement says
+    exactly what it does and doesn't include, in the document itself.
+    """
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.platypus import Paragraph, Spacer
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, title="Profit & Loss Statement", topMargin=3 * cm)
+
+    title_style = ParagraphStyle("PLTitle", fontName="Helvetica-Bold", fontSize=16, spaceAfter=4)
+    subtitle_style = ParagraphStyle(
+        "PLSubtitle", fontName="Helvetica", fontSize=10, textColor=colors.HexColor("#475569")
+    )
+    note_style = ParagraphStyle(
+        "PLNote",
+        fontName="Helvetica-Oblique",
+        fontSize=8,
+        textColor=colors.HexColor("#991B1B"),
+        spaceBefore=16,
+    )
+
+    def money(value: float) -> str:
+        return f"{currency} {value:,.2f}"
+
+    rows = [
+        ["Revenue", money(revenue)],
+        ["Cost of Goods Sold", f"({money(cost_of_goods_sold)})"],
+        ["", ""],
+        ["Gross Profit", money(gross_profit)],
+        ["Gross Margin", f"{gross_margin_percent:.1f}%"],
+    ]
+    table = Table(rows, colWidths=[10 * cm, 6 * cm])
+    table.setStyle(
+        TableStyle(
+            [
+                ("FONTSIZE", (0, 0), (-1, -1), 11),
+                ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ("LINEABOVE", (0, 3), (-1, 3), 1, colors.HexColor("#0F172A")),
+                ("FONTNAME", (0, 3), (-1, 4), "Helvetica-Bold"),
+            ]
+        )
+    )
+
+    elements = [
+        Paragraph("Profit & Loss Statement", title_style),
+        Paragraph(
+            f"{business_name} &nbsp;&middot;&nbsp; {start_date} to {end_date}", subtitle_style
+        ),
+        Spacer(1, 16),
+        table,
+        Paragraph(
+            "This statement reflects revenue and cost of goods sold only, computed directly "
+            "from real sales and batch cost records. Operating expenses (rent, salaries, "
+            "utilities, and other overhead) are not tracked anywhere in this system and are "
+            "deliberately not included -- this is a Gross Profit statement, not a complete "
+            "net-profit P&amp;L.",
+            note_style,
+        ),
+    ]
+    doc.build(elements)
+    return buffer.getvalue()

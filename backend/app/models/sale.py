@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+
+if TYPE_CHECKING:
+    from app.models.product import Product
 
 
 class Sale(Base):
@@ -52,6 +56,15 @@ class SaleItem(Base):
     quantity: Mapped[int] = mapped_column(Integer)
     unit_price: Mapped[float] = mapped_column()  # price at time of sale, never recomputed later
     line_total: Mapped[float] = mapped_column()
+
+    product: Mapped[Product] = relationship(lazy="selectin")
+
+    @property
+    def product_name(self) -> str:
+        # Only safe because this relationship is always eager-loaded
+        # (lazy="selectin" above) -- otherwise this would trigger a
+        # lazy load outside the async session context and crash.
+        return self.product.name
 
 
 class PaymentMethod(enum.StrEnum):

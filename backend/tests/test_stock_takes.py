@@ -15,6 +15,8 @@ import asyncio
 import json
 from datetime import date
 
+from sqlalchemy import select
+
 from app.core.database import AsyncSessionLocal
 from app.core.events import CHANNEL
 from app.core.redis_client import redis_client
@@ -118,6 +120,46 @@ class TestInitiate:
             "/api/v1/stock-takes", json={}, headers={"Authorization": f"Bearer {token}"}
         )
         assert r.status_code == 403
+
+    async def test_two_concurrent_initiates_on_the_same_batch_only_one_wins(
+        self, client, owner_user
+    ):
+        """
+        The actual bug this closes: locking was a plain SELECT-then-
+        Python-mutate, so two concurrent initiate() calls scoped to
+        the same batch could both read it as "currently unlocked" and
+        both proceed to lock it -- the second commit silently
+        overwriting the first's lock ownership. Two stock takes could
+        then each believe they had exclusive control of the same
+        physical batch at once.
+        """
+        product_id, batch_id = await _make_product_with_batch(qty=40)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        async def initiate():
+            return await client.post(
+                "/api/v1/stock-takes", json={"product_ids": [product_id]}, headers=headers
+            )
+
+        results = await asyncio.gather(initiate(), initiate(), return_exceptions=True)
+        status_codes = [r.status_code for r in results if not isinstance(r, Exception)]
+        assert status_codes.count(201) == 1  # exactly one stock take actually claims it
+        assert status_codes.count(400) == 1  # the other gets a clean, honest rejection
+
+        async with AsyncSessionLocal() as db:
+            batch_result = await db.execute(
+                select(MedicineBatch).where(MedicineBatch.id == batch_id)
+            )
+            batch = batch_result.scalar_one()
+            winning_id = next(
+                r.json()["id"]
+                for r in results
+                if not isinstance(r, Exception) and r.status_code == 201
+            )
+            # Locked to exactly the stock take that actually won --
+            # never left ambiguous or overwritten.
+            assert batch.locked_by_stock_take_id == winning_id
 
 
 class TestSaleLockInteraction:
@@ -336,6 +378,46 @@ class TestApproval:
                 select(MedicineBatch).where(MedicineBatch.id == batch_id)
             )
             assert batch_result.scalar_one().qty_remaining == 15
+
+    async def test_two_concurrent_approvals_only_one_applies_the_ledger(self, client, owner_user):
+        product_id, batch_id = await _make_product_with_batch(qty=30)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        create_resp = await client.post(
+            "/api/v1/stock-takes", json={"product_ids": [product_id]}, headers=headers
+        )
+        stock_take_id = create_resp.json()["id"]
+        item_id = create_resp.json()["items"][0]["id"]
+        await client.post(
+            f"/api/v1/stock-takes/{stock_take_id}/items/{item_id}/count",
+            json={"physical_qty": 15, "reason": "THEFT_OR_LOSS"},
+            headers=headers,
+        )
+
+        async def approve():
+            return await client.post(
+                f"/api/v1/stock-takes/{stock_take_id}/items/{item_id}/approve", headers=headers
+            )
+
+        results = await asyncio.gather(approve(), approve(), return_exceptions=True)
+        status_codes = [r.status_code for r in results if not isinstance(r, Exception)]
+        assert status_codes.count(200) == 1  # exactly one approval succeeds
+        assert status_codes.count(400) == 1  # the other is correctly rejected, not silently lost
+
+        async with AsyncSessionLocal() as db:
+            movements = await db.execute(
+                select(StockMovement).where(
+                    StockMovement.batch_id == batch_id,
+                    StockMovement.movement_type == MovementType.ADJUSTMENT,
+                )
+            )
+            # Exactly one ADJUSTMENT ledger entry for this variance --
+            # not two, which is what a double-approval race would have
+            # produced. (The batch also has one PURCHASE-type movement
+            # from creation, deliberately excluded here since it isn't
+            # what this test is proving.)
+            assert len(movements.scalars().all()) == 1
 
 
 class TestClose:

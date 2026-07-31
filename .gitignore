@@ -18,6 +18,9 @@ htmlcov/
 node_modules/
 dist/
 build/
+!electron/build/
+!electron/build/**
+
 installer-output/
 .vite/
 

@@ -14,6 +14,7 @@ from app.schemas.reports import (
     ProfitReportOut,
     ReceivingDiscrepancyReportOut,
     RevenuePotentialOut,
+    StockRunwayOut,
     StockTakeHistoryOut,
     TopCustomersOut,
 )
@@ -190,6 +191,17 @@ async def top_customers(
 )
 async def revenue_potential(db: Annotated[AsyncSession, Depends(get_db)]) -> RevenuePotentialOut:
     return await ReportService(db).revenue_potential()
+
+
+@router.get(
+    "/stock-runway",
+    response_model=StockRunwayOut,
+    dependencies=[Depends(require_permission("reports.view"))],
+)
+async def stock_runway(
+    db: Annotated[AsyncSession, Depends(get_db)], lookback_days: int = 30
+) -> StockRunwayOut:
+    return await ReportService(db).stock_runway(lookback_days)
 
 
 @router.get("/expired-stock")

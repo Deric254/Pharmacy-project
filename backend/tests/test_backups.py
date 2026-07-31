@@ -410,12 +410,14 @@ class TestGoogleDriveAdapterRequestShape:
 
     async def test_upload_refreshes_token_then_uploads(self):
         calls = []
+        captured_bodies: list[bytes] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
             calls.append(str(request.url))
             if "oauth2.googleapis.com" in str(request.url):
                 return httpx.Response(200, json={"access_token": "fresh-access-token"})
             assert request.headers.get("authorization") == "Bearer fresh-access-token"
+            captured_bodies.append(request.content)
             return httpx.Response(200, json={"id": "drive-file-id-123"})
 
         http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -426,11 +428,18 @@ class TestGoogleDriveAdapterRequestShape:
             client=http_client,
         )
 
-        reference = await provider.upload("backup.enc", b"encrypted-bytes-here")
+        reference = await provider.upload("pharmacy-backup-20260731.enc", b"encrypted-bytes-here")
 
         assert reference == "drive-file-id-123"
         assert any("oauth2.googleapis.com/token" in url for url in calls)
         assert any("googleapis.com/upload/drive" in url for url in calls)
+
+        # The real fix: the actual filename must genuinely be in the
+        # request body, not silently dropped -- otherwise every
+        # backup shows up in the person's own Drive with a generic,
+        # unhelpful name even though retrieval by ID still works.
+        assert b"pharmacy-backup-20260731.enc" in captured_bodies[0]
+        assert b"encrypted-bytes-here" in captured_bodies[0]
 
     async def test_download_refreshes_token_then_downloads(self):
         def handler(request: httpx.Request) -> httpx.Response:

@@ -13,7 +13,7 @@ earlier in this project about MySQL/SQLite divergence.
 """
 
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +38,8 @@ from app.schemas.reports import (
     RevenuePotentialOut,
     SalesSummaryEntry,
     SalesSummaryOut,
+    StockRunwayEntry,
+    StockRunwayOut,
     StockTakeHistoryEntry,
     StockTakeHistoryOut,
     TopCustomerEntry,
@@ -439,6 +441,67 @@ class ReportService:
                 "This is what selling every unit currently in stock at today's prices would "
                 "add up to -- not a prediction of when that will happen or whether it will. "
                 "Real sales depend on real demand, which this figure does not account for."
+            ),
+        )
+
+    async def stock_runway(self, lookback_days: int = 30) -> StockRunwayOut:
+        """
+        A transparent extrapolation, not a forecast: real units sold
+        per product over the last `lookback_days`, divided into real
+        current stock. A product with no sales in the window gets
+        None for days_remaining -- there's no real rate to divide by,
+        and guessing one would be exactly the kind of fabrication this
+        feature exists to avoid.
+        """
+        window_start = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=lookback_days)
+
+        sold_result = await self.db.execute(
+            select(SaleItem.product_id, func.sum(SaleItem.quantity))
+            .join(Sale, Sale.id == SaleItem.sale_id)
+            .where(Sale.created_at >= window_start)
+            .group_by(SaleItem.product_id)
+        )
+        sold_by_product: dict[int, int] = dict(sold_result.tuples().all())
+
+        stock_result = await self.db.execute(
+            select(
+                Product.id,
+                Product.name,
+                func.coalesce(func.sum(MedicineBatch.qty_remaining), 0).label("qty"),
+            )
+            .outerjoin(MedicineBatch, MedicineBatch.product_id == Product.id)
+            .where(Product.deleted_at.is_(None))
+            .group_by(Product.id)
+        )
+
+        entries: list[StockRunwayEntry] = []
+        for product_id, name, qty in stock_result.all():
+            if qty <= 0:
+                continue
+            units_sold = sold_by_product.get(product_id, 0)
+            avg_daily = units_sold / lookback_days
+            days_remaining = (qty / avg_daily) if avg_daily > 0 else None
+            entries.append(
+                StockRunwayEntry(
+                    product_id=product_id,
+                    name=name,
+                    qty_on_hand=int(qty),
+                    units_sold_in_window=units_sold,
+                    avg_daily_sales=round(avg_daily, 2),
+                    days_remaining=round(days_remaining, 1) if days_remaining is not None else None,
+                )
+            )
+        # Soonest-to-run-out first -- products with no sales history
+        # (None) sort last, since there's nothing urgent to flag there.
+        entries.sort(key=lambda e: (e.days_remaining is None, e.days_remaining))
+
+        return StockRunwayOut(
+            lookback_days=lookback_days,
+            entries=entries,
+            caveat=(
+                f"Based on real sales over the last {lookback_days} days, extrapolated forward "
+                "at that same pace. Not a guarantee -- real demand changes (season, promotions, "
+                "supplier issues) that this simple average does not account for."
             ),
         )
 

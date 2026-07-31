@@ -743,3 +743,135 @@ class TestRevenuePotential:
         assert r.status_code == 200
         assert r.json()["total_potential_revenue"] == 0.0
         assert r.json()["overall_margin_percent"] is None
+
+
+class TestStockRunway:
+    """
+    A transparent extrapolation, not a forecast. The properties that
+    matter: the math is exactly right, a product with no sales in the
+    window gets None (never a fabricated number), sales outside the
+    lookback window don't count, and the soonest-to-run-out product
+    sorts first.
+    """
+
+    async def test_math_is_exactly_right(self, client, owner_user):
+        product_id, _ = await _make_product_with_batch(price=10.0, qty=100)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # 30 units sold today, within a 30-day lookback -- 1 unit/day
+        # average, so 100 remaining (after this sale, 70) should
+        # project to exactly 70 days remaining.
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 30}],
+                "payments": [{"method": "CASH", "amount": 300.0}],
+            },
+            headers=headers,
+        )
+
+        r = await client.get(
+            "/api/v1/reports/stock-runway",
+            params={"lookback_days": 30},
+            headers=headers,
+        )
+        assert r.status_code == 200
+        entry = next(e for e in r.json()["entries"] if e["product_id"] == product_id)
+        assert entry["qty_on_hand"] == 70
+        assert entry["units_sold_in_window"] == 30
+        assert entry["avg_daily_sales"] == 1.0  # 30 units / 30 days
+        assert entry["days_remaining"] == 70.0  # 70 remaining / 1.0 per day
+
+    async def test_no_sales_in_window_gives_none_not_a_fabricated_number(self, client, owner_user):
+        product_id, _ = await _make_product_with_batch(price=10.0, qty=50)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        r = await client.get("/api/v1/reports/stock-runway", headers=headers)
+        entry = next(e for e in r.json()["entries"] if e["product_id"] == product_id)
+        assert entry["units_sold_in_window"] == 0
+        assert entry["days_remaining"] is None
+
+    async def test_sales_outside_the_lookback_window_are_excluded(self, client, owner_user):
+        product_id, _ = await _make_product_with_batch(price=10.0, qty=100)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        sale = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 20}],
+                "payments": [{"method": "CASH", "amount": 200.0}],
+            },
+            headers=headers,
+        )
+        sale_id = sale.json()["id"]
+
+        # Push this sale's timestamp to 60 days ago -- outside a
+        # 30-day lookback window entirely.
+        async with AsyncSessionLocal() as db:
+            from datetime import datetime, timedelta
+
+            from sqlalchemy import select as _select
+
+            from app.models.sale import Sale
+
+            result = await db.execute(_select(Sale).where(Sale.id == sale_id))
+            old_sale = result.scalar_one()
+            old_sale.created_at = datetime.now() - timedelta(days=60)
+            await db.commit()
+
+        r = await client.get(
+            "/api/v1/reports/stock-runway", params={"lookback_days": 30}, headers=headers
+        )
+        entry = next(e for e in r.json()["entries"] if e["product_id"] == product_id)
+        assert entry["units_sold_in_window"] == 0
+        assert entry["days_remaining"] is None
+
+    async def test_soonest_to_run_out_sorts_first(self, client, owner_user):
+        fast_id, _ = await _make_product_with_batch(price=10.0, qty=10)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        slow_product = await client.post(
+            "/api/v1/products",
+            json={"name": "Slow Moving Runway Product", "default_selling_price": 10.0},
+            headers=headers,
+        )
+        slow_id = slow_product.json()["id"]
+        await client.post(
+            f"/api/v1/products/{slow_id}/batches",
+            json={
+                "batch_number": "SLOW1",
+                "expiry_date": "2027-06-30",
+                "qty_received": 1000,
+                "cost_price": 4.0,
+            },
+            headers=headers,
+        )
+
+        # Fast product: high sales relative to low stock -- runs out soon.
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": fast_id, "quantity": 5}],
+                "payments": [{"method": "CASH", "amount": 50.0}],
+            },
+            headers=headers,
+        )
+        # Slow product: tiny sales relative to huge stock -- lasts a long time.
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": slow_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 10.0}],
+            },
+            headers=headers,
+        )
+
+        r = await client.get("/api/v1/reports/stock-runway", headers=headers)
+        entries = r.json()["entries"]
+        fast_idx = next(i for i, e in enumerate(entries) if e["product_id"] == fast_id)
+        slow_idx = next(i for i, e in enumerate(entries) if e["product_id"] == slow_id)
+        assert fast_idx < slow_idx

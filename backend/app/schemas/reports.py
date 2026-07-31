@@ -153,3 +153,29 @@ class RevenuePotentialOut(BaseModel):
     overall_margin_percent: float | None
     by_product: list[RevenuePotentialEntry]
     caveat: str
+
+
+class StockRunwayEntry(BaseModel):
+    product_id: int
+    name: str
+    qty_on_hand: int
+    units_sold_in_window: int
+    avg_daily_sales: float
+    # None when there's no recent sales history to extrapolate from --
+    # never a fabricated number, and never "infinite" either.
+    days_remaining: float | None
+
+
+class StockRunwayOut(BaseModel):
+    """
+    A transparent extrapolation from real recent sales, not a
+    forecast: at the pace of the last `lookback_days`, this is how
+    long current stock would last if nothing about demand changes.
+    Real demand changes constantly (season, promotions, new
+    competitors, a supplier issue elsewhere) -- this is a starting
+    point for reorder timing, not a guarantee of what will happen.
+    """
+
+    lookback_days: int
+    entries: list[StockRunwayEntry]
+    caveat: str

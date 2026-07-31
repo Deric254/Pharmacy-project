@@ -8,6 +8,7 @@ interactive browser consent screen itself, that happens once outside
 the app when the admin connects their Google account.
 """
 
+import json
 from typing import Any
 
 import httpx
@@ -16,8 +17,9 @@ from app.services.backup.base import BackupProvider, BackupProviderError
 
 _TIMEOUT_SECONDS = 30.0
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
-_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files?uploadType=media"
+_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart"
 _DOWNLOAD_URL_TEMPLATE = "https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
+_MULTIPART_BOUNDARY = "pharmacy_erp_backup_boundary"
 
 
 class GoogleDriveBackupProvider(BackupProvider):
@@ -52,14 +54,28 @@ class GoogleDriveBackupProvider(BackupProvider):
 
     async def upload(self, filename: str, data: bytes) -> str:
         access_token = await self._get_access_token()
+        metadata = json.dumps({"name": filename}).encode()
+        body = (
+            (
+                f"--{_MULTIPART_BOUNDARY}\r\n"
+                "Content-Type: application/json; charset=UTF-8\r\n\r\n"
+            ).encode()
+            + metadata
+            + (
+                f"\r\n--{_MULTIPART_BOUNDARY}\r\n" "Content-Type: application/octet-stream\r\n\r\n"
+            ).encode()
+            + data
+            + f"\r\n--{_MULTIPART_BOUNDARY}--".encode()
+        )
+
         try:
             response = await self._client.post(
                 _UPLOAD_URL,
                 headers={
                     "Authorization": f"Bearer {access_token}",
-                    "Content-Type": "application/octet-stream",
+                    "Content-Type": f"multipart/related; boundary={_MULTIPART_BOUNDARY}",
                 },
-                content=data,
+                content=body,
             )
             response.raise_for_status()
             result: dict[str, Any] = response.json()

@@ -8,6 +8,7 @@ import type {
   ExpiringBatchOut,
   KpiDashboardOut,
   LowStockProductOut,
+  RevenuePotentialOut,
   StockValuationOut,
 } from '../types/api'
 import { ApiError } from '../api/client'
@@ -38,6 +39,7 @@ export function DashboardPage() {
   const hasPermission = useAuthStore((s) => s.hasPermission)
   const canSeeInventory = hasPermission('inventory.view')
   const canSeeReports = hasPermission('reports.view')
+  const canSeeProfit = hasPermission('reports.view_profit')
   const formatCurrency = useCurrencyFormatter()
 
   const [preset, setPreset] = useState<Preset>('today')
@@ -46,6 +48,7 @@ export function DashboardPage() {
   const [lowStock, setLowStock] = useState<LowStockProductOut[] | null>(null)
   const [expiring, setExpiring] = useState<ExpiringBatchOut[] | null>(null)
   const [valuation, setValuation] = useState<StockValuationOut | null>(null)
+  const [revenuePotential, setRevenuePotential] = useState<RevenuePotentialOut | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   function applyPreset(next: Preset) {
@@ -68,6 +71,23 @@ export function DashboardPage() {
       cancelled = true
     }
   }, [canSeeReports, range])
+
+  useEffect(() => {
+    if (!canSeeProfit) return
+    let cancelled = false
+    reportsApi
+      .revenuePotential()
+      .then((data) => {
+        if (!cancelled) setRevenuePotential(data)
+      })
+      .catch(() => {
+        // Non-critical for the dashboard as a whole -- just omit this
+        // one card rather than surface an error for a secondary figure.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [canSeeProfit])
 
   useEffect(() => {
     if (!canSeeInventory) return
@@ -222,6 +242,37 @@ export function DashboardPage() {
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {canSeeProfit && revenuePotential && revenuePotential.by_product.length > 0 && (
+        <div className="mb-6 ledger-panel p-4">
+          <h2 className="text-xs uppercase tracking-wide text-ink-soft">
+            If everything in stock sold today
+          </h2>
+          <div className="mt-2 grid grid-cols-3 gap-4">
+            <div>
+              <p className="text-xs text-ink-soft">Revenue</p>
+              <p className="figure text-xl text-ink">
+                {formatCurrency(revenuePotential.total_potential_revenue)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-ink-soft">Gross profit</p>
+              <p className="figure text-xl text-ink">
+                {formatCurrency(revenuePotential.total_potential_gross_profit)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-ink-soft">Margin</p>
+              <p className="figure text-xl text-ink">
+                {revenuePotential.overall_margin_percent !== null
+                  ? `${revenuePotential.overall_margin_percent.toFixed(1)}%`
+                  : '—'}
+              </p>
+            </div>
+          </div>
+          <p className="mt-3 text-xs italic text-ink-soft">{revenuePotential.caveat}</p>
         </div>
       )}
 

@@ -21,4 +21,5 @@ export const authApi = {
     api.post<void>('/auth/change-password', payload),
   forgotPassword: (payload: ForgotPasswordRequest) =>
     api.post<void>('/auth/forgot-password', payload),
+  acceptTerms: () => api.post<void>('/auth/accept-terms'),
 }

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { Navigate } from 'react-router-dom'
 import { useAuthStore } from './store'
 import { MustChangePasswordPage } from './MustChangePasswordPage'
+import { TermsGatePage } from './TermsGatePage'
 
 export function RequireAuth({ children }: { children: ReactNode }) {
   const status = useAuthStore((s) => s.status)
@@ -19,6 +20,9 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   }
   if (user?.must_change_password) {
     return <MustChangePasswordPage />
+  }
+  if (user && !user.terms_accepted) {
+    return <TermsGatePage />
   }
   return <>{children}</>
 }

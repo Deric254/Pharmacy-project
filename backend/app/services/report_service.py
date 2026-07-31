@@ -34,6 +34,8 @@ from app.schemas.reports import (
     ProfitReportOut,
     ReceivingDiscrepancyEntry,
     ReceivingDiscrepancyReportOut,
+    RevenuePotentialEntry,
+    RevenuePotentialOut,
     SalesSummaryEntry,
     SalesSummaryOut,
     StockTakeHistoryEntry,
@@ -378,6 +380,67 @@ class ReportService:
                 )
             )
         return TopCustomersOut(entries=entries, total_revenue=total_revenue)
+
+    async def revenue_potential(self) -> RevenuePotentialOut:
+        """
+        A real hypothetical computed entirely from real current data:
+        every batch's real qty_remaining and real cost_price, every
+        product's real current selling price. Never a forecast of
+        when this would happen or whether it will -- that depends on
+        real customer demand this system has no way to know.
+        """
+        result = await self.db.execute(
+            select(
+                Product.id,
+                Product.name,
+                Product.default_selling_price,
+                func.coalesce(func.sum(MedicineBatch.qty_remaining), 0).label("qty"),
+                func.coalesce(
+                    func.sum(MedicineBatch.qty_remaining * MedicineBatch.cost_price), 0.0
+                ).label("cost"),
+            )
+            .outerjoin(MedicineBatch, MedicineBatch.product_id == Product.id)
+            .where(Product.deleted_at.is_(None))
+            .group_by(Product.id)
+        )
+
+        by_product: list[RevenuePotentialEntry] = []
+        total_revenue = 0.0
+        total_cost = 0.0
+        for product_id, name, selling_price, qty, cost in result.all():
+            if qty <= 0:
+                continue
+            revenue = qty * selling_price
+            gross_profit = revenue - cost
+            total_revenue += revenue
+            total_cost += cost
+            by_product.append(
+                RevenuePotentialEntry(
+                    product_id=product_id,
+                    name=name,
+                    qty_on_hand=int(qty),
+                    potential_revenue=revenue,
+                    potential_cost=cost,
+                    potential_gross_profit=gross_profit,
+                )
+            )
+        by_product.sort(key=lambda e: e.potential_revenue, reverse=True)
+
+        total_gross_profit = total_revenue - total_cost
+        margin_percent = (total_gross_profit / total_revenue * 100) if total_revenue > 0 else None
+
+        return RevenuePotentialOut(
+            total_potential_revenue=total_revenue,
+            total_potential_cost=total_cost,
+            total_potential_gross_profit=total_gross_profit,
+            overall_margin_percent=margin_percent,
+            by_product=by_product,
+            caveat=(
+                "This is what selling every unit currently in stock at today's prices would "
+                "add up to -- not a prediction of when that will happen or whether it will. "
+                "Real sales depend on real demand, which this figure does not account for."
+            ),
+        )
 
     async def _sales_in_range(self, start_date: date, end_date: date) -> list[Sale]:
         start_dt = datetime.combine(start_date, datetime.min.time())

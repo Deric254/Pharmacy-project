@@ -5,11 +5,13 @@ import type {
   KpiDashboardOut,
   ProfitReportOut,
   ReceivingDiscrepancyReportOut,
+  RevenuePotentialOut,
   SalesSummaryOut,
   StockTakeHistoryOut,
 } from '../types/api'
 
 export const reportsApi = {
+  revenuePotential: () => api.get<RevenuePotentialOut>('/reports/revenue-potential'),
   kpiDashboard: (startDate: string, endDate: string) =>
     api.get<KpiDashboardOut>('/reports/kpi-dashboard', {
       start_date: startDate,

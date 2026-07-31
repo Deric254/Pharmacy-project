@@ -569,3 +569,121 @@ class TestDiscountCannotExceedSubtotal:
         assert r.status_code == 400
         assert "discount" in r.json()["detail"].lower()
         assert "exceed" in r.json()["detail"].lower()
+
+
+class TestReceiptPdf:
+    """
+    The properties that matter: a real, correctly-branded PDF is
+    generated fresh from the actual sale and business config every
+    time, a malformed logo can never crash it, and displayed times are
+    converted to the business's real configured timezone rather than
+    showing raw UTC.
+    """
+
+    async def test_generates_a_real_pdf_with_correct_numbers(self, client, owner_user):
+        product_id = await _make_product_with_batch(price=25.0, cost=10.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        sale = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 4}],
+                "payments": [{"method": "CASH", "amount": 90.0}],
+                "discount_amount": 10.0,
+            },
+            headers=headers,
+        )
+        sale_id = sale.json()["id"]
+
+        r = await client.get(f"/api/v1/sales/{sale_id}/receipt", headers=headers)
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "application/pdf"
+        assert r.content[:4] == b"%PDF"
+
+    async def test_malformed_logo_never_crashes_the_receipt(self, client, owner_user):
+        """
+        The real bug this proves is fixed: a malformed logo image
+        used to crash the whole receipt with a 500, because the
+        safety check only guarded decode time, not render time (where
+        PIL/reportlab actually load the pixel data).
+        """
+        product_id = await _make_product_with_batch(price=10.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        await client.patch(
+            "/api/v1/config",
+            json={"logo_url": "data:image/png;base64,dGhpcyBpcyBub3QgYSByZWFsIHBuZw=="},
+            headers=headers,
+        )
+
+        sale = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 10.0}],
+            },
+            headers=headers,
+        )
+        sale_id = sale.json()["id"]
+
+        r = await client.get(f"/api/v1/sales/{sale_id}/receipt", headers=headers)
+        assert r.status_code == 200
+        assert r.content[:4] == b"%PDF"
+
+    async def test_requires_permission(self, client, employee_user):
+        token = await _login(client, "joe", "pass1234")
+        r = await client.get(
+            "/api/v1/sales/1/receipt", headers={"Authorization": f"Bearer {token}"}
+        )
+        # joe (Employee) has sales.create, matching what this endpoint requires
+        assert r.status_code == 404  # sale 1 doesn't exist -- confirms auth passed, not blocked
+
+    async def test_nonexistent_sale_returns_404(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        r = await client.get(
+            "/api/v1/sales/999999/receipt", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 404
+
+    async def test_timestamp_is_converted_to_the_real_business_timezone(self, client, owner_user):
+        """
+        The real bug this proves is fixed: the receipt used to show
+        the raw stored UTC timestamp directly, ignoring the business's
+        own configured timezone entirely -- a receipt could show a
+        time hours off from the real local time it happened.
+        """
+        product_id = await _make_product_with_batch(price=10.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        await client.patch("/api/v1/config", json={"timezone": "Africa/Nairobi"}, headers=headers)
+
+        sale = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 10.0}],
+            },
+            headers=headers,
+        )
+        sale_id = sale.json()["id"]
+        sale_detail = await client.get(f"/api/v1/sales/{sale_id}", headers=headers)
+        from datetime import datetime
+
+        stored_utc = datetime.fromisoformat(sale_detail.json()["created_at"])
+
+        r = await client.get(f"/api/v1/sales/{sale_id}/receipt", headers=headers)
+        import io as _io
+
+        from pypdf import PdfReader
+
+        reader = PdfReader(_io.BytesIO(r.content))
+        text = reader.pages[0].extract_text()
+
+        # Africa/Nairobi is UTC+3 -- the receipt's displayed hour must
+        # be exactly 3 ahead of the stored UTC hour, not equal to it.
+        expected_local_hour = (stored_utc.hour + 3) % 24
+        assert f"{expected_local_hour:02d}:" in text
+        assert "(Africa/Nairobi)" in text

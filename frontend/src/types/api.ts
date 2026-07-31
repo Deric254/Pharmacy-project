@@ -10,6 +10,7 @@ export interface UserOut {
   permissions: string[]
   is_active: boolean
   must_change_password: boolean
+  terms_accepted: boolean
 }
 
 export interface TokenResponse {
@@ -244,15 +245,17 @@ export interface PaymentRecordRequest {
   notes?: string | null
 }
 
-export interface PurchaseOrderItemCreate {
+export interface QuickPurchaseLine {
   product_id: number
-  quantity_ordered: number
-  unit_cost_expected: number
+  quantity: number
+  batch_number: string
+  expiry_date: string
+  unit_cost: number
 }
 
-export interface PurchaseOrderCreate {
+export interface QuickPurchaseRequest {
   supplier_id: number
-  items: PurchaseOrderItemCreate[]
+  lines: QuickPurchaseLine[]
   notes?: string | null
 }
 
@@ -383,6 +386,24 @@ export interface TopProductEntry {
   name: string
   quantity_sold: number
   revenue: number
+}
+
+export interface RevenuePotentialEntry {
+  product_id: number
+  name: string
+  qty_on_hand: number
+  potential_revenue: number
+  potential_cost: number
+  potential_gross_profit: number
+}
+
+export interface RevenuePotentialOut {
+  total_potential_revenue: number
+  total_potential_cost: number
+  total_potential_gross_profit: number
+  overall_margin_percent: number | null
+  by_product: RevenuePotentialEntry[]
+  caveat: string
 }
 
 export interface KpiDashboardOut {

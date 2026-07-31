@@ -13,6 +13,7 @@ from app.schemas.reports import (
     KpiDashboardOut,
     ProfitReportOut,
     ReceivingDiscrepancyReportOut,
+    RevenuePotentialOut,
     StockTakeHistoryOut,
     TopCustomersOut,
 )
@@ -180,6 +181,15 @@ async def top_customers(
     limit: int = 20,
 ) -> TopCustomersOut:
     return await ReportService(db).top_customers(start_date, end_date, limit)
+
+
+@router.get(
+    "/revenue-potential",
+    response_model=RevenuePotentialOut,
+    dependencies=[Depends(require_permission("reports.view_profit"))],
+)
+async def revenue_potential(db: Annotated[AsyncSession, Depends(get_db)]) -> RevenuePotentialOut:
+    return await ReportService(db).revenue_potential()
 
 
 @router.get("/expired-stock")

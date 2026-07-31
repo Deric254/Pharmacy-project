@@ -126,3 +126,30 @@ class KpiDashboardOut(BaseModel):
     top_products: list[TopProductEntry]
     low_stock_count: int
     expiring_soon_count: int
+
+
+class RevenuePotentialEntry(BaseModel):
+    product_id: int
+    name: str
+    qty_on_hand: int
+    potential_revenue: float
+    potential_cost: float
+    potential_gross_profit: float
+
+
+class RevenuePotentialOut(BaseModel):
+    """
+    A real hypothetical, not a forecast: exactly what would happen if
+    every unit currently in stock sold at today's price, computed
+    entirely from real current stock and real recorded batch costs.
+    Says nothing about *when* this would happen, or whether it will --
+    that depends on real customer demand this system has no way to
+    predict. See its own field for the honest caveat.
+    """
+
+    total_potential_revenue: float
+    total_potential_cost: float
+    total_potential_gross_profit: float
+    overall_margin_percent: float | None
+    by_product: list[RevenuePotentialEntry]
+    caveat: str

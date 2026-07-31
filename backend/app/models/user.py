@@ -34,6 +34,15 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # soft delete
 
+    # Null means never accepted. Every account -- including the very
+    # first owner created during setup -- must accept before reaching
+    # the rest of the app, gated the same way must_change_password is.
+    terms_accepted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    @property
+    def terms_accepted(self) -> bool:
+        return self.terms_accepted_at is not None
+
 
 class UserSession(Base):
     """

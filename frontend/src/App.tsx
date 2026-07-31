@@ -20,6 +20,7 @@ import { AuditLogPage } from './pages/AuditLogPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { UsersPage } from './pages/UsersPage'
 import { BackupsPage } from './pages/BackupsPage'
+import { HelpPage } from './pages/HelpPage'
 import { AiAssistantPage } from './pages/AiAssistantPage'
 
 export function App() {
@@ -165,6 +166,7 @@ export function App() {
               </RequirePermission>
             }
           />
+          <Route path="help" element={<HelpPage />} />
           <Route
             path="ai-assistant"
             element={

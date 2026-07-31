@@ -600,3 +600,34 @@ class TestBusinessContext:
             response = await service.ask(owner_user, AIAskRequest(prompt="test"))
 
         assert response.answer == "ok despite broken context"
+
+
+class TestNoKeyGuidance:
+    """
+    The real gap this closes: before, "no key configured" was a dead
+    end for everyone -- no indication of what to actually do next.
+    Owner/Administrator (can self-serve) get told to add their own
+    key; Employee gets told to escalate, matching the same hierarchy
+    signal (users.manage) already used elsewhere in this codebase.
+    """
+
+    async def test_owner_told_to_add_their_own_key(self, client, owner_user):
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db)
+            response = await service.ask(owner_user, AIAskRequest(prompt="how's business?"))
+        assert "Add an API key" in response.answer
+        assert "escalate" not in response.answer.lower()
+
+    async def test_employee_told_to_escalate_not_self_serve(self, client, employee_user):
+        from sqlalchemy import select as _select
+
+        from app.core.database import AsyncSessionLocal as _Session
+        from app.models.user import User as _User
+
+        async with _Session() as db:
+            result = await db.execute(_select(_User).where(_User.username == "joe"))
+            joe = result.scalar_one()
+            service = AIAssistantService(db)
+            response = await service.ask(joe, AIAskRequest(prompt="how's business?"))
+        assert "owner or administrator" in response.answer.lower()
+        assert "Add an API key" not in response.answer

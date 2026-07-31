@@ -388,6 +388,7 @@ function ReconciliationPanel() {
 }
 
 function ProductManagementPanel({ onChanged }: { onChanged: () => void }) {
+  const formatCurrency = useCurrencyFormatter()
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<ProductOut[]>([])
   const [showCreate, setShowCreate] = useState(false)
@@ -470,7 +471,23 @@ function ProductManagementPanel({ onChanged }: { onChanged: () => void }) {
         {results.map((p) => (
           <li key={p.id} className="flex items-center justify-between px-3 py-2 text-sm">
             <span className={p.is_active ? '' : 'text-ink-soft line-through'}>{p.name}</span>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-4">
+              <span className="figure text-xs text-ink-soft" title="Selling price">
+                Sell {formatCurrency(p.default_selling_price)}
+              </span>
+              <span className="figure text-xs text-ink-soft" title="Buying price (cost)">
+                Buy {p.current_cost !== null ? formatCurrency(p.current_cost) : '—'}
+              </span>
+              <span
+                className={`figure text-xs ${
+                  p.margin_percent !== null && p.margin_percent < 0
+                    ? 'text-stamp-red'
+                    : 'text-stamp-green'
+                }`}
+                title="Margin (profit as % of selling price)"
+              >
+                {p.margin_percent !== null ? `${p.margin_percent.toFixed(0)}% margin` : '—'}
+              </span>
               <button
                 onClick={() => setEditing(p)}
                 className="text-xs text-ink-soft underline decoration-dotted"

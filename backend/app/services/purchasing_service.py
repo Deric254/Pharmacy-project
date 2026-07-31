@@ -32,6 +32,7 @@ from app.models.user import User
 from app.schemas.purchase_order import (
     PurchaseOrderCreate,
     PurchaseOrderOut,
+    QuickPurchaseRequest,
     ReceiveRequest,
     ReceiveResponse,
     ReceivingVarianceOut,
@@ -63,6 +64,83 @@ class PurchasingService:
                     product_id=item.product_id,
                     quantity_ordered=item.quantity_ordered,
                     unit_cost_expected=item.unit_cost_expected,
+                )
+            )
+
+        await self.db.commit()
+        await self.db.refresh(po, attribute_names=["items", "created_at"])
+        return PurchaseOrderOut.model_validate(po)
+
+    async def quick_purchase(self, payload: QuickPurchaseRequest, user: User) -> PurchaseOrderOut:
+        """
+        The direct path: stock that's already physically here, no
+        advance order, no draft/send/in-transit ceremony. Goes
+        straight to a PO that's already RECEIVED -- real batches, real
+        stock movements, real money owed to the supplier -- in one
+        atomic step. Internally this is still a real purchase order
+        (so it shows up in the same history, still contributes to the
+        same supplier balance), it just never sits in an intermediate
+        state along the way.
+        """
+        supplier_result = await self.db.execute(
+            select(Supplier).where(Supplier.id == payload.supplier_id)
+        )
+        if supplier_result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="Supplier not found")
+
+        now = datetime.now(UTC)
+        po = PurchaseOrder(
+            supplier_id=payload.supplier_id,
+            created_by_user_id=user.id,
+            notes=payload.notes,
+            status=PurchaseOrderStatus.RECEIVED,
+            sent_at=now,
+            in_transit_at=now,
+            received_at=now,
+        )
+        self.db.add(po)
+        await self.db.flush()
+
+        total_owed = 0.0
+        for line in payload.lines:
+            batch = MedicineBatch(
+                product_id=line.product_id,
+                batch_number=line.batch_number,
+                expiry_date=line.expiry_date,
+                qty_received=line.quantity,
+                qty_remaining=line.quantity,
+                cost_price=line.unit_cost,
+            )
+            self.db.add(batch)
+            await self.db.flush()
+
+            self.db.add(
+                StockMovement(
+                    batch_id=batch.id,
+                    movement_type=MovementType.PURCHASE,
+                    quantity_delta=line.quantity,
+                    created_by_user_id=user.id,
+                    reference=f"po:{po.id}",
+                )
+            )
+
+            self.db.add(
+                PurchaseOrderItem(
+                    purchase_order_id=po.id,
+                    product_id=line.product_id,
+                    quantity_ordered=line.quantity,
+                    unit_cost_expected=line.unit_cost,
+                    quantity_received=line.quantity,
+                    unit_cost_actual=line.unit_cost,
+                    batch_id=batch.id,
+                )
+            )
+            total_owed += line.quantity * line.unit_cost
+
+        if total_owed > 0:
+            self.db.add(
+                SupplierTransaction(
+                    supplier_id=payload.supplier_id, amount=total_owed, reference=f"po:{po.id}"
                 )
             )
 

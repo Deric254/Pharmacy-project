@@ -7,6 +7,7 @@ FastAPI at all — services are plain async functions/classes.
 
 import secrets
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -322,6 +323,19 @@ class AuthService:
                 user_id=user.id,
                 user_name_snapshot=user.full_name,
                 action="password.changed",
+                entity_type="user",
+                entity_id=str(user.id),
+            )
+        )
+        await self.db.commit()
+
+    async def accept_terms(self, user: User) -> None:
+        user.terms_accepted_at = datetime.now(UTC)
+        self.db.add(
+            AuditLog(
+                user_id=user.id,
+                user_name_snapshot=user.full_name,
+                action="terms.accepted",
                 entity_type="user",
                 entity_id=str(user.id),
             )

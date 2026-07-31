@@ -670,3 +670,76 @@ class TestTopCustomers:
             headers=headers,
         )
         assert r.json()["entries"] == []
+
+
+class TestRevenuePotential:
+    """
+    An honest hypothetical, not a forecast: exactly what selling every
+    unit currently in stock at today's price would add up to, computed
+    entirely from real stock and real recorded cost. The properties
+    that matter: the math is exactly right, it's gated behind the same
+    profit-visibility permission as everything else profit-related,
+    and products with zero stock don't inflate the total with nothing.
+    """
+
+    async def test_math_is_exactly_right(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        product = await client.post(
+            "/api/v1/products",
+            json={"name": "Revenue Potential Product", "default_selling_price": 20.0},
+            headers=headers,
+        )
+        product_id = product.json()["id"]
+        await client.post(
+            f"/api/v1/products/{product_id}/batches",
+            json={
+                "batch_number": "RP1",
+                "expiry_date": "2027-06-30",
+                "qty_received": 50,
+                "cost_price": 8.0,
+            },
+            headers=headers,
+        )
+
+        r = await client.get("/api/v1/reports/revenue-potential", headers=headers)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total_potential_revenue"] == 1000.0  # 50 * 20.0
+        assert body["total_potential_cost"] == 400.0  # 50 * 8.0
+        assert body["total_potential_gross_profit"] == 600.0
+        assert round(body["overall_margin_percent"], 1) == 60.0
+        assert "not a prediction" in body["caveat"].lower() or "not a prediction" in body["caveat"]
+        entry = next(e for e in body["by_product"] if e["product_id"] == product_id)
+        assert entry["qty_on_hand"] == 50
+        assert entry["potential_revenue"] == 1000.0
+
+    async def test_zero_stock_products_are_excluded(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        await client.post(
+            "/api/v1/products",
+            json={"name": "No Stock Product", "default_selling_price": 10.0},
+            headers=headers,
+        )
+
+        r = await client.get("/api/v1/reports/revenue-potential", headers=headers)
+        names = [e["name"] for e in r.json()["by_product"]]
+        assert "No Stock Product" not in names
+
+    async def test_requires_view_profit_permission(self, client, administrator_user):
+        token = await _login(client, "sam", "AdminPass1")
+        r = await client.get(
+            "/api/v1/reports/revenue-potential", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 403
+
+    async def test_no_stock_at_all_returns_zero_not_an_error(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        r = await client.get(
+            "/api/v1/reports/revenue-potential", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 200
+        assert r.json()["total_potential_revenue"] == 0.0
+        assert r.json()["overall_margin_percent"] is None

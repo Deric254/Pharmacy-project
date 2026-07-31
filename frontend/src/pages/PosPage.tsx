@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { productsApi, salesApi } from '../api/domain'
+import { customersApi, productsApi, salesApi } from '../api/domain'
 import { useCurrencyFormatter } from '../lib/currency'
-import type { PaymentMethod, ProductOut, SaleOut } from '../types/api'
+import type { CustomerOut, PaymentMethod, ProductOut, SaleOut } from '../types/api'
 import { ApiError } from '../api/client'
 
 interface CartLine {
@@ -20,6 +20,10 @@ export function PosPage() {
   const [error, setError] = useState<string | null>(null)
   const [receipt, setReceipt] = useState<SaleOut | null>(null)
   const [checkingOut, setCheckingOut] = useState(false)
+  const [customerPhone, setCustomerPhone] = useState('')
+  const [attachedCustomer, setAttachedCustomer] = useState<CustomerOut | null>(null)
+  const [customerLookupError, setCustomerLookupError] = useState<string | null>(null)
+  const [lookingUpCustomer, setLookingUpCustomer] = useState(false)
 
   const estimatedSubtotal = cart.reduce(
     (sum, line) => sum + line.product.default_selling_price * line.quantity,
@@ -39,9 +43,22 @@ export function PosPage() {
     }
     setSearching(true)
     setError(null)
+    const trimmed = query.trim()
     const timer = setTimeout(() => {
       productsApi
-        .list(query.trim())
+        .list(trimmed)
+        .then(async (nameResults) => {
+          if (nameResults.length > 0) return nameResults
+          // Nothing matched by name -- try an exact barcode match
+          // before giving up, since a scanned code often has nothing
+          // in common with the product's name text.
+          try {
+            const byBarcode = await productsApi.getByBarcode(trimmed)
+            return [byBarcode]
+          } catch {
+            return nameResults // genuinely no match either way
+          }
+        })
         .then(setResults)
         .catch((err: unknown) => {
           setError(err instanceof ApiError ? err.message : 'Search failed.')
@@ -73,6 +90,25 @@ export function PosPage() {
 
   const submittingRef = useRef(false)
 
+  async function handleCustomerLookup() {
+    if (!customerPhone.trim()) return
+    setLookingUpCustomer(true)
+    setCustomerLookupError(null)
+    try {
+      const customer = await customersApi.getByPhone(customerPhone.trim())
+      setAttachedCustomer(customer)
+    } catch (err) {
+      setAttachedCustomer(null)
+      setCustomerLookupError(
+        err instanceof ApiError && err.status === 404
+          ? 'No customer with that phone number. Sale will be walk-in unless you register them.'
+          : 'Could not look up that customer.',
+      )
+    } finally {
+      setLookingUpCustomer(false)
+    }
+  }
+
   async function handleCheckout() {
     if (cart.length === 0) return
     if (submittingRef.current) return // synchronous guard against a very fast double-click
@@ -84,13 +120,15 @@ export function PosPage() {
         items: cart.map((l) => ({ product_id: l.product.id, quantity: l.quantity })),
         payments: [{ method: paymentMethod, amount: estimatedTotal }],
         discount_amount: discount,
-        customer_id: null,
+        customer_id: attachedCustomer?.id ?? null,
       })
       setReceipt(sale)
       setCart([])
       setDiscount(0)
       setResults([])
       setQuery('')
+      setAttachedCustomer(null)
+      setCustomerPhone('')
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Checkout failed. Nothing was charged.')
     } finally {
@@ -111,7 +149,7 @@ export function PosPage() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search by name or scan barcode"
+            placeholder="Search products"
             className="w-full border border-rule bg-panel px-3 py-2 outline-none focus-visible:border-brass"
             autoFocus
           />
@@ -189,6 +227,52 @@ export function PosPage() {
 
         <div className="border-t border-rule p-4">
           <label className="block text-xs uppercase tracking-wide text-ink-soft">
+            Customer (optional)
+          </label>
+          {attachedCustomer ? (
+            <div className="mt-1 flex items-center justify-between border border-rule bg-panel px-2 py-1.5 text-sm">
+              <span>{attachedCustomer.name}</span>
+              <button
+                onClick={() => {
+                  setAttachedCustomer(null)
+                  setCustomerPhone('')
+                }}
+                className="text-xs text-stamp-red underline decoration-dotted"
+              >
+                Remove
+              </button>
+            </div>
+          ) : (
+            <div className="mt-1 flex gap-2">
+              <input
+                value={customerPhone}
+                onChange={(e) => {
+                  setCustomerPhone(e.target.value)
+                  setCustomerLookupError(null)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    void handleCustomerLookup()
+                  }
+                }}
+                placeholder="Phone number"
+                className="flex-1 border border-rule bg-paper px-2 py-1.5 text-sm"
+              />
+              <button
+                onClick={() => void handleCustomerLookup()}
+                disabled={lookingUpCustomer || !customerPhone.trim()}
+                className="border border-rule px-3 py-1.5 text-sm text-ink-soft hover:border-brass disabled:opacity-50"
+              >
+                {lookingUpCustomer ? 'Looking up…' : 'Find'}
+              </button>
+            </div>
+          )}
+          {customerLookupError && (
+            <p className="mt-1 text-xs text-stamp-red">{customerLookupError}</p>
+          )}
+
+          <label className="mt-3 block text-xs uppercase tracking-wide text-ink-soft">
             Discount
             <input
               type="number"
@@ -236,6 +320,57 @@ export function PosPage() {
 
 function Receipt({ sale, onNewSale }: { sale: SaleOut; onNewSale: () => void }) {
   const formatCurrency = useCurrencyFormatter()
+  const [busy, setBusy] = useState(false)
+
+  async function fetchReceiptBlob(): Promise<Blob> {
+    return salesApi.receiptBlob(sale.id)
+  }
+
+  async function handlePrintOrPreview() {
+    setBusy(true)
+    try {
+      const blob = await fetchReceiptBlob()
+      const url = URL.createObjectURL(blob)
+      window.open(url, '_blank')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleDownload() {
+    setBusy(true)
+    try {
+      const blob = await fetchReceiptBlob()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `Receipt-${sale.id}.pdf`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleShare() {
+    setBusy(true)
+    try {
+      const blob = await fetchReceiptBlob()
+      const file = new File([blob], `Receipt-${sale.id}.pdf`, { type: 'application/pdf' })
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: `Receipt #${sale.id}` })
+      } else {
+        // No native share support on this device -- download is the
+        // fallback so the receipt is still in the person's hands.
+        await handleDownload()
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="grid min-h-screen place-items-center bg-paper p-6">
       <div className="ledger-panel w-full max-w-sm p-6">
@@ -245,9 +380,12 @@ function Receipt({ sale, onNewSale }: { sale: SaleOut; onNewSale: () => void }) 
         </p>
         <ul className="mt-4 space-y-1">
           {sale.items.map((item) => (
-            <li key={`${item.product_id}-${item.batch_id}`} className="ruled-row flex justify-between py-1 text-sm">
+            <li
+              key={`${item.product_id}-${item.batch_id}`}
+              className="ruled-row flex justify-between py-1 text-sm"
+            >
               <span>
-                {item.quantity} × product #{item.product_id}
+                {item.quantity} × {item.product_name}
               </span>
               <span className="figure">{formatCurrency(item.line_total)}</span>
             </li>
@@ -267,9 +405,34 @@ function Receipt({ sale, onNewSale }: { sale: SaleOut; onNewSale: () => void }) 
             <span className="figure">{formatCurrency(sale.total_amount)}</span>
           </div>
         </div>
+
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          <button
+            onClick={() => void handlePrintOrPreview()}
+            disabled={busy}
+            className="border border-rule py-1.5 text-xs text-ink-soft hover:border-brass disabled:opacity-50"
+          >
+            Print
+          </button>
+          <button
+            onClick={() => void handleDownload()}
+            disabled={busy}
+            className="border border-rule py-1.5 text-xs text-ink-soft hover:border-brass disabled:opacity-50"
+          >
+            Download
+          </button>
+          <button
+            onClick={() => void handleShare()}
+            disabled={busy}
+            className="border border-rule py-1.5 text-xs text-ink-soft hover:border-brass disabled:opacity-50"
+          >
+            Share
+          </button>
+        </div>
+
         <button
           onClick={onNewSale}
-          className="mt-6 w-full border border-ink bg-ink py-2 font-medium text-paper"
+          className="mt-3 w-full border border-ink bg-ink py-2 font-medium text-paper"
         >
           Start next sale
         </button>

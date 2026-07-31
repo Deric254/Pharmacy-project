@@ -1,4 +1,4 @@
-import { api, downloadFile, uploadFile } from './client'
+import { api, downloadFile, fetchBlob, uploadFile } from './client'
 import type {
   AdjustmentOut,
   AdjustmentRequest,
@@ -14,8 +14,8 @@ import type {
   ProductOut,
   ProductUpdate,
   PurchaseHistoryEntryOut,
-  PurchaseOrderCreate,
   PurchaseOrderOut,
+  QuickPurchaseRequest,
   ReceiveRequest,
   ReceiveResponse,
   ReconcileRequest,
@@ -56,6 +56,7 @@ export const salesApi = {
   refund: (saleId: number, payload: RefundRequest) =>
     api.post<RefundOut>(`/sales/${saleId}/refunds`, payload),
   listRefunds: (saleId: number) => api.get<RefundOut[]>(`/sales/${saleId}/refunds`),
+  receiptBlob: (saleId: number) => fetchBlob(`/sales/${saleId}/receipt`),
 }
 
 export const inventoryApi = {
@@ -78,8 +79,8 @@ export const suppliersApi = {
 export const purchaseOrdersApi = {
   kanban: () => api.get<KanbanBoard>('/purchase-orders/kanban'),
   get: (id: number) => api.get<PurchaseOrderOut>(`/purchase-orders/${id}`),
-  create: (payload: PurchaseOrderCreate) =>
-    api.post<PurchaseOrderOut>('/purchase-orders', payload),
+  quickPurchase: (payload: QuickPurchaseRequest) =>
+    api.post<PurchaseOrderOut>('/purchase-orders/quick-purchase', payload),
   send: (id: number) => api.post<PurchaseOrderOut>(`/purchase-orders/${id}/send`),
   markInTransit: (id: number) =>
     api.post<PurchaseOrderOut>(`/purchase-orders/${id}/mark-in-transit`),
@@ -87,6 +88,12 @@ export const purchaseOrdersApi = {
     api.post<ReceiveResponse>(`/purchase-orders/${id}/receive`, payload),
   reconcile: (id: number, payload: ReconcileRequest) =>
     api.post<PurchaseOrderOut>(`/purchase-orders/${id}/reconcile`, payload),
+  downloadImportTemplate: () =>
+    downloadFile('/purchase-orders/import-template', 'purchase-order-import-template.xlsx'),
+  importFromExcel: (file: File, supplierId: number) =>
+    uploadFile<PurchaseOrderOut>('/purchase-orders/import', file, {
+      supplier_id: String(supplierId),
+    }),
 }
 
 export const customersApi = {
@@ -97,6 +104,10 @@ export const customersApi = {
   create: (payload: CustomerCreate) => api.post<CustomerOut>('/customers', payload),
   purchaseHistory: (id: number) =>
     api.get<PurchaseHistoryEntryOut[]>(`/customers/${id}/purchase-history`),
+  downloadImportTemplate: () =>
+    downloadFile('/customers/import-template', 'customer-import-template.xlsx'),
+  importFromExcel: (file: File) =>
+    uploadFile<{ created: number }>('/customers/import', file),
 }
 
 export const stockTakesApi = {

@@ -491,3 +491,34 @@ class TestLoginRateLimiting:
             "/api/v1/auth/login", json={"username": "joe", "password": "wrong"}
         )
         assert other.status_code == 401  # not 429
+
+
+class TestAcceptTerms:
+    async def test_new_user_has_not_accepted_terms(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        r = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert r.json()["terms_accepted"] is False
+
+    async def test_accepting_terms_updates_the_flag(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        r = await client.post("/api/v1/auth/accept-terms", headers=headers)
+        assert r.status_code == 204
+
+        me = await client.get("/api/v1/auth/me", headers=headers)
+        assert me.json()["terms_accepted"] is True
+
+    async def test_accept_terms_requires_authentication(self, client, owner_user):
+        r = await client.post("/api/v1/auth/accept-terms")
+        assert r.status_code == 401
+
+    async def test_acceptance_is_logged_to_the_audit_trail(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        await client.post("/api/v1/auth/accept-terms", headers=headers)
+
+        logs = await client.get(
+            "/api/v1/audit-logs", params={"action": "terms.accepted"}, headers=headers
+        )
+        assert logs.json()["total"] == 1

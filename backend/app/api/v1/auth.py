@@ -141,4 +141,13 @@ async def read_current_user(current_user: Annotated[User, Depends(get_current_us
         permissions=sorted(p.code for p in current_user.role.permissions),
         is_active=current_user.is_active,
         must_change_password=current_user.must_change_password,
+        terms_accepted=current_user.terms_accepted,
     )
+
+
+@router.post("/accept-terms", status_code=204)
+async def accept_terms(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    await AuthService(db).accept_terms(current_user)

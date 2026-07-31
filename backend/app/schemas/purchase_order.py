@@ -81,3 +81,23 @@ class ReconcileRequest(BaseModel):
 class ReceiveResponse(BaseModel):
     purchase_order: PurchaseOrderOut
     variances: list[ReceivingVarianceOut]
+
+
+class QuickPurchaseLine(BaseModel):
+    """
+    One line of stock that's already physically here -- no separate
+    "ordered" vs "received" distinction, since there was no advance
+    order. What you type in is what you got.
+    """
+
+    product_id: int
+    quantity: PositiveQuantity
+    batch_number: str = Field(min_length=1, max_length=80)
+    expiry_date: date
+    unit_cost: Money
+
+
+class QuickPurchaseRequest(BaseModel):
+    supplier_id: int
+    lines: list[QuickPurchaseLine] = Field(min_length=1)
+    notes: str | None = Field(default=None, max_length=255)

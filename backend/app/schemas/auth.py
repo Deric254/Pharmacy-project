@@ -42,5 +42,6 @@ class UserOut(BaseModel):
     permissions: list[str]
     is_active: bool
     must_change_password: bool
+    terms_accepted: bool
 
     model_config = {"from_attributes": True}

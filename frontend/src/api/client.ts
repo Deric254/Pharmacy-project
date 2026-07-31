@@ -135,7 +135,11 @@ export const api = {
   delete: <T>(path: string) => apiRequest<T>(path, { method: 'DELETE' }),
 }
 
-async function rawUpload<T>(path: string, file: File): Promise<T> {
+async function rawUpload<T>(
+  path: string,
+  file: File,
+  extraFields?: Record<string, string>,
+): Promise<T> {
   const headers: Record<string, string> = {}
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`
   // Deliberately no Content-Type here -- the browser sets multipart/
@@ -144,6 +148,9 @@ async function rawUpload<T>(path: string, file: File): Promise<T> {
 
   const formData = new FormData()
   formData.append('file', file)
+  for (const [key, value] of Object.entries(extraFields ?? {})) {
+    formData.append(key, value)
+  }
 
   const res = await fetch(`/api/v1${path}`, {
     method: 'POST',
@@ -168,14 +175,18 @@ async function rawUpload<T>(path: string, file: File): Promise<T> {
   return parsedBody as T
 }
 
-export async function uploadFile<T>(path: string, file: File): Promise<T> {
+export async function uploadFile<T>(
+  path: string,
+  file: File,
+  extraFields?: Record<string, string>,
+): Promise<T> {
   try {
-    return await rawUpload<T>(path, file)
+    return await rawUpload<T>(path, file, extraFields)
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) {
       const refreshed = await doRefresh()
       if (refreshed) {
-        return await rawUpload<T>(path, file)
+        return await rawUpload<T>(path, file, extraFields)
       }
     }
     throw err
@@ -238,4 +249,23 @@ export async function downloadExport(
 
 export async function downloadFile(path: string, fallbackFilename: string): Promise<void> {
   await fetchAndDownload(`/api/v1${path}`, fallbackFilename)
+}
+
+export async function fetchBlob(path: string): Promise<Blob> {
+  const headers: Record<string, string> = {}
+  const token = getAccessToken()
+  if (token) headers.Authorization = `Bearer ${token}`
+
+  const res = await fetch(`/api/v1${path}`, { headers, credentials: 'include' })
+  if (!res.ok) {
+    let message = res.statusText
+    try {
+      const body = (await res.json()) as { detail?: string }
+      if (body.detail) message = body.detail
+    } catch {
+      // response wasn't JSON -- keep the statusText fallback
+    }
+    throw new ApiError(res.status, message, null)
+  }
+  return res.blob()
 }

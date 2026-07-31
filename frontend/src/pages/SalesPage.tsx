@@ -5,6 +5,7 @@ import { ApiError } from '../api/client'
 import { Modal } from '../components/Modal'
 import type {
   PaymentMethod,
+  RefundOut,
   RefundReason,
   SaleListItemOut,
   SaleOut,
@@ -147,6 +148,7 @@ function SaleDetailModal({
 }) {
   const formatCurrency = useCurrencyFormatter()
   const [sale, setSale] = useState<SaleOut | null>(null)
+  const [refunds, setRefunds] = useState<RefundOut[]>([])
   const [error, setError] = useState<string | null>(null)
   const [showRefund, setShowRefund] = useState(false)
 
@@ -157,7 +159,18 @@ function SaleDetailModal({
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : 'Could not load this sale.')
       })
+    salesApi.listRefunds(saleId).then(setRefunds).catch(() => setRefunds([]))
   }, [saleId])
+
+  async function handleViewReceipt(id: number) {
+    try {
+      const blob = await salesApi.receiptBlob(id)
+      const url = URL.createObjectURL(blob)
+      window.open(url, '_blank')
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not load the receipt.')
+    }
+  }
 
   if (showRefund && sale) {
     return (
@@ -189,9 +202,42 @@ function SaleDetailModal({
             <span>Total</span>
             <span className="figure">{formatCurrency(sale.total_amount)}</span>
           </div>
+
+          {refunds.length > 0 && (
+            <div className="mt-4">
+              <p className="mb-1 text-xs uppercase tracking-wide text-ink-soft">
+                Already refunded
+              </p>
+              <ul className="divide-y divide-rule border border-rule">
+                {refunds.map((r) => (
+                  <li key={r.id} className="px-3 py-2 text-sm">
+                    <div className="flex justify-between">
+                      <span>{new Date(r.created_at).toLocaleString()}</span>
+                      <span className="figure text-stamp-red">
+                        -{formatCurrency(r.total_amount)}
+                      </span>
+                    </div>
+                    {r.items.map((ri) => (
+                      <p key={ri.sale_item_id} className="text-xs text-ink-soft">
+                        {ri.quantity} unit{ri.quantity === 1 ? '' : 's'}
+                        {ri.restocked ? ' (returned to stock)' : ' (not restocked)'}
+                      </p>
+                    ))}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           <div className="mt-4 flex justify-end gap-2">
             <button onClick={onClose} className="border border-rule px-4 py-2 text-sm">
               Close
+            </button>
+            <button
+              onClick={() => void handleViewReceipt(sale.id)}
+              className="border border-rule px-4 py-2 text-sm text-ink-soft hover:border-brass"
+            >
+              Receipt
             </button>
             <button
               onClick={() => setShowRefund(true)}

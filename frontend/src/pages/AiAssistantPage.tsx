@@ -12,13 +12,6 @@ export function AiAssistantPage() {
   const [showAddKey, setShowAddKey] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
 
-  const [prompt, setPrompt] = useState('')
-  const [asking, setAsking] = useState(false)
-  const [conversation, setConversation] = useState<
-    { prompt: string; answer: string; providerUsed: string | null; fallbackUsed: boolean }[]
-  >([])
-  const [askError, setAskError] = useState<string | null>(null)
-
   useEffect(() => {
     let cancelled = false
     aiApi
@@ -37,31 +30,6 @@ export function AiAssistantPage() {
     }
   }, [reloadKey])
 
-  async function handleAsk(e: FormEvent) {
-    e.preventDefault()
-    if (!prompt.trim()) return
-    setAsking(true)
-    setAskError(null)
-    const askedPrompt = prompt
-    try {
-      const response = await aiApi.ask(askedPrompt)
-      setConversation((prev) => [
-        ...prev,
-        {
-          prompt: askedPrompt,
-          answer: response.answer,
-          providerUsed: response.provider_used,
-          fallbackUsed: response.fallback_used,
-        },
-      ])
-      setPrompt('')
-    } catch (err) {
-      setAskError(err instanceof ApiError ? err.message : 'Could not reach any provider.')
-    } finally {
-      setAsking(false)
-    }
-  }
-
   async function handleDeleteKey(id: number) {
     try {
       await aiApi.deleteKey(id)
@@ -73,11 +41,12 @@ export function AiAssistantPage() {
 
   return (
     <div className="p-6">
-      <h1 className="mb-1 font-display text-2xl text-ink">AI Assistant</h1>
+      <h1 className="mb-1 font-display text-2xl text-ink">AI Settings</h1>
       <p className="mb-6 text-sm text-ink-soft">
         Bring your own API key from any supported provider. Keys are encrypted at rest and never
         shown again after you save them — only a masked preview. If your first-priority provider
-        is unavailable, the next one by priority is tried automatically.
+        is unavailable, the next one by priority is tried automatically. Once a key is added, the
+        assistant is available from the icon in the corner of every page.
       </p>
 
       {error && (
@@ -86,7 +55,7 @@ export function AiAssistantPage() {
         </p>
       )}
 
-      <section className="mb-6 ledger-panel p-4">
+      <section className="ledger-panel p-4">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-xs uppercase tracking-wide text-ink-soft">Provider keys</h2>
           <button
@@ -120,42 +89,6 @@ export function AiAssistantPage() {
             </li>
           )}
         </ul>
-      </section>
-
-      <section className="ledger-panel p-4">
-        <h2 className="mb-3 text-xs uppercase tracking-wide text-ink-soft">Ask</h2>
-        <div className="mb-3 space-y-3">
-          {conversation.map((turn, i) => (
-            <div key={i} className="space-y-1">
-              <p className="text-sm font-medium">{turn.prompt}</p>
-              <p className="border-l-2 border-brass pl-2 text-sm text-ink-soft">{turn.answer}</p>
-              <p className="text-xs text-ink-soft">
-                {turn.providerUsed
-                  ? turn.fallbackUsed
-                    ? `Answered by ${turn.providerUsed} (fell back from your first-priority provider)`
-                    : `Answered by ${turn.providerUsed}`
-                  : 'No provider responded -- check your keys are still valid'}
-              </p>
-            </div>
-          ))}
-        </div>
-        <form onSubmit={handleAsk} className="flex gap-2">
-          <input
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder={keys.length === 0 ? 'Add a provider key first' : 'Ask something...'}
-            disabled={keys.length === 0}
-            className="flex-1 border border-rule bg-paper px-3 py-2 text-sm disabled:opacity-50"
-          />
-          <button
-            type="submit"
-            disabled={asking || keys.length === 0}
-            className="border border-ink bg-ink px-4 py-2 text-sm text-paper disabled:opacity-50"
-          >
-            {asking ? 'Asking…' : 'Ask'}
-          </button>
-        </form>
-        {askError && <p className="mt-2 text-sm text-stamp-red">{askError}</p>}
       </section>
 
       {showAddKey && (

@@ -47,9 +47,13 @@ def _default_adapter_factory(provider: AIProviderName, api_key: str) -> AIProvid
     return _DEFAULT_ADAPTER_CLASSES[provider](api_key=api_key)
 
 
-_NO_KEYS_MESSAGE = (
+_NO_KEYS_MESSAGE_SELF_SERVE = (
     "No AI provider is configured yet. Add an API key (OpenAI, Claude, Gemini, "
-    "DeepSeek, or NVIDIA) in AI settings to start using the assistant."
+    "DeepSeek, or NVIDIA) in AI settings to start getting real answers."
+)
+_NO_KEYS_MESSAGE_ESCALATE = (
+    "No AI provider is configured for your account yet. Ask your pharmacy owner or "
+    "administrator to add an AI key so you can use the assistant."
 )
 _ALL_FAILED_MESSAGE = (
     "AI is temporarily unavailable right now (all configured providers failed to "
@@ -111,7 +115,10 @@ class AIAssistantService:
         keys = list(result.scalars().all())
 
         if not keys:
-            return AIAskResponse(answer=_NO_KEYS_MESSAGE, provider_used=None, fallback_used=False)
+            user_permission_codes = {p.code for p in user.role.permissions}
+            can_self_serve = "users.manage" in user_permission_codes
+            message = _NO_KEYS_MESSAGE_SELF_SERVE if can_self_serve else _NO_KEYS_MESSAGE_ESCALATE
+            return AIAskResponse(answer=message, provider_used=None, fallback_used=False)
 
         # Real business numbers always included, computed fresh for
         # this exact question -- whatever the client sent in

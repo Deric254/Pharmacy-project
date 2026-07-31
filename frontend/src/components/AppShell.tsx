@@ -1,4 +1,6 @@
-import { NavLink, Outlet } from 'react-router-dom'
+import { useState } from 'react'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { FloatingAiWidget } from './FloatingAiWidget'
 import { useAuthStore } from '../auth/store'
 import { useConfigStore } from '../config/store'
 import { useUpdateCheck, type UpdateInfo } from '../lib/updateCheck'
@@ -31,7 +33,7 @@ const NAV_SECTIONS: NavSection[] = [
       { to: '/stock-takes', label: 'Stock Takes', permission: 'stocktake.perform' },
       { to: '/customers', label: 'Customers', permission: 'sales.create' },
       { to: '/reports', label: 'Reports', permission: 'reports.view' },
-      { to: '/ai-assistant', label: 'AI Assistant', permission: 'ai.use' },
+      { to: '/ai-assistant', label: 'AI Settings', permission: 'ai.use' },
     ],
   },
   {
@@ -42,6 +44,7 @@ const NAV_SECTIONS: NavSection[] = [
       { to: '/users', label: 'Staff Accounts', permission: 'users.manage' },
       { to: '/audit', label: 'Audit Trail', permission: 'audit.view' },
       { to: '/backups', label: 'Backups', permission: 'backups.manage' },
+      { to: '/help', label: 'Help', permission: null },
     ],
   },
 ]
@@ -52,6 +55,8 @@ export function AppShell() {
   const logout = useAuthStore((s) => s.logout)
   const businessName = useConfigStore((s) => s.config?.business_name ?? 'Pharmacy System')
   const { info: updateInfo } = useUpdateCheck()
+  const location = useLocation()
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({})
 
   const visibleSections = NAV_SECTIONS.map((section) => ({
     ...section,
@@ -68,33 +73,58 @@ export function AppShell() {
           <span className="truncate font-display text-base">{businessName}</span>
         </div>
         <nav className="flex-1 space-y-3 p-2">
-          {visibleSections.map((section) => (
-            <div key={section.label ?? 'root'}>
-              {section.label && (
-                <p className="px-3 pb-1 text-xs uppercase tracking-wide text-ink-soft">
-                  {section.label}
-                </p>
-              )}
-              <div className="space-y-0.5">
-                {section.items.map((item) => (
-                  <NavLink
-                    key={item.to}
-                    to={item.to}
-                    end={item.to === '/'}
-                    className={({ isActive }) =>
-                      `block px-3 py-2 text-sm ${
-                        isActive
-                          ? 'border-l-2 border-brass bg-paper font-medium text-ink'
-                          : 'border-l-2 border-transparent text-ink-soft hover:bg-paper'
-                      }`
+          {visibleSections.map((section) => {
+            const sectionKey = section.label ?? 'root'
+            const containsActivePage = section.items.some(
+              (item) =>
+                location.pathname === item.to ||
+                (item.to !== '/' && location.pathname.startsWith(`${item.to}/`)),
+            )
+            const isCollapsed = Boolean(collapsedSections[sectionKey]) && !containsActivePage
+
+            return (
+              <div key={sectionKey}>
+                {section.label && (
+                  <button
+                    onClick={() =>
+                      setCollapsedSections((prev) => ({
+                        ...prev,
+                        [sectionKey]: !prev[sectionKey],
+                      }))
                     }
+                    className="flex w-full items-center justify-between px-3 pb-1 text-xs font-bold uppercase tracking-wide text-ink hover:text-brass"
                   >
-                    {item.label}
-                  </NavLink>
-                ))}
+                    <span>{section.label}</span>
+                    <span
+                      className={`text-ink-soft transition-transform ${isCollapsed ? '-rotate-90' : ''}`}
+                    >
+                      ▾
+                    </span>
+                  </button>
+                )}
+                {!isCollapsed && (
+                  <div className="space-y-0.5">
+                    {section.items.map((item) => (
+                      <NavLink
+                        key={item.to}
+                        to={item.to}
+                        end={item.to === '/'}
+                        className={({ isActive }) =>
+                          `block px-3 py-2 text-sm ${
+                            isActive
+                              ? 'border-l-2 border-brass bg-paper font-medium text-ink'
+                              : 'border-l-2 border-transparent text-ink-soft hover:bg-paper'
+                          }`
+                        }
+                      >
+                        {item.label}
+                      </NavLink>
+                    ))}
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            )
+          })}
         </nav>
         <div className="border-t border-rule p-3">
           <p className="truncate text-sm font-medium">{user?.full_name}</p>
@@ -113,6 +143,7 @@ export function AppShell() {
         {updateInfo && <UpdateBanner info={updateInfo} />}
         <Outlet />
       </main>
+      {hasPermission('ai.use') && <FloatingAiWidget />}
     </div>
   )
 }

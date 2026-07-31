@@ -1,11 +1,17 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, UploadFile
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.rbac import require_permission
 from app.schemas.customer import CustomerCreate, CustomerOut, PurchaseHistoryEntryOut
+from app.schemas.product import BulkImportResult
+from app.services.customer_import_service import (
+    bulk_import_customers,
+    generate_customer_import_template,
+)
 from app.services.customer_service import CustomerService
 from app.services.report_export_service import ExportFormat, build_export_response
 
@@ -15,6 +21,34 @@ from app.services.report_export_service import ExportFormat, build_export_respon
 # module commit message for the reasoning against adding a separate
 # customers.manage permission for this scope.
 router = APIRouter(prefix="/customers", tags=["customers"])
+
+_EXCEL_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@router.get(
+    "/import-template",
+    dependencies=[Depends(require_permission("sales.create"))],
+)
+async def download_customer_import_template() -> Response:
+    content = generate_customer_import_template()
+    return Response(
+        content=content,
+        media_type=_EXCEL_MEDIA_TYPE,
+        headers={"Content-Disposition": 'attachment; filename="customer-import-template.xlsx"'},
+    )
+
+
+@router.post(
+    "/import",
+    response_model=BulkImportResult,
+    status_code=201,
+    dependencies=[Depends(require_permission("sales.create"))],
+)
+async def import_customers(
+    file: UploadFile, db: Annotated[AsyncSession, Depends(get_db)]
+) -> BulkImportResult:
+    file_bytes = await file.read()
+    return await bulk_import_customers(db, file_bytes)
 
 
 @router.get("", dependencies=[Depends(require_permission("sales.create"))])

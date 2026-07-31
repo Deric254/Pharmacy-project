@@ -455,3 +455,166 @@ class TestConcurrentTransitions:
         status_codes = [r.status_code for r in results if not isinstance(r, Exception)]
         assert status_codes.count(200) == 1
         assert status_codes.count(400) == 1
+
+
+class TestQuickPurchase:
+    """
+    The direct path: no draft/send/in-transit ceremony, straight to a
+    received purchase order with real stock -- for the common real-
+    world case where the delivery is already here and there was no
+    advance order to track.
+    """
+
+    async def test_goes_straight_to_received_with_real_stock_and_correct_cost(
+        self, client, owner_user
+    ):
+        product_id = await _make_product("Quick Purchase Product")
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        supplier = await client.post(
+            "/api/v1/suppliers", json={"name": "Quick Supplier"}, headers=headers
+        )
+        supplier_id = supplier.json()["id"]
+
+        r = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": supplier_id,
+                "lines": [
+                    {
+                        "product_id": product_id,
+                        "quantity": 50,
+                        "batch_number": "QP-001",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 8.0,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert r.status_code == 201
+        body = r.json()
+        assert body["status"] == "RECEIVED"
+        assert body["received_at"] is not None
+        assert body["sent_at"] is not None
+        assert body["in_transit_at"] is not None
+
+        product = await client.get(f"/api/v1/products/{product_id}", headers=headers)
+        assert product.json()["total_qty_available"] == 50
+        assert product.json()["current_cost"] == 8.0
+
+    async def test_multiple_lines_all_land_correctly(self, client, owner_user):
+        product1 = await _make_product("Quick Multi Product A")
+        product2 = await _make_product("Quick Multi Product B")
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        supplier = await client.post(
+            "/api/v1/suppliers", json={"name": "Multi Supplier"}, headers=headers
+        )
+        supplier_id = supplier.json()["id"]
+
+        r = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": supplier_id,
+                "lines": [
+                    {
+                        "product_id": product1,
+                        "quantity": 30,
+                        "batch_number": "MULTI-A",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 5.0,
+                    },
+                    {
+                        "product_id": product2,
+                        "quantity": 20,
+                        "batch_number": "MULTI-B",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 12.0,
+                    },
+                ],
+            },
+            headers=headers,
+        )
+        assert r.status_code == 201
+        assert len(r.json()["items"]) == 2
+
+        p1 = await client.get(f"/api/v1/products/{product1}", headers=headers)
+        p2 = await client.get(f"/api/v1/products/{product2}", headers=headers)
+        assert p1.json()["total_qty_available"] == 30
+        assert p2.json()["total_qty_available"] == 20
+
+    async def test_creates_a_real_supplier_transaction_for_what_is_owed(self, client, owner_user):
+        product_id = await _make_product("Quick Debt Product")
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        supplier = await client.post(
+            "/api/v1/suppliers", json={"name": "Debt Supplier"}, headers=headers
+        )
+        supplier_id = supplier.json()["id"]
+
+        await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": supplier_id,
+                "lines": [
+                    {
+                        "product_id": product_id,
+                        "quantity": 10,
+                        "batch_number": "DEBT-001",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 15.0,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+
+        supplier_check = await client.get(f"/api/v1/suppliers/{supplier_id}", headers=headers)
+        assert supplier_check.json()["balance_owed"] == 150.0  # 10 * 15.0
+
+    async def test_nonexistent_supplier_rejected_cleanly(self, client, owner_user):
+        product_id = await _make_product("Quick No Supplier Product")
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        r = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": 999999,
+                "lines": [
+                    {
+                        "product_id": product_id,
+                        "quantity": 10,
+                        "batch_number": "B1",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 5.0,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert r.status_code == 404
+
+    async def test_requires_create_po_permission(self, client, employee_user):
+        token = await _login(client, "joe", "pass1234")
+        r = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": 1,
+                "lines": [
+                    {
+                        "product_id": 1,
+                        "quantity": 10,
+                        "batch_number": "B1",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 5.0,
+                    }
+                ],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 403

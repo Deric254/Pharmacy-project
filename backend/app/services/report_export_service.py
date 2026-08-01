@@ -9,7 +9,7 @@ what an SME pharmacy report actually needs.
 """
 
 import io
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from fastapi import Response
 from openpyxl import Workbook
@@ -19,6 +19,11 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
+
+if TYPE_CHECKING:
+    from reportlab.graphics.shapes import Drawing
+
+    from app.schemas.reports import RevenueTrendPoint, TopCustomerEntry, TopProductEntry
 
 ExportFormat = Literal["json", "excel", "pdf"]
 
@@ -135,6 +140,9 @@ def generate_profit_loss_pdf(
     gross_profit: float,
     gross_margin_percent: float,
     currency: str,
+    trend_points: list["RevenueTrendPoint"] | None = None,
+    top_products: list["TopProductEntry"] | None = None,
+    top_customers: list["TopCustomerEntry"] | None = None,
 ) -> bytes:
     """
     A real, honest Gross Profit statement -- not a full P&L. This
@@ -193,6 +201,27 @@ def generate_profit_loss_pdf(
         ),
         Spacer(1, 16),
         table,
+    ]
+
+    if trend_points and len(trend_points) >= 2:
+        elements.append(Spacer(1, 20))
+        elements.append(Paragraph("Revenue trend", subtitle_style))
+        elements.append(Spacer(1, 6))
+        elements.append(_build_trend_chart_drawing(trend_points))
+
+    if top_products:
+        elements.append(Spacer(1, 20))
+        elements.append(Paragraph("Revenue by product", subtitle_style))
+        elements.append(Spacer(1, 6))
+        elements.append(_build_product_bar_chart_drawing(top_products))
+
+    if top_customers and len(top_customers) >= 2:
+        elements.append(Spacer(1, 20))
+        elements.append(Paragraph("Customer revenue (Pareto)", subtitle_style))
+        elements.append(Spacer(1, 6))
+        elements.append(_build_customer_pareto_chart_drawing(top_customers))
+
+    elements.append(
         Paragraph(
             "This statement reflects revenue and cost of goods sold only, computed directly "
             "from real sales and batch cost records. Operating expenses (rent, salaries, "
@@ -200,7 +229,138 @@ def generate_profit_loss_pdf(
             "deliberately not included -- this is a Gross Profit statement, not a complete "
             "net-profit P&amp;L.",
             note_style,
-        ),
-    ]
+        )
+    )
     doc.build(elements)
     return buffer.getvalue()
+
+
+def _build_trend_chart_drawing(trend_points: list["RevenueTrendPoint"]) -> "Drawing":
+    """
+    A real chart drawn with reportlab's own graphics support -- no
+    matplotlib, which would meaningfully bloat the desktop installer
+    for something shipped to many pharmacy owners on modest hardware.
+    Reportlab is already a proven dependency here; this reuses it
+    rather than adding a second, heavier charting stack just for PDFs.
+    """
+    from reportlab.graphics.charts.linecharts import HorizontalLineChart
+    from reportlab.graphics.shapes import Drawing, String
+
+    values = [round(p.revenue, 2) for p in trend_points]
+    labels = [p.period_label for p in trend_points]
+    # Reportlab's own axis renders every label -- with more than a
+    # handful of points that overlaps into an unreadable smear, so
+    # only a spaced-out subset gets an actual label, exactly like the
+    # frontend chart's tick behavior.
+    label_every = max(1, len(labels) // 8)
+    sparse_labels = [lbl if i % label_every == 0 else "" for i, lbl in enumerate(labels)]
+
+    drawing = Drawing(460, 160)
+    chart = HorizontalLineChart()
+    chart.x = 40
+    chart.y = 20
+    chart.width = 400
+    chart.height = 120
+    chart.data = [values]
+    chart.categoryAxis.categoryNames = sparse_labels
+    chart.categoryAxis.labels.fontSize = 6
+    chart.categoryAxis.labels.angle = 30
+    chart.categoryAxis.labels.dy = -8
+    chart.valueAxis.valueMin = 0
+    chart.valueAxis.labelTextFormat = "%0.0f"
+    chart.lines[0].strokeColor = colors.HexColor("#8A6D3B")  # matches the app's brass accent
+    chart.lines[0].strokeWidth = 1.5
+    drawing.add(chart)
+    if not values:
+        drawing.add(String(200, 80, "No data", fontSize=9))
+    return drawing
+
+
+def _build_product_bar_chart_drawing(top_products: list["TopProductEntry"]) -> "Drawing":
+    """
+    Same reportlab-native approach as the trend chart above -- top
+    products by revenue as a vertical bar chart, product names
+    truncated and angled since they're often longer than a chart
+    label comfortably fits.
+    """
+    from reportlab.graphics.charts.barcharts import VerticalBarChart
+    from reportlab.graphics.shapes import Drawing, String
+
+    sorted_products = sorted(top_products, key=lambda p: p.revenue, reverse=True)[:8]
+    values = [round(p.revenue, 2) for p in sorted_products]
+    labels = [p.name[:16] for p in sorted_products]
+
+    drawing = Drawing(460, 170)
+    chart = VerticalBarChart()
+    chart.x = 40
+    chart.y = 40
+    chart.width = 400
+    chart.height = 110
+    chart.data = [values]
+    chart.categoryAxis.categoryNames = labels
+    chart.categoryAxis.labels.fontSize = 6
+    chart.categoryAxis.labels.angle = 30
+    chart.categoryAxis.labels.dy = -8
+    chart.valueAxis.valueMin = 0
+    chart.valueAxis.labelTextFormat = "%0.0f"
+    chart.bars[0].fillColor = colors.HexColor("#8A6D3B")  # matches the app's brass accent
+    drawing.add(chart)
+    if not values:
+        drawing.add(String(200, 90, "No data", fontSize=9))
+    return drawing
+
+
+def _build_customer_pareto_chart_drawing(top_customers: list["TopCustomerEntry"]) -> "Drawing":
+    """
+    Reportlab's graphics charts don't have a built-in dual-axis combo
+    type the way the web chart (bars + a cumulative-percent line) has
+    -- rather than hand-building axis geometry to fake one, each bar
+    is directly labeled with its own cumulative percentage, which
+    reads just as clearly in a static, non-interactive PDF page.
+    """
+    from reportlab.graphics.charts.barcharts import VerticalBarChart
+    from reportlab.graphics.shapes import Drawing, String
+
+    entries = top_customers[:8]
+    values = [round(c.revenue, 2) for c in entries]
+    labels = [c.name[:16] for c in entries]
+
+    drawing = Drawing(460, 180)
+    chart = VerticalBarChart()
+    chart.x = 40
+    chart.y = 40
+    chart.width = 400
+    chart.height = 110
+    chart.data = [values]
+    chart.categoryAxis.categoryNames = labels
+    chart.categoryAxis.labels.fontSize = 6
+    chart.categoryAxis.labels.angle = 30
+    chart.categoryAxis.labels.dy = -8
+    chart.valueAxis.valueMin = 0
+    chart.valueAxis.labelTextFormat = "%0.0f"
+    chart.bars[0].fillColor = colors.HexColor("#8A6D3B")
+    drawing.add(chart)
+
+    if not values:
+        drawing.add(String(200, 90, "No data", fontSize=9))
+        return drawing
+
+    # Cumulative-percent label directly above each bar, in the app's
+    # stamp-red accent, standing in for the web chart's second line.
+    max_value = max(values) or 1.0
+    bar_width = 400 / len(entries)
+    for i, entry in enumerate(entries):
+        bar_height = (entry.revenue / max_value) * 110
+        label_x = 40 + i * bar_width + bar_width / 2
+        label_y = 40 + bar_height + 4
+        drawing.add(
+            String(
+                label_x,
+                label_y,
+                f"{entry.cumulative_percent:.0f}%",
+                fontSize=6,
+                fillColor=colors.HexColor("#A13D2E"),  # matches the app's stamp-red accent
+                textAnchor="middle",
+            )
+        )
+    return drawing

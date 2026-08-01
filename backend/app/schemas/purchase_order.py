@@ -39,6 +39,7 @@ class ReceiveRequest(BaseModel):
 class ReceivingVarianceOut(BaseModel):
     item_id: int
     product_id: int
+    product_name: str
     quantity_ordered: int
     quantity_received: int
     variance: int

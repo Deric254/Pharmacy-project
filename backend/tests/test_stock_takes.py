@@ -564,3 +564,183 @@ class TestClose:
                     break
         await pubsub.unsubscribe(CHANNEL)
         assert found, "Expected a stocktake.closed event with shrinkage data"
+
+
+class TestStockTakeExcelRoundTrip:
+    """
+    The full real workflow: download a template with real system
+    quantities, fill in physical counts offline, upload it, and it
+    applies every count and auto-closes the stock take if everything
+    resolves -- proven live against a real server before these tests
+    were even written, this just makes that proof permanent.
+    """
+
+    async def test_template_has_real_product_names_and_quantities(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        product = await client.post(
+            "/api/v1/products",
+            json={"name": "Excel Roundtrip Product", "default_selling_price": 20.0},
+            headers=headers,
+        )
+        product_id = product.json()["id"]
+        await client.post(
+            f"/api/v1/products/{product_id}/batches",
+            json={
+                "batch_number": "EXCEL1",
+                "expiry_date": "2027-06-30",
+                "qty_received": 75,
+                "cost_price": 8.0,
+            },
+            headers=headers,
+        )
+        st = await client.post(
+            "/api/v1/stock-takes", json={"product_ids": [product_id]}, headers=headers
+        )
+        stock_take_id = st.json()["id"]
+
+        r = await client.get(f"/api/v1/stock-takes/{stock_take_id}/count-template", headers=headers)
+        assert r.status_code == 200
+
+        import io
+
+        import openpyxl
+
+        wb = openpyxl.load_workbook(io.BytesIO(r.content))
+        ws = wb.active
+        headers_row = [c.value for c in ws[1]]
+        assert headers_row[:5] == [
+            "Product name",
+            "Batch number",
+            "Expiry date",
+            "System quantity",
+            "Physical quantity",
+        ]
+        data_row = list(ws.iter_rows(min_row=2, max_row=2, values_only=True))[0]
+        assert data_row[0] == "Excel Roundtrip Product"
+        assert data_row[1] == "EXCEL1"
+        assert data_row[3] == 75
+
+    async def test_upload_applies_counts_and_auto_closes_when_resolved(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        product = await client.post(
+            "/api/v1/products",
+            json={"name": "Excel Autoclose Product", "default_selling_price": 20.0},
+            headers=headers,
+        )
+        product_id = product.json()["id"]
+        await client.post(
+            f"/api/v1/products/{product_id}/batches",
+            json={
+                "batch_number": "AUTOCLOSE1",
+                "expiry_date": "2027-06-30",
+                "qty_received": 100,
+                "cost_price": 5.0,
+            },
+            headers=headers,
+        )
+        st = await client.post(
+            "/api/v1/stock-takes", json={"product_ids": [product_id]}, headers=headers
+        )
+        stock_take_id = st.json()["id"]
+
+        template_resp = await client.get(
+            f"/api/v1/stock-takes/{stock_take_id}/count-template", headers=headers
+        )
+
+        import io
+
+        import openpyxl
+
+        wb = openpyxl.load_workbook(io.BytesIO(template_resp.content))
+        ws = wb.active
+        # Counted 1 unit fewer than expected -- small enough to
+        # self-approve, so the whole stock take should close in one step.
+        ws.cell(row=2, column=5, value=99)
+        buffer = io.BytesIO()
+        wb.save(buffer)
+
+        r = await client.post(
+            f"/api/v1/stock-takes/{stock_take_id}/import-counts",
+            headers=headers,
+            files={
+                "file": (
+                    "counted.xlsx",
+                    buffer.getvalue(),
+                    "application/octet-stream",
+                )
+            },
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "CLOSED"
+        item = body["items"][0]
+        assert item["physical_qty"] == 99
+        assert item["variance"] == -1
+        assert item["approved_at"] is not None
+
+        # The real stock must actually reflect the physical count now.
+        product_check = await client.get(f"/api/v1/products/{product_id}", headers=headers)
+        assert product_check.json()["total_qty_available"] == 99
+
+    async def test_edited_hidden_id_column_is_rejected_cleanly(self, client, owner_user):
+        """
+        The hidden Item ID column is what makes re-upload safe --
+        tampering with it (accidentally or otherwise) must be caught
+        with a clear error, never silently applied to the wrong item.
+        """
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        product = await client.post(
+            "/api/v1/products",
+            json={"name": "Excel Tamper Product", "default_selling_price": 20.0},
+            headers=headers,
+        )
+        product_id = product.json()["id"]
+        await client.post(
+            f"/api/v1/products/{product_id}/batches",
+            json={
+                "batch_number": "TAMPER1",
+                "expiry_date": "2027-06-30",
+                "qty_received": 30,
+                "cost_price": 3.0,
+            },
+            headers=headers,
+        )
+        st = await client.post(
+            "/api/v1/stock-takes", json={"product_ids": [product_id]}, headers=headers
+        )
+        stock_take_id = st.json()["id"]
+
+        template_resp = await client.get(
+            f"/api/v1/stock-takes/{stock_take_id}/count-template", headers=headers
+        )
+
+        import io
+
+        import openpyxl
+
+        wb = openpyxl.load_workbook(io.BytesIO(template_resp.content))
+        ws = wb.active
+        ws.cell(row=2, column=5, value=30)
+        ws.cell(row=2, column=6, value="not-a-real-id")  # tamper with the hidden ID
+        buffer = io.BytesIO()
+        wb.save(buffer)
+
+        r = await client.post(
+            f"/api/v1/stock-takes/{stock_take_id}/import-counts",
+            headers=headers,
+            files={
+                "file": (
+                    "tampered.xlsx",
+                    buffer.getvalue(),
+                    "application/octet-stream",
+                )
+            },
+        )
+        assert r.status_code == 400
+        assert "Item ID" in r.json()["detail"]

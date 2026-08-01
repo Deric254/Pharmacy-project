@@ -17,10 +17,7 @@ htmlcov/
 # Node / frontend
 node_modules/
 dist/
-build/
-!electron/build/
-!electron/build/**
-
+frontend/build/
 installer-output/
 .vite/
 

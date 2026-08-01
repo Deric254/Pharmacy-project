@@ -109,4 +109,5 @@ class BusinessConfigService:
             expiry_alert_days=[int(d) for d in config.expiry_alert_days.split(",") if d],
             loyalty_program_enabled=config.loyalty_program_enabled,
             loyalty_points_per_currency_unit=config.loyalty_points_per_currency_unit,
+            local_backup_dir_override=config.local_backup_dir_override,
         )

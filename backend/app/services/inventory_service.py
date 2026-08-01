@@ -22,7 +22,7 @@ from datetime import date, timedelta
 from typing import Any, cast
 
 from fastapi import HTTPException
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,7 +56,13 @@ class InventoryService:
                 Product.reorder_point,
                 func.coalesce(func.sum(MedicineBatch.qty_remaining), 0).label("total_qty"),
             )
-            .outerjoin(MedicineBatch, MedicineBatch.product_id == Product.id)
+            .outerjoin(
+                MedicineBatch,
+                and_(
+                    MedicineBatch.product_id == Product.id,
+                    MedicineBatch.expiry_date >= date.today(),
+                ),
+            )
             .where(Product.deleted_at.is_(None))
             .group_by(Product.id)
             .having(func.coalesce(func.sum(MedicineBatch.qty_remaining), 0) < Product.reorder_point)
@@ -106,7 +112,13 @@ class InventoryService:
                     func.sum(MedicineBatch.qty_remaining * MedicineBatch.cost_price), 0.0
                 ).label("value"),
             )
-            .outerjoin(MedicineBatch, MedicineBatch.product_id == Product.id)
+            .outerjoin(
+                MedicineBatch,
+                and_(
+                    MedicineBatch.product_id == Product.id,
+                    MedicineBatch.expiry_date >= date.today(),
+                ),
+            )
             .where(Product.deleted_at.is_(None))
             .group_by(Product.id)
         )
@@ -193,10 +205,13 @@ class InventoryService:
         result = await self.db.execute(
             select(
                 MedicineBatch.id,
+                MedicineBatch.batch_number,
                 MedicineBatch.product_id,
+                Product.name,
                 MedicineBatch.qty_remaining,
                 func.coalesce(func.sum(StockMovement.quantity_delta), 0).label("ledger_sum"),
             )
+            .join(Product, Product.id == MedicineBatch.product_id)
             .outerjoin(StockMovement, StockMovement.batch_id == MedicineBatch.id)
             .group_by(MedicineBatch.id)
         )
@@ -208,7 +223,9 @@ class InventoryService:
                 issues.append(
                     ReconciliationIssueOut(
                         batch_id=row.id,
+                        batch_number=row.batch_number,
                         product_id=row.product_id,
+                        product_name=row.name,
                         qty_remaining=row.qty_remaining,
                         ledger_sum=ledger_sum,
                         discrepancy=row.qty_remaining - ledger_sum,
@@ -240,7 +257,13 @@ async def check_and_publish_low_stock(db: AsyncSession, product_ids: list[int]) 
             Product.reorder_point,
             func.coalesce(func.sum(MedicineBatch.qty_remaining), 0).label("total_qty"),
         )
-        .outerjoin(MedicineBatch, MedicineBatch.product_id == Product.id)
+        .outerjoin(
+            MedicineBatch,
+            and_(
+                MedicineBatch.product_id == Product.id,
+                MedicineBatch.expiry_date >= date.today(),
+            ),
+        )
         .where(Product.id.in_(product_ids))
         .group_by(Product.id)
     )

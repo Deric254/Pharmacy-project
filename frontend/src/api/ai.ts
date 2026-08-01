@@ -5,5 +5,6 @@ export const aiApi = {
   listKeys: () => api.get<AIProviderKeyOut[]>('/ai/keys'),
   addKey: (payload: AIProviderKeyCreate) => api.post<AIProviderKeyOut>('/ai/keys', payload),
   deleteKey: (id: number) => api.delete<void>(`/ai/keys/${id}`),
-  ask: (prompt: string) => api.post<AIAskResponse>('/ai/ask', { prompt }),
+  ask: (prompt: string, context?: Record<string, string | number | boolean | null>) =>
+    api.post<AIAskResponse>('/ai/ask', { prompt, context }),
 }

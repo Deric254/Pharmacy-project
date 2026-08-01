@@ -10,6 +10,8 @@ AI assistant tests. The properties that matter:
      without any live network call to a paid third-party API.
 """
 
+from datetime import date, datetime, timedelta
+
 import httpx
 from sqlalchemy import select
 
@@ -64,32 +66,95 @@ class TestKeyManagement:
             assert raw_key not in key_row.encrypted_key
             assert decrypt_secret(key_row.encrypted_key) == raw_key  # round-trips correctly
 
-    async def test_list_keys_only_shows_own_keys(self, client, owner_user, employee_user):
+    async def test_keys_are_shared_across_managers_not_siloed_per_user(
+        self, client, owner_user, administrator_user
+    ):
+        """
+        The real fix: keys are a shared business resource. A key
+        added by the Owner must be visible to an Administrator too --
+        not siloed as if it belonged only to whoever happened to add
+        it. This is exactly what closes the reported bug where a key
+        added by one account was invisible ("no key configured") to
+        every other account, including the one actually trying to use
+        the assistant.
+        """
+        owner_token = await _login(client, "lucy", "S3curePass!")
+        admin_token = await _login(client, "sam", "AdminPass1")
+
+        await client.post(
+            "/api/v1/ai/keys",
+            json={"provider": "GEMINI", "api_key": "owner-added-key-1111"},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+
+        admin_keys = await client.get(
+            "/api/v1/ai/keys", headers={"Authorization": f"Bearer {admin_token}"}
+        )
+        assert len(admin_keys.json()) == 1
+        assert admin_keys.json()[0]["provider"] == "GEMINI"
+
+    async def test_employee_cannot_add_or_list_or_delete_keys(self, client, employee_user):
+        token = await _login(client, "joe", "pass1234")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        add = await client.post(
+            "/api/v1/ai/keys",
+            json={"provider": "OPENAI", "api_key": "employee-attempt-1111"},
+            headers=headers,
+        )
+        assert add.status_code == 403
+
+        listing = await client.get("/api/v1/ai/keys", headers=headers)
+        assert listing.status_code == 403
+
+        delete = await client.delete("/api/v1/ai/keys/1", headers=headers)
+        assert delete.status_code == 403
+
+    async def test_administrator_can_delete_a_key_the_owner_added(
+        self, client, owner_user, administrator_user
+    ):
+        owner_token = await _login(client, "lucy", "S3curePass!")
+        admin_token = await _login(client, "sam", "AdminPass1")
+
+        create_resp = await client.post(
+            "/api/v1/ai/keys",
+            json={"provider": "OPENAI", "api_key": "owner-added-key-4444"},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        key_id = create_resp.json()["id"]
+
+        r = await client.delete(
+            f"/api/v1/ai/keys/{key_id}", headers={"Authorization": f"Bearer {admin_token}"}
+        )
+        assert r.status_code == 204
+
+    async def test_employee_can_actually_use_a_key_the_owner_added(
+        self, client, owner_user, employee_user
+    ):
+        """
+        The exact real-world scenario from the bug report: the Owner
+        adds a key, and an Employee asking a question must be able to
+        actually use it -- not see "no key configured" despite one
+        genuinely existing in the system.
+        """
         owner_token = await _login(client, "lucy", "S3curePass!")
         employee_token = await _login(client, "joe", "pass1234")
 
         await client.post(
             "/api/v1/ai/keys",
-            json={"provider": "GEMINI", "api_key": "owner-key-1111"},
+            json={"provider": "GEMINI", "api_key": "shared-team-key-9999"},
             headers={"Authorization": f"Bearer {owner_token}"},
         )
-        await client.post(
-            "/api/v1/ai/keys",
-            json={"provider": "DEEPSEEK", "api_key": "employee-key-2222"},
+
+        r = await client.post(
+            "/api/v1/ai/ask",
+            json={"prompt": "test"},
             headers={"Authorization": f"Bearer {employee_token}"},
         )
-
-        owner_keys = await client.get(
-            "/api/v1/ai/keys", headers={"Authorization": f"Bearer {owner_token}"}
-        )
-        assert len(owner_keys.json()) == 1
-        assert owner_keys.json()[0]["provider"] == "GEMINI"
-
-        employee_keys = await client.get(
-            "/api/v1/ai/keys", headers={"Authorization": f"Bearer {employee_token}"}
-        )
-        assert len(employee_keys.json()) == 1
-        assert employee_keys.json()[0]["provider"] == "DEEPSEEK"
+        # It will fail to actually reach a real provider with a fake
+        # key (expected, no network calls in tests) -- what matters is
+        # it did NOT hit the "no key configured" guidance message.
+        assert "No AI provider is configured" not in r.json().get("answer", "")
 
     async def test_delete_key(self, client, owner_user):
         token = await _login(client, "lucy", "S3curePass!")
@@ -107,22 +172,6 @@ class TestKeyManagement:
 
         list_resp = await client.get("/api/v1/ai/keys", headers=headers)
         assert list_resp.json() == []
-
-    async def test_cannot_delete_another_users_key(self, client, owner_user, employee_user):
-        owner_token = await _login(client, "lucy", "S3curePass!")
-        employee_token = await _login(client, "joe", "pass1234")
-
-        create_resp = await client.post(
-            "/api/v1/ai/keys",
-            json={"provider": "OPENAI", "api_key": "owner-only-key-4444"},
-            headers={"Authorization": f"Bearer {owner_token}"},
-        )
-        key_id = create_resp.json()["id"]
-
-        r = await client.delete(
-            f"/api/v1/ai/keys/{key_id}", headers={"Authorization": f"Bearer {employee_token}"}
-        )
-        assert r.status_code == 404  # not "not yours", never confirms it exists
 
 
 class TestFallbackChain:
@@ -600,6 +649,215 @@ class TestBusinessContext:
             response = await service.ask(owner_user, AIAskRequest(prompt="test"))
 
         assert response.answer == "ok despite broken context"
+
+    async def test_respects_a_client_supplied_viewing_date_range(self, client, owner_user):
+        """
+        The real new fix: when the person is looking at a specific
+        range on the Dashboard (e.g. "last month"), the assistant's
+        business context reflects that range instead of always
+        defaulting to today -- computed fresh server-side for that
+        range, never trusting a number from the client, only the
+        dates themselves.
+        """
+        from datetime import datetime, timedelta
+
+        from app.models.medicine_batch import MedicineBatch
+        from app.models.product import Product
+        from app.models.sale import Sale, SaleItem
+
+        async with AsyncSessionLocal() as db:
+            db.add(
+                AIProviderKey(
+                    user_id=owner_user.id,
+                    provider=AIProviderName.OPENAI,
+                    encrypted_key=encrypt_secret("key"),
+                    key_hint="key1",
+                    priority=1,
+                )
+            )
+            product = Product(name="Viewed Range Test Product", default_selling_price=99.0)
+            db.add(product)
+            await db.flush()
+            batch = MedicineBatch(
+                product_id=product.id,
+                batch_number="VR1",
+                expiry_date=datetime(2027, 1, 1).date(),
+                qty_received=10,
+                qty_remaining=10,
+                cost_price=40.0,
+            )
+            db.add(batch)
+            await db.flush()
+
+            # A real sale placed "yesterday", outside of today's window.
+            yesterday = datetime.now() - timedelta(days=1)
+            sale = Sale(
+                cashier_user_id=owner_user.id,
+                subtotal=99.0,
+                discount_amount=0.0,
+                total_amount=99.0,
+            )
+            db.add(sale)
+            await db.flush()
+            sale.created_at = yesterday
+            db.add(
+                SaleItem(
+                    sale_id=sale.id,
+                    product_id=product.id,
+                    batch_id=batch.id,
+                    quantity=1,
+                    unit_price=99.0,
+                    line_total=99.0,
+                )
+            )
+            await db.commit()
+
+        captured_context: dict[str, object] = {}
+
+        class ContextCapturingAdapter:
+            async def ask(self, prompt, context):
+                captured_context.update(context)
+                return AIResponse(text="ok")
+
+        def factory(provider, api_key):
+            return ContextCapturingAdapter()
+
+        yesterday_str = yesterday.date().isoformat()
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=factory)
+            await service.ask(
+                owner_user,
+                AIAskRequest(
+                    prompt="how did that period go?",
+                    context={
+                        "viewing_start_date": yesterday_str,
+                        "viewing_end_date": yesterday_str,
+                    },
+                ),
+            )
+
+        # The viewed-period revenue must include yesterday's real sale
+        # -- proving the range was actually used, not just accepted
+        # and ignored.
+        assert captured_context.get("viewed_period_revenue") == 99.0
+
+    async def test_viewed_date_range_is_respected_not_always_today(self, client, owner_user):
+        """
+        The real gap this closes: the assistant's business awareness
+        was hardcoded to today, with zero connection to whatever range
+        someone was actually looking at on the Dashboard's slicer.
+        Only a date range crosses from client to server here -- every
+        number is still computed fresh, server-side, for that range.
+        """
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        product = await client.post(
+            "/api/v1/products",
+            json={"name": "AI Context Range Product", "default_selling_price": 40.0},
+            headers=headers,
+        )
+        product_id = product.json()["id"]
+        await client.post(
+            f"/api/v1/products/{product_id}/batches",
+            json={
+                "batch_number": "AICTX1",
+                "expiry_date": "2027-06-30",
+                "qty_received": 20,
+                "cost_price": 15.0,
+            },
+            headers=headers,
+        )
+        sale = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 40.0}],
+            },
+            headers=headers,
+        )
+        sale_id = sale.json()["id"]
+
+        # Push the sale to yesterday -- outside today's default window.
+        yesterday = date.today() - timedelta(days=1)
+        async with AsyncSessionLocal() as db:
+            from app.models.sale import Sale
+
+            result = await db.execute(select(Sale).where(Sale.id == sale_id))
+            row = result.scalar_one()
+            row.created_at = datetime.combine(yesterday, datetime.min.time())
+            await db.commit()
+
+            db.add(
+                AIProviderKey(
+                    user_id=owner_user.id,
+                    provider=AIProviderName.OPENAI,
+                    encrypted_key=encrypt_secret("key"),
+                    key_hint="key1",
+                    priority=1,
+                )
+            )
+            await db.commit()
+
+        captured_context: dict[str, object] = {}
+
+        class ContextCapturingAdapter:
+            async def ask(self, prompt, context):
+                captured_context.update(context)
+                return AIResponse(text="ok")
+
+        def factory(provider, api_key):
+            return ContextCapturingAdapter()
+
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=factory)
+            await service.ask(
+                owner_user,
+                AIAskRequest(
+                    prompt="how's business?",
+                    context={
+                        "viewing_start_date": yesterday.isoformat(),
+                        "viewing_end_date": yesterday.isoformat(),
+                    },
+                ),
+            )
+
+        # The viewed-period revenue must reflect yesterday's real
+        # sale, not an empty "today" -- proving the range was honored.
+        assert captured_context["viewed_period_revenue"] == 40.0
+
+    async def test_malformed_viewing_dates_fall_back_to_today_silently(self, client, owner_user):
+        async with AsyncSessionLocal() as db:
+            db.add(
+                AIProviderKey(
+                    user_id=owner_user.id,
+                    provider=AIProviderName.OPENAI,
+                    encrypted_key=encrypt_secret("key"),
+                    key_hint="key1",
+                    priority=1,
+                )
+            )
+            await db.commit()
+
+        class AlwaysSucceedsAdapter:
+            async def ask(self, prompt, context):
+                return AIResponse(text="ok")
+
+        def factory(provider, api_key):
+            return AlwaysSucceedsAdapter()
+
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=factory)
+            # Garbage input must never crash the assistant.
+            response = await service.ask(
+                owner_user,
+                AIAskRequest(
+                    prompt="test",
+                    context={"viewing_start_date": "not-a-date", "viewing_end_date": 12345},
+                ),
+            )
+
+        assert response.answer == "ok"
 
 
 class TestNoKeyGuidance:

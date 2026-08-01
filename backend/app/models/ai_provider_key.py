@@ -19,11 +19,17 @@ class AIProviderName(enum.StrEnum):
 
 class AIProviderKey(Base):
     """
-    Keys are per-user, not global -- it's the user's own key and own
-    quota/cost. `encrypted_key` is AES-256-GCM via app.core.security
-    (the same primitive already used and tested for JWT/backup
-    secrets), and the raw value is never returned by any API response
-    after the initial save -- only a masked reference.
+    A shared business resource, not siloed per user -- any active key
+    works for anyone with ai.use, so an Owner setting one up benefits
+    the whole team immediately, matching how a small pharmacy actually
+    operates (one AI subscription for the business, not one per
+    person). `user_id` records who added it, purely for
+    accountability -- it is not an access-control boundary. Only
+    users.manage (Owner/Administrator) can add or remove keys.
+    `encrypted_key` is AES-256-GCM via app.core.security (the same
+    primitive already used and tested for JWT/backup secrets), and
+    the raw value is never returned by any API response after the
+    initial save -- only a masked reference.
     """
 
     __tablename__ = "ai_provider_keys"

@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { aiApi } from '../api/ai'
 import { ApiError } from '../api/client'
 import { MarkdownLite } from './MarkdownLite'
+import { useViewedRangeStore } from '../lib/viewedRangeStore'
 
 interface Turn {
   prompt: string
@@ -15,6 +16,7 @@ export function FloatingAiWidget() {
   const [asking, setAsking] = useState(false)
   const [conversation, setConversation] = useState<Turn[]>([])
   const [error, setError] = useState<string | null>(null)
+  const viewedRange = useViewedRangeStore((s) => s.range)
 
   async function handleAsk(e: FormEvent) {
     e.preventDefault()
@@ -24,7 +26,10 @@ export function FloatingAiWidget() {
     const askedPrompt = prompt
     setPrompt('')
     try {
-      const response = await aiApi.ask(askedPrompt)
+      const context = viewedRange
+        ? { viewing_start_date: viewedRange.start, viewing_end_date: viewedRange.end }
+        : undefined
+      const response = await aiApi.ask(askedPrompt, context)
       setConversation((prev) => [
         ...prev,
         { prompt: askedPrompt, answer: response.answer, providerUsed: response.provider_used },

@@ -6,12 +6,25 @@ import type {
   ProfitReportOut,
   ReceivingDiscrepancyReportOut,
   RevenuePotentialOut,
+  RevenueTrendOut,
   SalesSummaryOut,
   StockTakeHistoryOut,
+  TopCustomersOut,
 } from '../types/api'
 
 export const reportsApi = {
   revenuePotential: () => api.get<RevenuePotentialOut>('/reports/revenue-potential'),
+  revenueTrend: (startDate: string, endDate: string) =>
+    api.get<RevenueTrendOut>('/reports/revenue-trend', {
+      start_date: startDate,
+      end_date: endDate,
+    }),
+  topCustomers: (startDate: string, endDate: string, limit = 20) =>
+    api.get<TopCustomersOut>('/reports/top-customers', {
+      start_date: startDate,
+      end_date: endDate,
+      limit,
+    }),
   kpiDashboard: (startDate: string, endDate: string) =>
     api.get<KpiDashboardOut>('/reports/kpi-dashboard', {
       start_date: startDate,

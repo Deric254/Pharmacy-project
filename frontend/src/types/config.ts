@@ -19,6 +19,7 @@ export interface BusinessConfigOut {
   expiry_alert_days: number[]
   loyalty_program_enabled: boolean
   loyalty_points_per_currency_unit: number
+  local_backup_dir_override: string | null
 }
 
 export interface BusinessConfigUpdate {
@@ -42,4 +43,5 @@ export interface BusinessConfigUpdate {
   expiry_alert_days?: number[]
   loyalty_program_enabled?: boolean
   loyalty_points_per_currency_unit?: number
+  local_backup_dir_override?: string | null
 }

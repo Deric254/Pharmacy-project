@@ -24,6 +24,8 @@ class StockTakeItemOut(BaseModel):
     id: int
     batch_id: int
     product_id: int
+    product_name: str
+    batch_number: str
     expected_qty: int
     physical_qty: int | None
     reason: str | None

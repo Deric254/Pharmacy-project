@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import PurchaseOrderStatusChangedEvent, publish
 from app.models.medicine_batch import MedicineBatch
+from app.models.product import Product
 from app.models.purchase_order import PurchaseOrder, PurchaseOrderItem, PurchaseOrderStatus
 from app.models.stock_movement import MovementType, StockMovement
 from app.models.supplier import Supplier, SupplierTransaction
@@ -173,6 +174,12 @@ class PurchasingService:
         variances: list[ReceivingVarianceOut] = []
         total_owed = 0.0
 
+        product_ids = {item.product_id for item in po.items}
+        name_result = await self.db.execute(
+            select(Product.id, Product.name).where(Product.id.in_(product_ids))
+        )
+        product_names: dict[int, str] = dict(name_result.tuples().all())
+
         for line in payload.lines:
             item = items_by_id.get(line.item_id)
             if item is None:
@@ -218,6 +225,7 @@ class PurchasingService:
                     ReceivingVarianceOut(
                         item_id=item.id,
                         product_id=item.product_id,
+                        product_name=product_names.get(item.product_id, "Unknown product"),
                         quantity_ordered=item.quantity_ordered,
                         quantity_received=line.quantity_received,
                         variance=variance,

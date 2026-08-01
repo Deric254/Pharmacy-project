@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { FloatingAiWidget } from './FloatingAiWidget'
 import { useAuthStore } from '../auth/store'
@@ -6,6 +6,7 @@ import { useConfigStore } from '../config/store'
 import { useUpdateCheck, type UpdateInfo } from '../lib/updateCheck'
 import { formatRoleName } from '../lib/roleDisplay'
 import { Logo } from './Logo'
+import { Marquee } from './Marquee'
 
 interface NavItem {
   to: string
@@ -54,6 +55,7 @@ export function AppShell() {
   const hasPermission = useAuthStore((s) => s.hasPermission)
   const logout = useAuthStore((s) => s.logout)
   const businessName = useConfigStore((s) => s.config?.business_name ?? 'Pharmacy System')
+  const slogan = useConfigStore((s) => s.config?.slogan ?? '')
   const { info: updateInfo } = useUpdateCheck()
   const location = useLocation()
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({})
@@ -65,22 +67,39 @@ export function AppShell() {
     ),
   })).filter((section) => section.items.length > 0)
 
+  // Reveal the section containing the current page once, on
+  // navigation -- not as a standing override. Otherwise, collapsing
+  // the section you're currently in would silently do nothing, since
+  // it would immediately be forced back open on the very next render.
+  useEffect(() => {
+    const activeSection = visibleSections.find((section) =>
+      section.items.some(
+        (item) =>
+          location.pathname === item.to ||
+          (item.to !== '/' && location.pathname.startsWith(`${item.to}/`)),
+      ),
+    )
+    if (!activeSection?.label) return
+    setCollapsedSections((prev) =>
+      prev[activeSection.label as string] ? { ...prev, [activeSection.label as string]: false } : prev,
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname])
+
   return (
-    <div className="flex min-h-screen bg-paper text-ink">
+    <div className="flex h-screen bg-paper text-ink">
       <aside className="flex w-56 shrink-0 flex-col border-r border-rule bg-panel">
-        <div className="flex items-center gap-2 border-b border-rule px-4 py-4">
-          <Logo className="h-7 w-7 shrink-0" />
-          <span className="truncate font-display text-base">{businessName}</span>
+        <div className="border-b border-rule bg-brass px-4 py-3 text-paper">
+          <div className="flex items-center gap-2">
+            <Logo className="h-7 w-7 shrink-0" />
+            <span className="truncate font-display text-base">{businessName}</span>
+          </div>
+          {slogan && <Marquee text={`${slogan} :: ${businessName}`} />}
         </div>
-        <nav className="flex-1 space-y-3 p-2">
+        <nav className="flex-1 space-y-3 overflow-y-auto p-2">
           {visibleSections.map((section) => {
             const sectionKey = section.label ?? 'root'
-            const containsActivePage = section.items.some(
-              (item) =>
-                location.pathname === item.to ||
-                (item.to !== '/' && location.pathname.startsWith(`${item.to}/`)),
-            )
-            const isCollapsed = Boolean(collapsedSections[sectionKey]) && !containsActivePage
+            const isCollapsed = Boolean(collapsedSections[sectionKey])
 
             return (
               <div key={sectionKey}>

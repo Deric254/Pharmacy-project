@@ -89,7 +89,9 @@ export interface AdjustmentOut {
 
 export interface ReconciliationIssueOut {
   batch_id: number
+  batch_number: string
   product_id: number
+  product_name: string
   qty_remaining: number
   ledger_sum: number
   discrepancy: number
@@ -299,6 +301,7 @@ export interface ReceiveRequest {
 export interface ReceivingVarianceOut {
   item_id: number
   product_id: number
+  product_name: string
   quantity_ordered: number
   quantity_received: number
   variance: number
@@ -354,6 +357,8 @@ export interface StockTakeItemOut {
   id: number
   batch_id: number
   product_id: number
+  product_name: string
+  batch_number: string
   expected_qty: number
   physical_qty: number | null
   reason: string | null
@@ -404,6 +409,31 @@ export interface RevenuePotentialOut {
   overall_margin_percent: number | null
   by_product: RevenuePotentialEntry[]
   caveat: string
+}
+
+export interface TopCustomerEntry {
+  customer_id: number
+  name: string
+  sale_count: number
+  revenue: number
+  cumulative_percent: number
+}
+
+export interface TopCustomersOut {
+  entries: TopCustomerEntry[]
+  total_revenue: number
+}
+
+export interface RevenueTrendPoint {
+  period_label: string
+  revenue: number
+  profit: number | null
+  transaction_count: number
+}
+
+export interface RevenueTrendOut {
+  granularity: 'day' | 'week' | 'month'
+  points: RevenueTrendPoint[]
 }
 
 export interface KpiDashboardOut {

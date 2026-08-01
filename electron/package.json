@@ -6,16 +6,21 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build:win": "electron-builder --win"
+    "build:win": "electron-builder --win",
+    "test:e2e": "playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "electron": "^43.1.1",
     "electron-builder": "^26.15.7"
   },
   "build": {
     "appId": "com.pharmacyerp.desktop",
     "productName": "Pharmacy ERP",
-    "files": ["main.js", "package.json"],
+    "files": [
+      "main.js",
+      "package.json"
+    ],
     "extraResources": [
       {
         "from": "../dist/Pharmacy-ERP.exe",
@@ -23,7 +28,8 @@
       }
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,

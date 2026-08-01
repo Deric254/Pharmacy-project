@@ -179,6 +179,31 @@ class TestValuation:
         assert product_row["value"] == 200.0  # 100 * 2.0
         assert r.json()["total_value"] >= 200.0
 
+    async def test_expired_stock_does_not_inflate_valuation(self, client, owner_user):
+        """
+        The real bug this closes: a product could show real stock
+        value and a real "available" quantity even when every unit
+        was expired and therefore unsellable -- a genuine mismatch
+        between what the numbers claimed and what a real sale attempt
+        would actually do.
+        """
+        from datetime import date, timedelta
+
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        product_id = await _make_product("Expired Only Product")
+        await _add_batch(product_id, qty=100, expiry=yesterday)
+
+        token = await _login(client, "lucy", "S3curePass!")
+        r = await client.get(
+            "/api/v1/inventory/valuation", headers={"Authorization": f"Bearer {token}"}
+        )
+        row = next((p for p in r.json()["by_product"] if p["product_id"] == product_id), None)
+        # Either excluded entirely or present with zero value/qty --
+        # never claiming expired-only stock has real, sellable value.
+        if row is not None:
+            assert row["qty_on_hand"] == 0
+            assert row["value"] == 0.0
+
 
 class TestAdjustments:
     async def test_adjustment_requires_permission(self, client, employee_user):
@@ -348,6 +373,10 @@ class TestReconciliation:
         assert issues[batch_id]["qty_remaining"] == 999
         assert issues[batch_id]["ledger_sum"] == 30
         assert issues[batch_id]["discrepancy"] == 969
+        # The real fix: a real product name and batch number, not a
+        # cryptic ID someone would have to cross-reference by hand.
+        assert issues[batch_id]["product_name"]
+        assert issues[batch_id]["batch_number"]
 
 
 class TestSaleTriggeredLowStockEvent:

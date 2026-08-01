@@ -23,6 +23,7 @@ aborts before any DELETE runs.
 
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -32,6 +33,7 @@ from app.core.config import get_settings
 from app.core.events import BackupFailedEvent, publish
 from app.core.security import decrypt_bytes, encrypt_bytes
 from app.models.backup import BackupLog, BackupOAuthToken, BackupProviderName, BackupStatus
+from app.models.business_config import BusinessConfig
 from app.models.user import User
 from app.schemas.backup import BackupLogOut, ConnectGoogleDriveRequest, RestoreResult
 from app.services.backup.base import BackupProvider, BackupProviderError
@@ -182,7 +184,11 @@ class BackupService:
             return self._provider_override
 
         if provider_name == BackupProviderName.LOCAL_FILE:
-            return LocalFileBackupProvider(_settings.local_backup_dir)
+            config_result = await self.db.execute(select(BusinessConfig).limit(1))
+            config_row = config_result.scalar_one_or_none()
+            override = config_row.local_backup_dir_override if config_row else None
+            backup_dir = Path(override) if override else _settings.local_backup_dir
+            return LocalFileBackupProvider(backup_dir)
 
         result = await self.db.execute(
             select(BackupOAuthToken).where(

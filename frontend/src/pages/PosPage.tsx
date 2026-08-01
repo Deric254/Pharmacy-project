@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { customersApi, productsApi, salesApi } from '../api/domain'
 import { useCurrencyFormatter } from '../lib/currency'
 import type { CustomerOut, PaymentMethod, ProductOut, SaleOut } from '../types/api'
@@ -12,6 +12,7 @@ interface CartLine {
 export function PosPage() {
   const formatCurrency = useCurrencyFormatter()
   const [query, setQuery] = useState('')
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const [results, setResults] = useState<ProductOut[]>([])
   const [searching, setSearching] = useState(false)
   const [cart, setCart] = useState<CartLine[]>([])
@@ -35,30 +36,34 @@ export function PosPage() {
   // button press or Enter required. Debounced by 300ms so a fast typist
   // (or a barcode scanner, which types the whole code near-instantly)
   // doesn't fire a request per keystroke -- one request lands shortly
-  // after typing pauses.
-  useEffect(() => {
-    if (!query.trim()) {
-      setResults([])
-      return
+  // after typing pauses. With nothing typed, this shows every in-stock
+  // product instead of an empty screen -- already sorted most-stocked
+  // first by the backend, so browsing and searching share one list
+  // and one click-to-add behavior, never two different code paths.
+  async function searchProducts(text: string): Promise<ProductOut[]> {
+    if (!text) {
+      const all = await productsApi.list('')
+      return all.filter((p) => p.total_qty_available > 0)
     }
+    const nameResults = await productsApi.list(text)
+    if (nameResults.length > 0) return nameResults
+    // Nothing matched by name -- try an exact barcode match before
+    // giving up, since a scanned code often has nothing in common
+    // with the product's name text.
+    try {
+      const byBarcode = await productsApi.getByBarcode(text)
+      return [byBarcode]
+    } catch {
+      return nameResults // genuinely no match either way
+    }
+  }
+
+  useEffect(() => {
     setSearching(true)
     setError(null)
     const trimmed = query.trim()
     const timer = setTimeout(() => {
-      productsApi
-        .list(trimmed)
-        .then(async (nameResults) => {
-          if (nameResults.length > 0) return nameResults
-          // Nothing matched by name -- try an exact barcode match
-          // before giving up, since a scanned code often has nothing
-          // in common with the product's name text.
-          try {
-            const byBarcode = await productsApi.getByBarcode(trimmed)
-            return [byBarcode]
-          } catch {
-            return nameResults // genuinely no match either way
-          }
-        })
+      searchProducts(trimmed)
         .then(setResults)
         .catch((err: unknown) => {
           setError(err instanceof ApiError ? err.message : 'Search failed.')
@@ -66,7 +71,54 @@ export function PosPage() {
         .finally(() => setSearching(false))
     }, 300)
     return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query])
+
+  useEffect(() => {
+    const SCANNER_MAX_GAP_MS = 50
+    const MIN_SCAN_LENGTH = 3
+    let buffer = ''
+    let lastKeyTime = 0
+    let sawSlowGap = false
+
+    function handleGlobalKeyDown(e: globalThis.KeyboardEvent) {
+      const active = document.activeElement
+      const activeIsRealInput =
+        active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement
+      if (activeIsRealInput) {
+        // Someone deliberately focused a real field -- their typing
+        // is never touched, full stop, regardless of its speed.
+        buffer = ''
+        sawSlowGap = false
+        return
+      }
+
+      const now = Date.now()
+      const gap = now - lastKeyTime
+      lastKeyTime = now
+
+      if (e.key === 'Enter') {
+        if (buffer.length >= MIN_SCAN_LENGTH && !sawSlowGap) {
+          e.preventDefault()
+          void handleEnterToAdd(buffer)
+        }
+        buffer = ''
+        sawSlowGap = false
+        return
+      }
+
+      if (e.key.length !== 1) return // ignore Shift, Tab, arrow keys, etc.
+
+      if (buffer && gap > SCANNER_MAX_GAP_MS) {
+        sawSlowGap = true // too slow anywhere in the sequence to be a real scan
+      }
+      buffer += e.key
+    }
+
+    window.addEventListener('keydown', handleGlobalKeyDown)
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   function addToCart(product: ProductOut) {
     setCart((prev) => {
@@ -78,6 +130,38 @@ export function PosPage() {
       }
       return [...prev, { product, quantity: 1 }]
     })
+  }
+
+  // A real barcode scan sends its digits and an Enter keystroke
+  // within milliseconds -- far faster than the 300ms debounce above
+  // ever gets a chance to fire. Acting on `results` here would mean
+  // acting on whatever was on screen *before* the scan even started,
+  // not the scanned item. Searching directly, right here, guarantees
+  // this always acts on the real, current answer regardless of
+  // typing or scanning speed. Only adds when there's exactly one
+  // match -- with several results, this does nothing rather than
+  // risk adding the wrong one, so speed here never costs accuracy.
+  async function handleEnterToAdd(text: string) {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    try {
+      const matches = await searchProducts(trimmed)
+      setResults(matches)
+      if (matches.length !== 1) return
+      const only = matches[0]
+      if (only.total_qty_available <= 0) return
+      addToCart(only)
+      setQuery('')
+      searchInputRef.current?.focus()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Search failed.')
+    }
+  }
+
+  function handleSearchKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key !== 'Enter') return
+    e.preventDefault()
+    void handleEnterToAdd(query)
   }
 
   function updateQuantity(productId: number, quantity: number) {
@@ -147,8 +231,10 @@ export function PosPage() {
         <h1 className="mb-4 font-display text-2xl text-ink">Point of Sale</h1>
         <form onSubmit={(e: FormEvent) => e.preventDefault()} className="mb-4">
           <input
+            ref={searchInputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={handleSearchKeyDown}
             placeholder="Search products"
             className="w-full border border-rule bg-panel px-3 py-2 outline-none focus-visible:border-brass"
             autoFocus
@@ -186,6 +272,11 @@ export function PosPage() {
           )}
           {!searching && query.trim() && results.length === 0 && (
             <p className="col-span-full text-sm text-ink-soft">No products match "{query}".</p>
+          )}
+          {!searching && !query.trim() && results.length === 0 && (
+            <p className="col-span-full text-sm text-ink-soft">
+              No products in stock yet — receive some stock to start selling.
+            </p>
           )}
         </div>
       </div>

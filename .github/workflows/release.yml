@@ -105,6 +105,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements*.txt
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -180,10 +182,40 @@ jobs:
           fi
           echo "Smoke test passed: the exe migrates, the real setup endpoint creates the first user, and login works."
 
+      - name: Generate the Windows icon from logo.png
+        shell: bash
+        run: |
+          # The real, confirmed root cause of the icon not appearing in
+          # CI-built installers: the local build (build-installer.bat)
+          # already runs this exact conversion before calling
+          # electron-builder, producing a real multi-resolution .ico.
+          # This workflow never did, so electron-builder was instead
+          # handed the raw PNG directly and left to convert it
+          # implicitly -- which behaves inconsistently and can silently
+          # produce a worse (or no) result compared to the same
+          # deterministic conversion the local build already relies on.
+          cd backend
+          python -m scripts.make_icon ../electron/build/logo.png
+          if [ ! -f "../electron/build/icon.ico" ]; then
+            echo "::error::Icon generation did not produce electron/build/icon.ico."
+            exit 1
+          fi
+          echo "Generated electron/build/icon.ico from logo.png."
+
       - name: Build the Electron desktop installer
         working-directory: electron
         shell: bash
         run: |
+          # Verify the icon is actually present in what GitHub checked
+          # out -- if it's only ever been added locally and never
+          # committed/pushed, electron-builder would otherwise fall
+          # back to a generic default icon silently, and the build
+          # would still "succeed" while shipping without the real logo.
+          if [ ! -f "build/logo.png" ]; then
+            echo "::error::electron/build/logo.png is missing from this checkout. It must be committed and pushed to the repository -- a file that only exists on a local machine will never reach this build."
+            exit 1
+          fi
+
           # Real version, not the hardcoded placeholder in package.json --
           # otherwise every release would ship an installer claiming to be
           # v0.1.0 regardless of what it actually is.

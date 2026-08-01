@@ -29,6 +29,7 @@ class BusinessConfigOut(BaseModel):
     expiry_alert_days: list[int]
     loyalty_program_enabled: bool
     loyalty_points_per_currency_unit: float
+    local_backup_dir_override: str | None
 
     model_config = {"from_attributes": True}
 
@@ -60,3 +61,4 @@ class BusinessConfigUpdate(BaseModel):
     expiry_alert_days: list[int] | None = None
     loyalty_program_enabled: bool | None = None
     loyalty_points_per_currency_unit: Money | None = None
+    local_backup_dir_override: str | None = Field(default=None, max_length=500)

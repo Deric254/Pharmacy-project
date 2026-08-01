@@ -65,4 +65,16 @@
     background: var(--color-panel);
     border: 1px solid var(--color-rule);
   }
+  .marquee-track {
+    animation: marquee-scroll 18s linear infinite;
+  }
+}
+
+@keyframes marquee-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
 }

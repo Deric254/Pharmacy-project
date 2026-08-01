@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -121,16 +121,20 @@ class ProductService:
         if not products:
             return []
 
-        # One aggregated query for every product's quantity, instead of
-        # one query per product (the previous version called _to_schema
-        # per row, each issuing its own SUM query -- O(n) round trips
-        # for a list endpoint that should be O(1)).
+        # "Available" means actually sellable -- matching exactly what
+        # select_batches_fefo allows, expired batches excluded. Before
+        # this, a product with only expired stock could show as
+        # available here while every real sale attempt correctly
+        # failed against it -- a genuine, confusing inconsistency.
         product_ids = [p.id for p in products]
         qty_result = await self.db.execute(
             select(
                 MedicineBatch.product_id, func.coalesce(func.sum(MedicineBatch.qty_remaining), 0)
             )
-            .where(MedicineBatch.product_id.in_(product_ids))
+            .where(
+                MedicineBatch.product_id.in_(product_ids),
+                MedicineBatch.expiry_date >= date.today(),
+            )
             .group_by(MedicineBatch.product_id)
         )
         qty_by_product: dict[int, int] = dict(qty_result.tuples().all())
@@ -142,6 +146,11 @@ class ProductService:
             out.total_qty_available = int(qty_by_product.get(product.id, 0))
             self._apply_margin(out, cost_by_product.get(product.id))
             outputs.append(out)
+
+        # Most-stocked first -- name is only a tie-breaker for equal
+        # quantities, so the order is always deterministic, never
+        # arbitrary or dependent on insertion order.
+        outputs.sort(key=lambda o: (-o.total_qty_available, o.name.lower()))
         return outputs
 
     async def _next_fefo_cost_by_product(self, product_ids: list[int]) -> dict[int, float]:
@@ -207,7 +216,8 @@ class ProductService:
     async def _to_schema(self, product: Product) -> ProductOut:
         qty_result = await self.db.execute(
             select(func.coalesce(func.sum(MedicineBatch.qty_remaining), 0)).where(
-                MedicineBatch.product_id == product.id
+                MedicineBatch.product_id == product.id,
+                MedicineBatch.expiry_date >= date.today(),
             )
         )
         total_qty = qty_result.scalar_one()

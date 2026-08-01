@@ -122,4 +122,11 @@ export const stockTakesApi = {
   approveVariance: (stockTakeId: number, itemId: number) =>
     api.post<StockTakeItemOut>(`/stock-takes/${stockTakeId}/items/${itemId}/approve`),
   close: (stockTakeId: number) => api.post<StockTakeOut>(`/stock-takes/${stockTakeId}/close`),
+  downloadCountTemplate: (stockTakeId: number) =>
+    downloadFile(
+      `/stock-takes/${stockTakeId}/count-template`,
+      `stock-count-${stockTakeId}-template.xlsx`,
+    ),
+  importCounts: (stockTakeId: number, file: File) =>
+    uploadFile<StockTakeOut>(`/stock-takes/${stockTakeId}/import-counts`, file),
 }

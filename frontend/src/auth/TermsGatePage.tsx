@@ -38,12 +38,6 @@ export function TermsGatePage() {
         </div>
 
         <div className="ledger-panel max-h-96 space-y-3 overflow-y-auto p-6 text-sm text-ink-soft">
-          <p className="border border-stamp-red-soft bg-stamp-red-soft/30 px-3 py-2 text-xs text-stamp-red">
-            This is a general starting template, not legal advice. It has not been reviewed by a
-            lawyer for your specific jurisdiction or pharmacy regulations, and should be before
-            relying on it.
-          </p>
-
           <p>
             <strong>1. Acceptance.</strong> By using this system, you agree to these terms. If
             you do not agree, do not use the system.

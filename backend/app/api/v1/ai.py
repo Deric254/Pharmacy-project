@@ -15,7 +15,7 @@ router = APIRouter(prefix="/ai", tags=["ai-assistant"])
 
 @router.get("/keys", response_model=list[AIProviderKeyOut])
 async def list_keys(
-    user: Annotated[User, Depends(require_permission("ai.use"))],
+    user: Annotated[User, Depends(require_permission("users.manage"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[AIProviderKeyOut]:
     return await AIKeyService(db).list_keys(user)
@@ -24,7 +24,7 @@ async def list_keys(
 @router.post("/keys", response_model=AIProviderKeyOut, status_code=201)
 async def add_key(
     payload: AIProviderKeyCreate,
-    user: Annotated[User, Depends(require_permission("ai.use"))],
+    user: Annotated[User, Depends(require_permission("users.manage"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> AIProviderKeyOut:
     return await AIKeyService(db).add_key(user, payload)
@@ -33,7 +33,7 @@ async def add_key(
 @router.delete("/keys/{key_id}", status_code=204)
 async def delete_key(
     key_id: int,
-    user: Annotated[User, Depends(require_permission("ai.use"))],
+    user: Annotated[User, Depends(require_permission("users.manage"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
     await AIKeyService(db).delete_key(user, key_id)

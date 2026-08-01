@@ -19,8 +19,9 @@
  * extremely thoroughly; this wrapper has not been run once.
  */
 
-const { app, BrowserWindow, dialog } = require('electron')
+const { app, BrowserWindow, dialog, session } = require('electron')
 const path = require('node:path')
+const fs = require('node:fs')
 const http = require('node:http')
 const { spawn } = require('node:child_process')
 
@@ -149,6 +150,12 @@ function waitForBackendHealthy() {
 }
 
 function createWindow() {
+  // Checked defensively -- if the icon asset isn't there for any
+  // reason, the window must still open with Electron's default icon
+  // rather than fail to launch at all over a missing image file.
+  const iconPath = path.join(__dirname, 'build', 'logo.png')
+  const iconOption = fs.existsSync(iconPath) ? { icon: iconPath } : {}
+
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -160,12 +167,32 @@ function createWindow() {
     // page paints.
     backgroundColor: '#f7f3ec',
     autoHideMenuBar: true,
+    // Held back until the renderer has actually painted its first
+    // real frame (see ready-to-show below) -- otherwise the window
+    // appears the instant it's created, while React is still parsing
+    // and mounting, showing several seconds of an empty window before
+    // any real content arrives.
+    show: false,
+    ...iconOption,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
     },
   })
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show()
+  })
+  // Defensive fallback: if ready-to-show never fires for any reason,
+  // showing a blank window late is still far better than the app
+  // silently never appearing at all, which would look like a failed
+  // launch rather than a slow one.
+  setTimeout(() => {
+    if (mainWindow && !mainWindow.isVisible()) {
+      mainWindow.show()
+    }
+  }, 10000)
 
   mainWindow.loadURL(BACKEND_URL)
 
@@ -176,6 +203,35 @@ function createWindow() {
 
 async function startApp() {
   try {
+    // Without this, Electron's default behavior for the blob-URL
+    // downloads every export and template button uses is to save the
+    // file somewhere silently, with no dialog and no confirmation at
+    // all -- indistinguishable from the button doing nothing. This
+    // makes every download show a real Save dialog and a completion
+    // message, the same as any normal desktop app.
+    session.defaultSession.on('will-download', (event, item) => {
+      const savePath = dialog.showSaveDialogSync(mainWindow, {
+        title: 'Save file',
+        defaultPath: item.getFilename(),
+      })
+      if (!savePath) {
+        item.cancel()
+        return
+      }
+      item.setSavePath(savePath)
+      item.once('done', (_event, state) => {
+        if (state === 'completed') {
+          dialog.showMessageBox(mainWindow, {
+            type: 'info',
+            message: 'Saved',
+            detail: savePath,
+          })
+        } else if (state !== 'cancelled') {
+          dialog.showErrorBox('Save failed', `Could not save the file (${state}).`)
+        }
+      })
+    })
+
     await startBackend()
     await waitForBackendHealthy()
     createWindow()

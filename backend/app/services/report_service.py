@@ -5,17 +5,19 @@ Every report here reads from the same ledger/transactional tables the
 operational modules write to (sales, sale_items, medicine_batches,
 purchase_order_items, stock_takes) -- no separate analytics database or
 ETL step, which would be over-engineering at this scale and would risk
-the reports drifting from reality. Date-range grouping is done in
-Python rather than DB-specific date functions (MySQL's DATE_FORMAT vs
-SQLite's strftime differ), keeping this portable across both engines
-without a dialect-specific branch, consistent with lessons learned
-earlier in this project about MySQL/SQLite divergence.
+the reports drifting from reality. This product is SQLite-only (no
+MySQL driver is installed, no MySQL config exists anywhere in this
+codebase) -- date-range and grouping queries use SQLite's own date()
+and strftime() functions directly for real SQL-side aggregation,
+which is what keeps reports fast regardless of how many years of
+sales have accumulated, rather than loading every row into Python.
 """
 
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
+from typing import Literal
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.customer import Customer
@@ -36,6 +38,8 @@ from app.schemas.reports import (
     ReceivingDiscrepancyReportOut,
     RevenuePotentialEntry,
     RevenuePotentialOut,
+    RevenueTrendOut,
+    RevenueTrendPoint,
     SalesSummaryEntry,
     SalesSummaryOut,
     StockRunwayEntry,
@@ -84,20 +88,18 @@ class ReportService:
         )
 
     async def profit_report(self, start_date: date, end_date: date) -> ProfitReportOut:
-        sales = await self._sales_in_range(start_date, end_date)
-        sale_ids = [s.id for s in sales]
+        total_revenue, _ = await self._revenue_and_count_in_range(start_date, end_date)
 
-        total_revenue = sum(s.total_amount for s in sales)
-        total_cost = 0.0
-
-        if sale_ids:
-            result = await self.db.execute(
-                select(SaleItem, MedicineBatch.cost_price)
-                .join(MedicineBatch, MedicineBatch.id == SaleItem.batch_id)
-                .where(SaleItem.sale_id.in_(sale_ids))
+        cost_result = await self.db.execute(
+            select(func.coalesce(func.sum(SaleItem.quantity * MedicineBatch.cost_price), 0.0))
+            .join(MedicineBatch, MedicineBatch.id == SaleItem.batch_id)
+            .join(Sale, Sale.id == SaleItem.sale_id)
+            .where(
+                func.date(Sale.created_at) >= start_date.isoformat(),
+                func.date(Sale.created_at) <= end_date.isoformat(),
             )
-            for sale_item, cost_price in result.all():
-                total_cost += sale_item.quantity * cost_price
+        )
+        total_cost = float(cost_result.scalar_one())
 
         total_profit = total_revenue - total_cost
         margin = (total_profit / total_revenue * 100) if total_revenue > 0 else 0.0
@@ -261,9 +263,7 @@ class ReportService:
     async def kpi_dashboard(
         self, start_date: date, end_date: date, include_profit: bool
     ) -> KpiDashboardOut:
-        sales = await self._sales_in_range(start_date, end_date)
-        revenue = sum(s.total_amount for s in sales)
-        transaction_count = len(sales)
+        revenue, transaction_count = await self._revenue_and_count_in_range(start_date, end_date)
         average_basket = revenue / transaction_count if transaction_count > 0 else 0.0
 
         # Comparison period: immediately preceding, same length -- "this
@@ -273,8 +273,7 @@ class ReportService:
         period_days = (end_date - start_date).days + 1
         prior_end = start_date - timedelta(days=1)
         prior_start = prior_end - timedelta(days=period_days - 1)
-        prior_sales = await self._sales_in_range(prior_start, prior_end)
-        prior_revenue = sum(s.total_amount for s in prior_sales)
+        prior_revenue, _ = await self._revenue_and_count_in_range(prior_start, prior_end)
         revenue_change_percent = (
             ((revenue - prior_revenue) / prior_revenue * 100) if prior_revenue > 0 else None
         )
@@ -286,7 +285,7 @@ class ReportService:
             profit = profit_result.total_profit
             profit_margin_percent = profit_result.profit_margin_percent
 
-        top_products = await self._top_products_by_revenue(start_date, end_date, limit=5)
+        top_products = await self.top_products_by_revenue(start_date, end_date, limit=5)
 
         low_stock = await InventoryService(self.db).get_low_stock_products()
         expiring = await InventoryService(self.db).get_expiring_batches()
@@ -307,14 +306,21 @@ class ReportService:
             expiring_soon_count=len(expiring),
         )
 
-    async def _top_products_by_revenue(
+    async def _revenue_and_count_in_range(
+        self, start_date: date, end_date: date
+    ) -> tuple[float, int]:
+        result = await self.db.execute(
+            select(func.coalesce(func.sum(Sale.total_amount), 0.0), func.count(Sale.id)).where(
+                func.date(Sale.created_at) >= start_date.isoformat(),
+                func.date(Sale.created_at) <= end_date.isoformat(),
+            )
+        )
+        total_revenue, count = result.one()
+        return float(total_revenue), int(count)
+
+    async def top_products_by_revenue(
         self, start_date: date, end_date: date, limit: int
     ) -> list[TopProductEntry]:
-        sales = await self._sales_in_range(start_date, end_date)
-        sale_ids = [s.id for s in sales]
-        if not sale_ids:
-            return []
-
         result = await self.db.execute(
             select(
                 Product.id,
@@ -323,7 +329,11 @@ class ReportService:
                 func.sum(SaleItem.quantity * SaleItem.unit_price).label("revenue"),
             )
             .join(SaleItem, SaleItem.product_id == Product.id)
-            .where(SaleItem.sale_id.in_(sale_ids))
+            .join(Sale, Sale.id == SaleItem.sale_id)
+            .where(
+                func.date(Sale.created_at) >= start_date.isoformat(),
+                func.date(Sale.created_at) <= end_date.isoformat(),
+            )
             .group_by(Product.id)
             .order_by(func.sum(SaleItem.quantity * SaleItem.unit_price).desc())
             .limit(limit)
@@ -401,7 +411,13 @@ class ReportService:
                     func.sum(MedicineBatch.qty_remaining * MedicineBatch.cost_price), 0.0
                 ).label("cost"),
             )
-            .outerjoin(MedicineBatch, MedicineBatch.product_id == Product.id)
+            .outerjoin(
+                MedicineBatch,
+                and_(
+                    MedicineBatch.product_id == Product.id,
+                    MedicineBatch.expiry_date >= date.today(),
+                ),
+            )
             .where(Product.deleted_at.is_(None))
             .group_by(Product.id)
         )
@@ -444,6 +460,78 @@ class ReportService:
             ),
         )
 
+    async def revenue_trend(
+        self, start_date: date, end_date: date, include_profit: bool
+    ) -> RevenueTrendOut:
+        """
+        Real SQL-side aggregation, never Python-side bucketing of
+        individual sale rows -- correct regardless of how many years
+        of sales have accumulated, not just at today's data volume.
+        Granularity picks itself from the range length so a 4-year
+        chart becomes ~48 monthly points, not 1,460 unreadable ones.
+        """
+        days = (end_date - start_date).days + 1
+        granularity: Literal["day", "week", "month"]
+        if days <= 31:
+            granularity = "day"
+            bucket_expr = func.date(Sale.created_at)
+        elif days <= 180:
+            granularity = "week"
+            bucket_expr = func.strftime("%Y-W%W", Sale.created_at)
+        else:
+            granularity = "month"
+            bucket_expr = func.strftime("%Y-%m", Sale.created_at)
+
+        date_filter = (
+            func.date(Sale.created_at) >= start_date.isoformat(),
+            func.date(Sale.created_at) <= end_date.isoformat(),
+        )
+
+        revenue_result = await self.db.execute(
+            select(
+                bucket_expr.label("period"),
+                func.coalesce(func.sum(Sale.total_amount), 0.0).label("revenue"),
+                func.count(Sale.id).label("txn_count"),
+            )
+            .where(*date_filter)
+            .group_by("period")
+            .order_by("period")
+        )
+        revenue_rows = revenue_result.all()
+
+        cost_by_period: dict[str, float] = {}
+        if include_profit:
+            cost_result = await self.db.execute(
+                select(
+                    bucket_expr.label("period"),
+                    func.coalesce(
+                        func.sum(SaleItem.quantity * MedicineBatch.cost_price), 0.0
+                    ).label("cost"),
+                )
+                .select_from(SaleItem)
+                .join(Sale, Sale.id == SaleItem.sale_id)
+                .join(MedicineBatch, MedicineBatch.id == SaleItem.batch_id)
+                .where(*date_filter)
+                .group_by("period")
+            )
+            cost_by_period = {row.period: float(row.cost) for row in cost_result.all()}
+
+        points = [
+            RevenueTrendPoint(
+                period_label=row.period,
+                revenue=float(row.revenue),
+                profit=(
+                    round(float(row.revenue) - cost_by_period.get(row.period, 0.0), 2)
+                    if include_profit
+                    else None
+                ),
+                transaction_count=int(row.txn_count),
+            )
+            for row in revenue_rows
+        ]
+
+        return RevenueTrendOut(granularity=granularity, points=points)
+
     async def stock_runway(self, lookback_days: int = 30) -> StockRunwayOut:
         """
         A transparent extrapolation, not a forecast: real units sold
@@ -469,7 +557,13 @@ class ReportService:
                 Product.name,
                 func.coalesce(func.sum(MedicineBatch.qty_remaining), 0).label("qty"),
             )
-            .outerjoin(MedicineBatch, MedicineBatch.product_id == Product.id)
+            .outerjoin(
+                MedicineBatch,
+                and_(
+                    MedicineBatch.product_id == Product.id,
+                    MedicineBatch.expiry_date >= date.today(),
+                ),
+            )
             .where(Product.deleted_at.is_(None))
             .group_by(Product.id)
         )
@@ -506,9 +600,10 @@ class ReportService:
         )
 
     async def _sales_in_range(self, start_date: date, end_date: date) -> list[Sale]:
-        start_dt = datetime.combine(start_date, datetime.min.time())
-        end_dt = datetime.combine(end_date, datetime.max.time())
         result = await self.db.execute(
-            select(Sale).where(Sale.created_at >= start_dt, Sale.created_at <= end_dt)
+            select(Sale).where(
+                func.date(Sale.created_at) >= start_date.isoformat(),
+                func.date(Sale.created_at) <= end_date.isoformat(),
+            )
         )
         return list(result.scalars().all())

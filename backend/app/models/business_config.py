@@ -53,6 +53,14 @@ class BusinessConfig(Base):
     contact_email: Mapped[str | None] = mapped_column(String(120), nullable=True)
     address: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # Null means "use the default next to the database file" (see
+    # config.py's local_backup_dir). Setting this to a real path on a
+    # USB drive, external disk, or network share is what actually
+    # makes the local backup provider useful for disaster recovery --
+    # a backup that only ever lives on the same machine as what it's
+    # backing up doesn't survive that machine failing.
+    local_backup_dir_override: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
     default_language: Mapped[str] = mapped_column(String(10), default="en")
     timezone: Mapped[str] = mapped_column(String(50), default="Africa/Nairobi")
 

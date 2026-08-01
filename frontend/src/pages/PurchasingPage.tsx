@@ -377,7 +377,7 @@ function PODetailModal({
           <p className="font-medium">Receiving variance detected:</p>
           {variances.map((v) => (
             <p key={v.item_id}>
-              Item #{v.item_id}: ordered {v.quantity_ordered}, received {v.quantity_received} (
+              {v.product_name}: ordered {v.quantity_ordered}, received {v.quantity_received} (
               {v.variance > 0 ? '+' : ''}
               {v.variance})
             </p>

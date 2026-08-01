@@ -69,7 +69,9 @@ class AdjustmentOut(BaseModel):
 
 class ReconciliationIssueOut(BaseModel):
     batch_id: int
+    batch_number: str
     product_id: int
+    product_name: str
     qty_remaining: int
     ledger_sum: int
     discrepancy: int

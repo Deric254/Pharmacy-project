@@ -28,19 +28,11 @@ class AIKeyService:
         return self._to_schema(key_row)
 
     async def list_keys(self, user: User) -> list[AIProviderKeyOut]:
-        result = await self.db.execute(
-            select(AIProviderKey)
-            .where(AIProviderKey.user_id == user.id)
-            .order_by(AIProviderKey.priority)
-        )
+        result = await self.db.execute(select(AIProviderKey).order_by(AIProviderKey.priority))
         return [self._to_schema(k) for k in result.scalars().all()]
 
     async def delete_key(self, user: User, key_id: int) -> None:
-        result = await self.db.execute(
-            select(AIProviderKey).where(
-                AIProviderKey.id == key_id, AIProviderKey.user_id == user.id
-            )
-        )
+        result = await self.db.execute(select(AIProviderKey).where(AIProviderKey.id == key_id))
         key_row = result.scalar_one_or_none()
         if key_row is None:
             raise HTTPException(status_code=404, detail="API key not found")

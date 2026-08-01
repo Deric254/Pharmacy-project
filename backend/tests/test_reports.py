@@ -608,6 +608,124 @@ class TestKpiDashboard:
         assert r.status_code == 403
 
 
+class TestDateBoundaryAccuracy:
+    """
+    A real bug found and fixed this session: single-day queries
+    (start_date == end_date) were silently returning zero, and any
+    multi-day range was silently missing its entire final day --
+    both with no error, just a quietly wrong number. Found by
+    building a real multi-year dataset and hand-verifying against raw
+    SQL at exactly these boundaries. These tests make that proof
+    permanent using the same real insertion path the application
+    itself uses, so this can never regress unnoticed.
+    """
+
+    async def test_single_day_query_finds_a_sale_made_that_day(self, client, owner_user):
+        product_id, _ = await _make_product_with_batch(price=50.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 50.0}],
+            },
+            headers=headers,
+        )
+
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/kpi-dashboard",
+            params={"start_date": today, "end_date": today},
+            headers=headers,
+        )
+        assert r.status_code == 200
+        # Before the fix, this was always 0 -- a single-day range is
+        # exactly the "today's sales" query an owner checks constantly.
+        assert r.json()["revenue"] == 50.0
+        assert r.json()["transaction_count"] == 1
+
+    async def test_range_includes_a_sale_on_its_final_day(self, client, owner_user):
+        product_id, _ = await _make_product_with_batch(price=75.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        sale = (
+            await client.post(
+                "/api/v1/sales",
+                json={
+                    "items": [{"product_id": product_id, "quantity": 1}],
+                    "payments": [{"method": "CASH", "amount": 75.0}],
+                },
+                headers=headers,
+            )
+        ).json()
+
+        # Push this sale's real timestamp to late in the day, using
+        # the same DateTime column the application itself writes to
+        # -- proving the fix works for real data, not a contrived one.
+        async with AsyncSessionLocal() as db:
+            from sqlalchemy import select as _select
+
+            from app.models.sale import Sale
+
+            result = await db.execute(_select(Sale).where(Sale.id == sale["id"]))
+            row = result.scalar_one()
+            just_before_midnight = datetime.max.time().replace(microsecond=0)
+            row.created_at = datetime.combine(date.today(), just_before_midnight)
+            await db.commit()
+
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/kpi-dashboard",
+            params={"start_date": today, "end_date": today},
+            headers=headers,
+        )
+        assert r.status_code == 200
+        # Before the fix, a sale in the last moments of the range's
+        # final day was silently excluded entirely.
+        assert r.json()["revenue"] == 75.0
+        assert r.json()["transaction_count"] == 1
+
+    async def test_sales_history_list_also_includes_the_final_day(self, client, owner_user):
+        product_id, _ = await _make_product_with_batch(price=30.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        sale = (
+            await client.post(
+                "/api/v1/sales",
+                json={
+                    "items": [{"product_id": product_id, "quantity": 1}],
+                    "payments": [{"method": "CASH", "amount": 30.0}],
+                },
+                headers=headers,
+            )
+        ).json()
+
+        async with AsyncSessionLocal() as db:
+            from sqlalchemy import select as _select
+
+            from app.models.sale import Sale
+
+            result = await db.execute(_select(Sale).where(Sale.id == sale["id"]))
+            row = result.scalar_one()
+            just_before_midnight = datetime.max.time().replace(microsecond=0)
+            row.created_at = datetime.combine(date.today(), just_before_midnight)
+            await db.commit()
+
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/sales",
+            params={"start_date": today, "end_date": today},
+            headers=headers,
+        )
+        assert r.status_code == 200
+        ids = [s["id"] for s in r.json()["entries"]]
+        assert sale["id"] in ids
+
+
 class TestTopCustomers:
     async def test_pareto_cumulative_percent_is_mathematically_correct(self, client, owner_user):
         """
@@ -875,3 +993,219 @@ class TestStockRunway:
         fast_idx = next(i for i, e in enumerate(entries) if e["product_id"] == fast_id)
         slow_idx = next(i for i, e in enumerate(entries) if e["product_id"] == slow_id)
         assert fast_idx < slow_idx
+
+
+class TestRevenueTrend:
+    """
+    Real SQL-side aggregation (never loads individual sale rows into
+    Python), with granularity chosen automatically from the range
+    length. The properties that matter: exact math per bucket, correct
+    granularity switching, and profit hidden entirely (not zeroed)
+    for anyone without reports.view_profit.
+    """
+
+    async def test_daily_granularity_for_a_short_range_with_exact_math(self, client, owner_user):
+        product_id, _ = await _make_product_with_batch(price=20.0, cost=8.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 3}],
+                "payments": [{"method": "CASH", "amount": 60.0}],
+            },
+            headers=headers,
+        )
+
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/revenue-trend",
+            params={"start_date": today, "end_date": today},
+            headers=headers,
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["granularity"] == "day"
+        assert len(body["points"]) == 1
+        point = body["points"][0]
+        assert point["revenue"] == 60.0  # 3 * 20.0
+        assert point["profit"] == 36.0  # 60 - (3 * 8.0)
+        assert point["transaction_count"] == 1
+
+    async def test_granularity_switches_to_month_for_a_long_range(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        r = await client.get(
+            "/api/v1/reports/revenue-trend",
+            params={"start_date": "2022-01-01", "end_date": "2026-01-01"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200
+        assert r.json()["granularity"] == "month"
+
+    async def test_granularity_switches_to_week_for_a_medium_range(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        r = await client.get(
+            "/api/v1/reports/revenue-trend",
+            params={"start_date": "2026-01-01", "end_date": "2026-03-01"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200
+        assert r.json()["granularity"] == "week"
+
+    async def test_profit_hidden_entirely_without_view_profit_permission(
+        self, client, administrator_user
+    ):
+        product_id, _ = await _make_product_with_batch(price=20.0, cost=8.0)
+        token = await _login(client, "sam", "AdminPass1")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 20.0}],
+            },
+            headers=headers,
+        )
+
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/revenue-trend",
+            params={"start_date": today, "end_date": today},
+            headers=headers,
+        )
+        assert r.status_code == 200
+        point = r.json()["points"][0]
+        assert point["revenue"] == 20.0  # revenue itself is still visible
+        assert point["profit"] is None  # profit is hidden, not zeroed
+
+
+class TestProfitLossPdf:
+    """
+    A real gap this closes: this endpoint had zero test coverage at
+    all. The properties that matter: it's a genuinely valid PDF, the
+    real numbers appear in it (not placeholders), permission-gated
+    the same as every other profit-visible report, and when there's
+    enough data for charts, real vector graphics actually get drawn
+    -- not just requested and silently skipped.
+    """
+
+    async def test_generates_a_valid_pdf_with_correct_numbers(self, client, owner_user):
+        product_id, _ = await _make_product_with_batch(price=25.0, cost=10.0, qty=50)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 4}],
+                "payments": [{"method": "CASH", "amount": 100.0}],
+            },
+            headers=headers,
+        )
+
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/profit-loss-pdf",
+            params={"start_date": today, "end_date": today},
+            headers=headers,
+        )
+        assert r.status_code == 200
+        assert r.content[:4] == b"%PDF"
+
+        import io
+
+        from pypdf import PdfReader
+
+        text = PdfReader(io.BytesIO(r.content)).pages[0].extract_text()
+        assert "100.00" in text  # revenue: 4 * 25.0
+        assert "40.00" in text  # cost: 4 * 10.0
+        assert "60.00" in text  # gross profit
+        assert "60.0%" in text  # margin
+
+    async def test_requires_view_profit_permission(self, client, administrator_user):
+        token = await _login(client, "sam", "AdminPass1")
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/profit-loss-pdf",
+            params={"start_date": today, "end_date": today},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 403
+
+    async def test_charts_actually_draw_real_vector_graphics_with_enough_data(
+        self, client, owner_user
+    ):
+        """
+        Not just "the PDF has a chart section" -- real proof that
+        reportlab actually drew something, by checking the PDF's own
+        content stream for real line/stroke drawing operators, the
+        same technique used to verify this live before writing the
+        test.
+        """
+        p1, _ = await _make_product_with_batch(price=25.0, cost=10.0, qty=50)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        sale = (
+            await client.post(
+                "/api/v1/sales",
+                json={
+                    "items": [{"product_id": p1, "quantity": 2}],
+                    "payments": [{"method": "CASH", "amount": 50.0}],
+                },
+                headers=headers,
+            )
+        ).json()
+
+        # A second day of history so the trend chart has 2+ points --
+        # the export deliberately skips drawing a trend line otherwise.
+        async with AsyncSessionLocal() as db:
+            from sqlalchemy import select as _select
+
+            from app.models.sale import Sale
+
+            result = await db.execute(_select(Sale).where(Sale.id == sale["id"]))
+            row = result.scalar_one()
+            row.created_at = datetime.now() - timedelta(days=1)
+            await db.commit()
+
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": p1, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 25.0}],
+            },
+            headers=headers,
+        )
+
+        start = (date.today() - timedelta(days=1)).isoformat()
+        end = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/profit-loss-pdf",
+            params={"start_date": start, "end_date": end},
+            headers=headers,
+        )
+        assert r.status_code == 200
+
+        import io
+        import re
+
+        from pypdf import PdfReader
+        from pypdf.generic import ArrayObject
+
+        reader = PdfReader(io.BytesIO(r.content))
+        page = reader.pages[0]
+        contents_obj = page.get("/Contents")
+        all_data = b""
+        if isinstance(contents_obj, ArrayObject):
+            for item in contents_obj:
+                all_data += item.get_object().get_data()
+        else:
+            all_data = contents_obj.get_object().get_data()
+
+        # Real line-drawing and stroke operators, proving reportlab
+        # genuinely rendered chart geometry, not just placeholder text.
+        assert len(re.findall(rb"\bl\b", all_data)) > 2
+        assert len(re.findall(rb"\bS\b", all_data)) > 0

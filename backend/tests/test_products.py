@@ -465,3 +465,138 @@ class TestNameCannotBeJustWhitespace:
         )
         assert r.status_code == 201
         assert r.json()["name"] == "Padded Name"
+
+
+class TestAvailableStockMeansSellable:
+    """
+    The exact real bug this closes: a product with only expired stock
+    showed a nonzero "available" quantity, but every real sale attempt
+    correctly failed against it (expired batches are excluded from
+    FEFO) -- a genuine, confusing inconsistency between what the
+    screen said and what actually worked. "Available" must always
+    match what can actually be sold.
+    """
+
+    async def _login(self, client, username: str, password: str) -> str:
+        r = await client.post(
+            "/api/v1/auth/login", json={"username": username, "password": password}
+        )
+        assert r.status_code == 200, r.text
+        return str(r.json()["access_token"])
+
+    async def test_expired_only_stock_shows_as_zero_available_not_the_expired_count(
+        self, client, owner_user
+    ):
+        from datetime import date, timedelta
+
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        product = await client.post(
+            "/api/v1/products",
+            json={"name": "Expired Only Product", "default_selling_price": 20.0},
+            headers=headers,
+        )
+        product_id = product.json()["id"]
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        await client.post(
+            f"/api/v1/products/{product_id}/batches",
+            json={
+                "batch_number": "EXP1",
+                "expiry_date": yesterday,
+                "qty_received": 7,
+                "cost_price": 5.0,
+            },
+            headers=headers,
+        )
+
+        # The list view -- this is exactly what a cashier sees before
+        # trying to sell.
+        listed = await client.get("/api/v1/products", headers=headers)
+        entry = next(p for p in listed.json() if p["id"] == product_id)
+        assert entry["total_qty_available"] == 0
+
+        # The single-product view must agree.
+        single = await client.get(f"/api/v1/products/{product_id}", headers=headers)
+        assert single.json()["total_qty_available"] == 0
+
+        # And a real sale attempt must fail for the same reason the
+        # displayed number is 0 -- not a mysterious "not in stock"
+        # when the screen just said otherwise.
+        sale = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 20.0}],
+            },
+            headers=headers,
+        )
+        assert sale.status_code == 409
+
+    async def test_expired_only_stock_correctly_triggers_low_stock(self, client, owner_user):
+        from datetime import date, timedelta
+
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        product = await client.post(
+            "/api/v1/products",
+            json={"name": "Expired Low Stock Product", "reorder_point": 5},
+            headers=headers,
+        )
+        product_id = product.json()["id"]
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        await client.post(
+            f"/api/v1/products/{product_id}/batches",
+            json={
+                "batch_number": "EXPLOW1",
+                "expiry_date": yesterday,
+                "qty_received": 50,  # well above reorder_point, but expired
+                "cost_price": 5.0,
+            },
+            headers=headers,
+        )
+
+        low_stock = await client.get("/api/v1/inventory/low-stock", headers=headers)
+        names = [p["name"] for p in low_stock.json()]
+        assert "Expired Low Stock Product" in names
+
+
+class TestProductListOrdering:
+    async def test_products_ordered_by_stock_quantity_descending(self, client, owner_user):
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        async def make_with_stock(name: str, qty: int) -> int:
+            r = await client.post("/api/v1/products", json={"name": name}, headers=headers)
+            pid = r.json()["id"]
+            if qty > 0:
+                await client.post(
+                    f"/api/v1/products/{pid}/batches",
+                    json={
+                        "batch_number": f"B-{name}",
+                        "expiry_date": "2027-06-30",
+                        "qty_received": qty,
+                        "cost_price": 1.0,
+                    },
+                    headers=headers,
+                )
+            return pid
+
+        await make_with_stock("Low Stock Order Test", 5)
+        await make_with_stock("High Stock Order Test", 500)
+        await make_with_stock("Mid Stock Order Test", 50)
+
+        r = await client.get("/api/v1/products", headers=headers)
+        names = [p["name"] for p in r.json()]
+        high_idx = names.index("High Stock Order Test")
+        mid_idx = names.index("Mid Stock Order Test")
+        low_idx = names.index("Low Stock Order Test")
+        assert high_idx < mid_idx < low_idx
+
+    async def _login(self, client, username: str, password: str) -> str:
+        r = await client.post(
+            "/api/v1/auth/login", json={"username": username, "password": password}
+        )
+        assert r.status_code == 200, r.text
+        return str(r.json()["access_token"])

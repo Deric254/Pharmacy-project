@@ -246,6 +246,8 @@ class TestPurchaseOrderLifecycle:
         assert variances[0]["quantity_ordered"] == 50
         assert variances[0]["quantity_received"] == 42
         assert variances[0]["variance"] == -8
+        # The real fix: a real product name, not just an internal item ID.
+        assert variances[0]["product_name"] == "PO Test Product"
 
         # Variance doesn't block receiving -- the 42 actually delivered
         # are still received into stock and owed for.

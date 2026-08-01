@@ -477,3 +477,50 @@ class TestGoogleDriveAdapterRequestShape:
         except BackupProviderError:
             raised = True
         assert raised, "Expected BackupProviderError when token refresh fails"
+
+
+class TestLocalBackupDirOverride:
+    """
+    The real gap this closes: local backups could previously only
+    ever live next to the database, on the same machine -- meaning a
+    disaster that takes out the computer takes the backup with it,
+    defeating the entire point. This lets an owner point backups at a
+    genuinely different location.
+    """
+
+    async def test_backup_writes_to_the_configured_override_path(
+        self, client, owner_user, tmp_path
+    ):
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        override_dir = tmp_path / "external-drive" / "pharmacy-backups"
+        r = await client.patch(
+            "/api/v1/config",
+            json={"local_backup_dir_override": str(override_dir)},
+            headers=headers,
+        )
+        assert r.status_code == 200
+        assert r.json()["local_backup_dir_override"] == str(override_dir)
+
+        backup = await client.post(
+            "/api/v1/backups/run", json={"provider": "local"}, headers=headers
+        )
+        assert backup.status_code == 201
+
+        # The real proof: a file genuinely landed in the configured
+        # external location, not next to the database as before.
+        files = list(override_dir.glob("*"))
+        assert len(files) == 1
+
+    async def test_default_behavior_unchanged_when_nothing_configured(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        r = await client.get("/api/v1/config", headers=headers)
+        assert r.json()["local_backup_dir_override"] is None
+
+        backup = await client.post(
+            "/api/v1/backups/run", json={"provider": "local"}, headers=headers
+        )
+        assert backup.status_code == 201

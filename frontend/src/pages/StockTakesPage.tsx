@@ -181,6 +181,8 @@ function StockTakeDetail({
 }) {
   const [error, setError] = useState<string | null>(null)
   const [closing, setClosing] = useState(false)
+  const [uploadingCounts, setUploadingCounts] = useState(false)
+  const [uploadResult, setUploadResult] = useState<string | null>(null)
 
   const unapproved = stockTake.items.filter(
     (i) => i.variance !== null && i.variance !== 0 && i.approved_at === null,
@@ -200,6 +202,25 @@ function StockTakeDetail({
     }
   }
 
+  async function handleUploadCounts(file: File) {
+    setUploadingCounts(true)
+    setError(null)
+    setUploadResult(null)
+    try {
+      const result = await stockTakesApi.importCounts(stockTake.id, file)
+      setUploadResult(
+        result.status === 'CLOSED'
+          ? 'Every count applied and the stock take is now closed.'
+          : 'Counts applied. Some items still need a manager to approve a large variance.',
+      )
+      onChanged()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not import that file.')
+    } finally {
+      setUploadingCounts(false)
+    }
+  }
+
   return (
     <div>
       <button onClick={onBack} className="mb-4 text-sm text-ink-soft underline">
@@ -208,19 +229,51 @@ function StockTakeDetail({
 
       <div className="mb-4 flex items-center justify-between">
         <h2 className="font-display text-xl text-ink">Stock take #{stockTake.id}</h2>
-        {stockTake.status === 'OPEN' && (
-          <button
-            onClick={() => void handleClose()}
-            disabled={closing || unapproved.length > 0}
-            className="border border-ink bg-ink px-4 py-2 text-sm text-paper disabled:opacity-40"
-          >
-            {closing ? 'Closing…' : 'Close stock take'}
-          </button>
-        )}
-        {stockTake.status === 'CLOSED' && (
-          <span className="text-sm text-stamp-green">Closed</span>
-        )}
+        <div className="flex items-center gap-2">
+          {stockTake.status === 'OPEN' && (
+            <>
+              <button
+                onClick={() => void stockTakesApi.downloadCountTemplate(stockTake.id)}
+                className="border border-rule px-3 py-2 text-sm text-ink-soft hover:border-brass"
+              >
+                Download count sheet
+              </button>
+              <label className="cursor-pointer border border-rule px-3 py-2 text-sm text-ink-soft hover:border-brass">
+                {uploadingCounts ? 'Uploading…' : 'Upload counted sheet'}
+                <input
+                  type="file"
+                  accept=".xlsx"
+                  disabled={uploadingCounts}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file) void handleUploadCounts(file)
+                    e.target.value = ''
+                  }}
+                  className="hidden"
+                />
+              </label>
+            </>
+          )}
+          {stockTake.status === 'OPEN' && (
+            <button
+              onClick={() => void handleClose()}
+              disabled={closing || unapproved.length > 0}
+              className="border border-ink bg-ink px-4 py-2 text-sm text-paper disabled:opacity-40"
+            >
+              {closing ? 'Closing…' : 'Close stock take'}
+            </button>
+          )}
+          {stockTake.status === 'CLOSED' && (
+            <span className="text-sm text-stamp-green">Closed</span>
+          )}
+        </div>
       </div>
+
+      {uploadResult && (
+        <p className="mb-4 border border-stamp-green-soft bg-stamp-green-soft/40 px-3 py-2 text-sm text-stamp-green">
+          {uploadResult}
+        </p>
+      )}
 
       {unapproved.length > 0 && (
         <p className="mb-4 text-sm text-ink-soft">
@@ -305,7 +358,8 @@ function StockTakeItemRow({
     <div className="p-3 text-sm">
       <div className="flex items-center justify-between">
         <span>
-          Product #{item.product_id} <span className="text-ink-soft">· batch #{item.batch_id}</span>
+          {item.product_name}{' '}
+          <span className="text-ink-soft">· batch {item.batch_number}</span>
         </span>
         <span className="figure text-ink-soft">Expected: {item.expected_qty}</span>
       </div>

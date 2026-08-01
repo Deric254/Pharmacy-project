@@ -14,6 +14,7 @@ from app.schemas.reports import (
     ProfitReportOut,
     ReceivingDiscrepancyReportOut,
     RevenuePotentialOut,
+    RevenueTrendOut,
     StockRunwayOut,
     StockTakeHistoryOut,
     TopCustomersOut,
@@ -131,6 +132,11 @@ async def profit_loss_pdf(
     from app.services.business_config_service import BusinessConfigService
 
     result = await ReportService(db).profit_report(start_date, end_date)
+    trend = await ReportService(db).revenue_trend(start_date, end_date, include_profit=True)
+    top_products_result = await ReportService(db).top_products_by_revenue(
+        start_date, end_date, limit=8
+    )
+    top_customers_result = await ReportService(db).top_customers(start_date, end_date, limit=8)
     config = await BusinessConfigService(db).get()
 
     content = generate_profit_loss_pdf(
@@ -142,6 +148,9 @@ async def profit_loss_pdf(
         gross_profit=result.total_profit,
         gross_margin_percent=result.profit_margin_percent,
         currency=config.currency,
+        trend_points=trend.points,
+        top_products=top_products_result,
+        top_customers=top_customers_result.entries,
     )
 
     # This is the one place profit data can leave the system as a
@@ -202,6 +211,19 @@ async def stock_runway(
     db: Annotated[AsyncSession, Depends(get_db)], lookback_days: int = 30
 ) -> StockRunwayOut:
     return await ReportService(db).stock_runway(lookback_days)
+
+
+@router.get("/revenue-trend", response_model=RevenueTrendOut)
+async def revenue_trend(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    _: Annotated[User, Depends(require_permission("reports.view"))],
+    start_date: date,
+    end_date: date,
+) -> RevenueTrendOut:
+    user_permission_codes = {p.code for p in current_user.role.permissions}
+    include_profit = "reports.view_profit" in user_permission_codes
+    return await ReportService(db).revenue_trend(start_date, end_date, include_profit)
 
 
 @router.get("/expired-stock")

@@ -12,6 +12,9 @@ export function SettingsPage() {
   const [businessName, setBusinessName] = useState(config?.business_name ?? '')
   const [slogan, setSlogan] = useState(config?.slogan ?? '')
   const [logoUrl, setLogoUrl] = useState(config?.logo_url ?? '')
+  const [localBackupDirOverride, setLocalBackupDirOverride] = useState(
+    config?.local_backup_dir_override ?? '',
+  )
   const [logoError, setLogoError] = useState<string | null>(null)
   const [currency, setCurrency] = useState(config?.currency ?? 'USD')
   const [selectedTheme, setSelectedTheme] = useState(config?.theme_name ?? 'ledger')
@@ -70,6 +73,7 @@ export function SettingsPage() {
         logo_url: logoUrl || null,
         currency,
         theme_name: selectedTheme,
+        local_backup_dir_override: localBackupDirOverride.trim() || null,
       })
       await refresh()
       setSaved(true)
@@ -208,6 +212,24 @@ export function SettingsPage() {
             Saved.
           </p>
         )}
+
+        <section className="ledger-panel p-4">
+          <h2 className="mb-1 text-xs uppercase tracking-wide text-ink-soft">
+            Local backup location
+          </h2>
+          <p className="mb-3 text-xs text-ink-soft">
+            Leave blank to use the default (next to this computer's own data) -- which will not
+            survive this computer being lost, stolen, or damaged. Point this at a USB drive,
+            external disk, or network folder instead so a real disaster doesn't take your backups
+            with it.
+          </p>
+          <input
+            value={localBackupDirOverride}
+            onChange={(e) => setLocalBackupDirOverride(e.target.value)}
+            placeholder="e.g. D:\PharmacyBackups or \\server\share\backups"
+            className="w-full border border-rule bg-paper px-3 py-2 outline-none focus-visible:border-brass"
+          />
+        </section>
 
         <button
           type="submit"

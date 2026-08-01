@@ -13,7 +13,7 @@ publishes `sale.completed`; everything else subscribes to that event
 and reacts independently, so checkout itself stays fast.
 """
 
-from datetime import date, datetime
+from datetime import date
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -188,13 +188,11 @@ class SaleService:
         count_query = select(func.count()).select_from(Sale)
 
         if start_date is not None:
-            start_dt = datetime.combine(start_date, datetime.min.time())
-            query = query.where(Sale.created_at >= start_dt)
-            count_query = count_query.where(Sale.created_at >= start_dt)
+            query = query.where(func.date(Sale.created_at) >= start_date.isoformat())
+            count_query = count_query.where(func.date(Sale.created_at) >= start_date.isoformat())
         if end_date is not None:
-            end_dt = datetime.combine(end_date, datetime.max.time())
-            query = query.where(Sale.created_at <= end_dt)
-            count_query = count_query.where(Sale.created_at <= end_dt)
+            query = query.where(func.date(Sale.created_at) <= end_date.isoformat())
+            count_query = count_query.where(func.date(Sale.created_at) <= end_date.isoformat())
 
         total = await self.db.scalar(count_query) or 0
         result = await self.db.execute(query.limit(limit).offset(offset))

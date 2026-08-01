@@ -373,7 +373,10 @@ function ReconciliationPanel() {
         <ul className="divide-y divide-rule">
           {issues.map((issue) => (
             <li key={issue.batch_id} className="flex justify-between py-1 text-sm">
-              <span>Batch #{issue.batch_id}</span>
+              <span>
+                {issue.product_name}{' '}
+                <span className="text-ink-soft">· batch {issue.batch_number}</span>
+              </span>
               <span className="figure text-stamp-red">
                 cached {issue.qty_remaining} vs ledger {issue.ledger_sum} (
                 {issue.discrepancy > 0 ? '+' : ''}
@@ -472,6 +475,9 @@ function ProductManagementPanel({ onChanged }: { onChanged: () => void }) {
           <li key={p.id} className="flex items-center justify-between px-3 py-2 text-sm">
             <span className={p.is_active ? '' : 'text-ink-soft line-through'}>{p.name}</span>
             <div className="flex items-center gap-4">
+              <span className="figure text-xs text-ink-soft" title="Units on hand">
+                {p.total_qty_available} in stock
+              </span>
               <span className="figure text-xs text-ink-soft" title="Selling price">
                 Sell {formatCurrency(p.default_selling_price)}
               </span>

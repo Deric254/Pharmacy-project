@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -179,3 +180,15 @@ class StockRunwayOut(BaseModel):
     lookback_days: int
     entries: list[StockRunwayEntry]
     caveat: str
+
+
+class RevenueTrendPoint(BaseModel):
+    period_label: str  # e.g. "2026-07-15", "2026-W29", "2026-07"
+    revenue: float
+    profit: float | None  # None entirely for anyone without reports.view_profit
+    transaction_count: int
+
+
+class RevenueTrendOut(BaseModel):
+    granularity: Literal["day", "week", "month"]
+    points: list[RevenueTrendPoint]

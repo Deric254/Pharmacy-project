@@ -1,5 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
-import { buildErrorReportMailto } from '../lib/errorReport'
+import { buildGmailComposeUrl } from '../lib/errorReport'
 
 interface Props {
   children: ReactNode
@@ -31,7 +31,7 @@ export class ErrorBoundary extends Component<Props, State> {
     const { error } = this.state
     if (!error) return this.props.children
 
-    const mailtoUrl = buildErrorReportMailto({
+    const gmailUrl = buildGmailComposeUrl({
       message: error.message,
       stack: error.stack,
       pageUrl: window.location.href,
@@ -56,7 +56,9 @@ export class ErrorBoundary extends Component<Props, State> {
               Reload
             </button>
             <a
-              href={mailtoUrl}
+              href={gmailUrl}
+              target="_blank"
+              rel="noopener noreferrer"
               className="border border-rule py-2 text-sm text-ink-soft hover:border-brass"
             >
               Email this error to support

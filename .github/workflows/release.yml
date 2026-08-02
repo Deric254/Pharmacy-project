@@ -231,9 +231,11 @@ jobs:
           # onefile exe, shipping just Pharmacy-ERP.exe alone here
           # would produce a release asset that fails the instant
           # someone actually tries to run it.
-          cd dist
-          zip -r "Pharmacy-ERP-${{ needs.release.outputs.tag }}.zip" "Pharmacy-ERP"
-          cd ..
+          #
+          # `zip` isn't available on windows-latest runners (Git Bash
+          # doesn't ship it), so use PowerShell's built-in
+          # Compress-Archive instead -- no extra install needed.
+          powershell -NoProfile -Command "Compress-Archive -Path 'dist/Pharmacy-ERP/*' -DestinationPath 'dist/Pharmacy-ERP-${{ needs.release.outputs.tag }}.zip' -Force"
           # electron-builder's own default NSIS naming
           # ("<productName> Setup <version>.exe") -- found by its
           # actual glob rather than hardcoded, since that pattern can

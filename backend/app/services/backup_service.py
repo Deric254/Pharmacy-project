@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.events import BackupFailedEvent, publish
-from app.core.security import decrypt_bytes, encrypt_bytes
+from app.core.security import decrypt_bytes, encrypt_bytes, encrypt_bytes_with_passphrase
 from app.models.backup import BackupLog, BackupOAuthToken, BackupProviderName, BackupStatus
 from app.models.business_config import BusinessConfig
 from app.models.user import User
@@ -81,6 +81,22 @@ class BackupService:
                 )
             )
         await self.db.commit()
+
+    async def export_for_migration(self, passphrase: str) -> bytes:
+        """
+        A deliberately separate path from run_backup(): encrypted with
+        a passphrase the owner chooses and remembers, not this
+        machine's own auto-generated key, and returned directly as
+        bytes rather than stored in this system's own backup history
+        -- this file is meant to leave the system entirely, carried to
+        a new device for setup's restore-from-file flow to read back.
+        A backup encrypted with this machine's own key could never be
+        opened on different hardware; this is what makes that
+        possible.
+        """
+        dump = await dump_all_tables(self.db)
+        plaintext = serialize_dump(dump)
+        return encrypt_bytes_with_passphrase(plaintext, passphrase)
 
     async def run_backup(self, user: User, provider_choice: str = "local") -> BackupLogOut:
         provider_name = _PROVIDER_REQUEST_MAP[provider_choice]

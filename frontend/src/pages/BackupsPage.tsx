@@ -11,6 +11,7 @@ export function BackupsPage() {
   const [running, setRunning] = useState(false)
   const [restoreTarget, setRestoreTarget] = useState<BackupLogOut | null>(null)
   const [showConnect, setShowConnect] = useState(false)
+  const [showExport, setShowExport] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
@@ -65,6 +66,12 @@ export function BackupsPage() {
             className="border border-rule px-3 py-1.5 text-sm text-ink-soft hover:border-brass"
           >
             Also back up to Google Drive…
+          </button>
+          <button
+            onClick={() => setShowExport(true)}
+            className="border border-rule px-3 py-1.5 text-sm text-ink-soft hover:border-brass"
+          >
+            Export for a new device…
           </button>
         </div>
       </header>
@@ -132,7 +139,95 @@ export function BackupsPage() {
           onConnected={() => setShowConnect(false)}
         />
       )}
+      {showExport && <ExportForMigrationModal onClose={() => setShowExport(false)} />}
     </div>
+  )
+}
+
+function ExportForMigrationModal({ onClose }: { onClose: () => void }) {
+  const [passphrase, setPassphrase] = useState('')
+  const [confirmPassphrase, setConfirmPassphrase] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [done, setDone] = useState(false)
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    if (passphrase !== confirmPassphrase) {
+      setError("Passphrases don't match.")
+      return
+    }
+    setSubmitting(true)
+    setError(null)
+    try {
+      await backupsApi.exportForMigration(passphrase)
+      setDone(true)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not export.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Modal title="Export for a new device" onClose={onClose}>
+      {done ? (
+        <div className="space-y-3">
+          <p className="text-sm text-ink">
+            Downloaded. Keep that file somewhere safe — a USB drive, a cloud folder — along with
+            the passphrase you just chose. On the new device, choose "Restore from a backup file"
+            on the setup screen, select this file, and enter the same passphrase.
+          </p>
+          <p className="text-sm font-medium text-stamp-red">
+            Write the passphrase down somewhere separate from the file itself. There is no way to
+            recover it, and without it this file cannot be opened — not by you, not by anyone.
+          </p>
+        </div>
+      ) : (
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <p className="text-sm text-ink-soft">
+            Creates a file with everything in this system right now — every product, sale,
+            customer, and account — for moving to a different computer. Unlike "Back up now" (for
+            restoring on this same computer), this file is protected by a passphrase you choose
+            here, not anything stored on this machine, so it can be opened on hardware that has
+            never seen this data before.
+          </p>
+          <label className="block">
+            <span className="block text-xs uppercase tracking-wide text-ink-soft">
+              Passphrase (at least 8 characters)
+            </span>
+            <input
+              type="password"
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+              minLength={8}
+              required
+              className="mt-1 w-full border border-rule bg-paper px-3 py-2"
+            />
+          </label>
+          <label className="block">
+            <span className="block text-xs uppercase tracking-wide text-ink-soft">
+              Confirm passphrase
+            </span>
+            <input
+              type="password"
+              value={confirmPassphrase}
+              onChange={(e) => setConfirmPassphrase(e.target.value)}
+              required
+              className="mt-1 w-full border border-rule bg-paper px-3 py-2"
+            />
+          </label>
+          {error && <p className="text-sm text-stamp-red">{error}</p>}
+          <button
+            type="submit"
+            disabled={submitting}
+            className="w-full border border-ink bg-ink px-3 py-2 text-sm text-paper disabled:opacity-50"
+          >
+            {submitting ? 'Preparing export…' : 'Download export file'}
+          </button>
+        </form>
+      )}
+    </Modal>
   )
 }
 

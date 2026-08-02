@@ -17,11 +17,63 @@ from app.services.ai.base import AIProvider, AIProviderError, AIResponse
 _TIMEOUT_SECONDS = 20.0
 
 
+_APP_KNOWLEDGE = """\
+This is a pharmacy management system for a single pharmacy, used by \
+an Owner, an Administrator, and Employees (permissions differ by \
+role -- an Employee can sell and count stock but can't see profit \
+margins, manage users, or manage backups).
+
+Where things live, for "how do I..." questions:
+- POS (point of sale): the main selling screen -- search or scan a \
+product, add to cart, optionally attach a customer by name or phone, \
+apply a discount, choose a payment method, check out. The receipt \
+prints automatically afterward if a printer is connected.
+- Inventory: the product catalog, stock levels, and low-stock/expiring \
+alerts. Receiving new stock happens via Purchasing's "Quick Purchase" \
+-- pick a supplier, add each product with quantity, batch number, \
+expiry date, and cost.
+- Sales (history): past sales, viewing a receipt again, and \
+processing refunds against a specific past sale.
+- Customers: customer records, purchase history, and lifetime value.
+- Stock Takes: counting physical stock against what the system \
+expects; an open stock take locks its products out of sale until \
+it's closed (or cancelled, which releases the lock without requiring \
+a finished count).
+- Reports/Dashboard: revenue trend, top products, top customers, \
+stock valuation.
+- Settings: business name, logo, currency, tax rate, backup location, \
+and user accounts (Owner/Administrator only).
+- Backups: routine same-device backups, plus a separate "export for a \
+new device" for moving to different hardware entirely.
+- AI Settings: provider keys are shared across the whole team and \
+managed by the Owner or Administrator -- an Employee uses whatever \
+key is already configured and never needs to add their own.
+"""
+
+_FORMATTING_RULES = """\
+Write in plain, well-organized prose -- short paragraphs, and plain \
+sentences most of the time. The only formatting the chat window can \
+actually display is **bold** (double asterisks) and simple lists \
+using "-" or "1." at the start of a line. Never use headers (#, ##), \
+tables, or any other markdown syntax -- anything else shows up as \
+literal stray characters on screen, not real formatting. Keep answers \
+focused and skip unnecessary preamble.
+"""
+
+
 def _build_prompt_with_context(prompt: str, context: dict[str, object]) -> str:
-    if not context:
-        return prompt
-    context_lines = "\n".join(f"- {key}: {value}" for key, value in context.items())
-    return f"Context:\n{context_lines}\n\nQuestion: {prompt}"
+    name = context.get("person_asking_name")
+    greeting_note = (
+        f'The person asking is named "{name}" -- use their name naturally, '
+        "not on every reply.\n\n"
+        if name
+        else ""
+    )
+    other_context = {k: v for k, v in context.items() if k != "person_asking_name"}
+    context_lines = "\n".join(f"- {k}: {v}" for k, v in other_context.items())
+    context_block = f"Current real business data:\n{context_lines}\n\n" if other_context else ""
+    preamble = f"{_APP_KNOWLEDGE}\n{_FORMATTING_RULES}\n{greeting_note}{context_block}"
+    return f"{preamble}Question: {prompt}"
 
 
 class OpenAIAdapter(AIProvider):

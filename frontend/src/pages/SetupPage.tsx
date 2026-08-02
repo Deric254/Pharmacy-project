@@ -6,6 +6,7 @@ import { Logo } from '../components/Logo'
 
 export function SetupPage({ onComplete }: { onComplete: () => void }) {
   const config = useConfigStore((s) => s.config)
+  const [mode, setMode] = useState<'fresh' | 'restore'>('fresh')
   const [fullName, setFullName] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -14,6 +15,30 @@ export function SetupPage({ onComplete }: { onComplete: () => void }) {
   const [securityAnswer, setSecurityAnswer] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [restoreFile, setRestoreFile] = useState<File | null>(null)
+  const [restorePassphrase, setRestorePassphrase] = useState('')
+
+  async function handleRestore(e: FormEvent) {
+    e.preventDefault()
+    if (!restoreFile) {
+      setError('Choose a backup file first.')
+      return
+    }
+    setError(null)
+    setSubmitting(true)
+    try {
+      await setupApi.restoreFromFile(restoreFile, restorePassphrase)
+      onComplete()
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : 'Could not reach the server. Check your connection and try again.',
+      )
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -64,10 +89,75 @@ export function SetupPage({ onComplete }: { onComplete: () => void }) {
             {config?.business_name ?? 'Pharmacy System'}
           </h1>
           <p className="mt-1 text-sm text-ink-soft">
-            Welcome. Let's set up the owner account -- this only happens once.
+            {mode === 'fresh'
+              ? "Welcome. Let's set up the owner account -- this only happens once."
+              : 'Restoring on a new device? Pick the export file and the passphrase chosen when it was created.'}
           </p>
         </div>
 
+        <div className="mb-4 flex justify-center gap-4 text-xs">
+          <button
+            onClick={() => setMode('fresh')}
+            className={mode === 'fresh' ? 'font-medium text-ink underline' : 'text-ink-soft'}
+          >
+            Start fresh
+          </button>
+          <button
+            onClick={() => setMode('restore')}
+            className={mode === 'restore' ? 'font-medium text-ink underline' : 'text-ink-soft'}
+          >
+            Restore from a backup file
+          </button>
+        </div>
+
+        {mode === 'restore' ? (
+          <form onSubmit={handleRestore} className="ledger-panel space-y-4 p-6">
+            <p className="text-sm text-ink-soft">
+              This brings back everything from the old device exactly as it was, including the
+              real owner account -- log in afterward with the original username and password,
+              not a new one.
+            </p>
+            <div>
+              <label className="block text-xs uppercase tracking-wide text-ink-soft">
+                Backup file
+              </label>
+              <input
+                type="file"
+                accept=".enc"
+                onChange={(e) => setRestoreFile(e.target.files?.[0] ?? null)}
+                required
+                className="mt-1 w-full border border-rule bg-paper px-3 py-2 text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs uppercase tracking-wide text-ink-soft">
+                Passphrase
+              </label>
+              <input
+                type="password"
+                value={restorePassphrase}
+                onChange={(e) => setRestorePassphrase(e.target.value)}
+                required
+                className="mt-1 w-full border border-rule bg-paper px-3 py-2 text-ink outline-none focus-visible:border-brass"
+              />
+            </div>
+            {error && (
+              <p
+                role="alert"
+                className="border border-stamp-red-soft bg-stamp-red-soft/40 px-3 py-2 text-sm text-stamp-red"
+              >
+                {error}
+              </p>
+            )}
+            <button
+              type="submit"
+              disabled={submitting}
+              className="w-full border border-ink bg-ink py-2 font-medium text-paper transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {submitting ? 'Restoring…' : 'Restore this device'}
+            </button>
+          </form>
+        ) : (
         <form onSubmit={handleSubmit} className="ledger-panel space-y-4 p-6">
           <div>
             <label
@@ -195,6 +285,7 @@ export function SetupPage({ onComplete }: { onComplete: () => void }) {
             {submitting ? 'Creating account…' : 'Create owner account'}
           </button>
         </form>
+        )}
       </div>
     </div>
   )

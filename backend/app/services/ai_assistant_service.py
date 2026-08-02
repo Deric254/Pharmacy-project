@@ -121,10 +121,11 @@ class AIAssistantService:
             report_service = ReportService(self.db)
             kpi = await report_service.kpi_dashboard(range_start, range_end, include_profit)
         except Exception:  # noqa: BLE001 - business context is enrichment, never load-bearing
-            return {}
+            return {"person_asking_name": user.full_name}
 
         period_label = "today" if range_start == range_end == today else "viewed_period"
         context: dict[str, object] = {
+            "person_asking_name": user.full_name,
             f"{period_label}_revenue": kpi.revenue,
             f"{period_label}_transaction_count": kpi.transaction_count,
             f"{period_label}_average_basket": kpi.average_basket,

@@ -11,6 +11,7 @@ through every module.
 """
 
 import base64
+import hashlib
 import os
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
@@ -112,6 +113,49 @@ def encrypt_bytes(plaintext: bytes) -> bytes:
 
 def decrypt_bytes(stored_value: bytes) -> bytes:
     aesgcm = AESGCM(_get_aes_key())
+    nonce, ciphertext = stored_value[:12], stored_value[12:]
+    return aesgcm.decrypt(nonce, ciphertext, associated_data=None)
+
+
+# A fixed, non-secret salt -- safe here because the passphrase itself
+# supplies the real entropy, and PBKDF2's purpose for a fixed salt is
+# just to make the derived key different from a plain hash of the
+# passphrase, not to add secrecy of its own. Using a fixed salt
+# (rather than one generated per-backup and stored alongside it) is
+# what lets a person derive the exact same key on a completely fresh
+# device using nothing but the passphrase they remember -- there's no
+# salt to also carry over or look up.
+_BACKUP_KDF_SALT = b"pharmacy-erp-backup-passphrase-v1"
+_BACKUP_KDF_ITERATIONS = 390_000
+
+
+def _derive_backup_key(passphrase: str) -> bytes:
+    return hashlib.pbkdf2_hmac(
+        "sha256", passphrase.encode(), _BACKUP_KDF_SALT, _BACKUP_KDF_ITERATIONS, dklen=32
+    )
+
+
+def encrypt_bytes_with_passphrase(plaintext: bytes, passphrase: str) -> bytes:
+    """
+    Used for backups specifically, instead of encrypt_bytes -- the key
+    comes entirely from a passphrase the owner chose and remembers,
+    never from anything stored on this specific machine. That's the
+    one thing that makes restoring on a different, brand-new device
+    possible: nothing about the old machine needs to be reachable,
+    only the passphrase the person carries in their own memory.
+    """
+    aesgcm = AESGCM(_derive_backup_key(passphrase))
+    nonce = os.urandom(12)
+    return nonce + aesgcm.encrypt(nonce, plaintext, associated_data=None)
+
+
+def decrypt_bytes_with_passphrase(stored_value: bytes, passphrase: str) -> bytes:
+    """
+    Raises exactly like decrypt_bytes on a wrong key -- the caller is
+    expected to turn that into a clear "wrong passphrase or corrupted
+    file" message, never a raw crash.
+    """
+    aesgcm = AESGCM(_derive_backup_key(passphrase))
     nonce, ciphertext = stored_value[:12], stored_value[12:]
     return aesgcm.decrypt(nonce, ciphertext, associated_data=None)
 

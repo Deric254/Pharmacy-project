@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, postAndDownload } from './client'
 import type { BackupLogOut, RestoreResult } from '../types/api'
 
 export const backupsApi = {
@@ -8,4 +8,10 @@ export const backupsApi = {
     api.post<RestoreResult>(`/backups/${backupId}/restore`, { confirm }),
   connectGoogleDrive: (refreshToken: string) =>
     api.post<void>('/backups/connect-google-drive', { refresh_token: refreshToken }),
+  exportForMigration: (passphrase: string) =>
+    postAndDownload(
+      '/backups/export-for-migration',
+      { passphrase },
+      'pharmacy-migration-backup.enc',
+    ),
 }

@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -9,6 +9,7 @@ from app.models.user import User
 from app.schemas.backup import (
     BackupLogOut,
     ConnectGoogleDriveRequest,
+    MigrationExportRequest,
     RestoreRequest,
     RestoreResult,
     RunBackupRequest,
@@ -18,6 +19,20 @@ from app.services.backup_service import BackupService
 router = APIRouter(prefix="/backups", tags=["backups"])
 
 _DEFAULT_RUN_BACKUP_REQUEST = RunBackupRequest()
+
+
+@router.post("/export-for-migration")
+async def export_for_migration(
+    payload: MigrationExportRequest,
+    user: Annotated[User, Depends(require_permission("backups.manage"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> Response:
+    content = await BackupService(db).export_for_migration(payload.passphrase)
+    return Response(
+        content=content,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": 'attachment; filename="pharmacy-migration-backup.enc"'},
+    )
 
 
 @router.get("", response_model=list[BackupLogOut])

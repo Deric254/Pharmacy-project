@@ -17,6 +17,14 @@ class RunBackupRequest(BaseModel):
     provider: Literal["local", "google_drive"] = "local"
 
 
+class MigrationExportRequest(BaseModel):
+    # A real minimum -- a weak passphrase here would defeat the whole
+    # point of protecting a file that's meant to be carried off this
+    # machine and potentially stored somewhere less controlled (a USB
+    # drive, a cloud folder) than the database itself.
+    passphrase: str = Field(min_length=8, max_length=200)
+
+
 class BackupLogOut(BaseModel):
     id: int
     status: BackupStatus

@@ -234,6 +234,47 @@ async function fetchAndDownload(path: string, fallbackFilename: string): Promise
   URL.revokeObjectURL(objectUrl)
 }
 
+export async function postAndDownload(
+  path: string,
+  body: unknown,
+  fallbackFilename: string,
+): Promise<void> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const token = getAccessToken()
+  if (token) headers.Authorization = `Bearer ${token}`
+
+  const res = await fetch(`/api/v1${path}`, {
+    method: 'POST',
+    headers,
+    credentials: 'include',
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    let message = res.statusText
+    try {
+      const errBody = (await res.json()) as { detail?: string }
+      if (errBody.detail) message = errBody.detail
+    } catch {
+      // response wasn't JSON -- keep the statusText fallback
+    }
+    throw new ApiError(res.status, message, null)
+  }
+
+  const disposition = res.headers.get('Content-Disposition') ?? ''
+  const filenameMatch = /filename="?([^"]+)"?/.exec(disposition)
+  const filename = filenameMatch?.[1] ?? fallbackFilename
+
+  const blob = await res.blob()
+  const objectUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(objectUrl)
+}
+
 export async function downloadExport(
   path: string,
   query: Record<string, string | number>,

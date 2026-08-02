@@ -47,6 +47,7 @@ export function MarkdownLite({ text }: { text: string }) {
     const line = rawLine.trim()
     const bulletMatch = /^[-*]\s+(.*)/.exec(line)
     const numberedMatch = /^\d+\.\s+(.*)/.exec(line)
+    const headerMatch = /^#{1,6}\s+(.*)/.exec(line)
 
     if (bulletMatch) {
       if (listType !== 'ul') flushList()
@@ -56,6 +57,18 @@ export function MarkdownLite({ text }: { text: string }) {
       if (listType !== 'ol') flushList()
       listType = 'ol'
       listBuffer.push(numberedMatch[1])
+    } else if (headerMatch) {
+      // A defensive backstop, not the primary fix -- the assistant is
+      // instructed not to use headers at all, since this renderer
+      // only ever turns them into bold text, never a real heading
+      // size. This just guarantees a stray "#" never shows up as a
+      // literal character on screen if one slips through anyway.
+      flushList()
+      blocks.push(
+        <p key={blocks.length} className="mb-1 font-semibold last:mb-0">
+          {renderInline(headerMatch[1], `h-${blocks.length}`)}
+        </p>,
+      )
     } else {
       flushList()
       if (line) {

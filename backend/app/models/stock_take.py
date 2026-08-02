@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 class StockTakeStatus(enum.StrEnum):
     OPEN = "OPEN"
     CLOSED = "CLOSED"
+    CANCELLED = "CANCELLED"
 
 
 class StockTake(Base):

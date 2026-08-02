@@ -89,12 +89,12 @@ export function AppShell() {
   return (
     <div className="flex h-screen bg-paper text-ink">
       <aside className="flex w-56 shrink-0 flex-col border-r border-rule bg-panel">
-        <div className="border-b border-rule bg-brass px-4 py-3 text-paper">
+        <div className="border-b border-rule bg-panel px-4 py-3 text-ink">
           <div className="flex items-center gap-2">
             <Logo className="h-7 w-7 shrink-0" />
             <span className="truncate font-display text-base">{businessName}</span>
           </div>
-          {slogan && <Marquee text={`${slogan} :: ${businessName}`} />}
+          {slogan && <Marquee text={slogan} />}
         </div>
         <nav className="flex-1 space-y-3 overflow-y-auto p-2">
           {visibleSections.map((section) => {

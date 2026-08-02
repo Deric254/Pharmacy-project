@@ -8,7 +8,7 @@ module-level accuracy tests (e.g. Reports' two-batch profit test) with
 messier, more realistic multi-batch/discount/boundary scenarios.
 """
 
-from datetime import date
+from datetime import date, timedelta
 
 from app.core.database import AsyncSessionLocal
 from app.models.medicine_batch import MedicineBatch
@@ -44,7 +44,7 @@ class TestMultiBatchProfitAccuracy:
             db.add(product)
             await db.flush()
             for batch_number, expiry, qty, cost in [
-                ("A", date(2026, 8, 1), 4, 2.0),
+                ("A", (date.today() + timedelta(days=1)), 4, 2.0),
                 ("B", date(2026, 10, 1), 6, 3.0),
                 ("C", date(2027, 3, 1), 20, 4.0),
             ]:
@@ -100,7 +100,7 @@ class TestMultiBatchProfitAccuracy:
             near = MedicineBatch(
                 product_id=product.id,
                 batch_number="NEAR",
-                expiry_date=date(2026, 8, 1),
+                expiry_date=(date.today() + timedelta(days=1)),
                 qty_received=10,
                 qty_remaining=10,
                 cost_price=1.0,

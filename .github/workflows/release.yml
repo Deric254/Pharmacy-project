@@ -144,7 +144,7 @@ jobs:
           # _app_data_dir(), which reads that exact variable.
           export LOCALAPPDATA="$RUNNER_TEMP/exe-smoke-test"
           mkdir -p "$LOCALAPPDATA"
-          "./dist/Pharmacy-ERP.exe" &
+          "./dist/Pharmacy-ERP/Pharmacy-ERP.exe" &
           EXE_PID=$!
 
           ready=""
@@ -223,10 +223,17 @@ jobs:
           npm install
           npm run build:win
 
-      - name: Rename with the version
+      - name: Package the standalone backend build
         shell: bash
         run: |
-          mv "dist/Pharmacy-ERP.exe" "dist/Pharmacy-ERP-${{ needs.release.outputs.tag }}.exe"
+          # A onedir build genuinely cannot run on its own without the
+          # dependency files sitting next to it -- unlike the old
+          # onefile exe, shipping just Pharmacy-ERP.exe alone here
+          # would produce a release asset that fails the instant
+          # someone actually tries to run it.
+          cd dist
+          zip -r "Pharmacy-ERP-${{ needs.release.outputs.tag }}.zip" "Pharmacy-ERP"
+          cd ..
           # electron-builder's own default NSIS naming
           # ("<productName> Setup <version>.exe") -- found by its
           # actual glob rather than hardcoded, since that pattern can
@@ -244,5 +251,5 @@ jobs:
         shell: bash
         run: |
           gh release upload "${{ needs.release.outputs.tag }}" \
-            "dist/Pharmacy-ERP-${{ needs.release.outputs.tag }}.exe" \
+            "dist/Pharmacy-ERP-${{ needs.release.outputs.tag }}.zip" \
             "dist/Pharmacy-ERP-Setup-${{ needs.release.outputs.tag }}.exe" --clobber

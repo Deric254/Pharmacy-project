@@ -136,7 +136,7 @@ def _already_running_instance(port: int) -> bool:
     import urllib.request
 
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as response:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=0.5) as response:
             if response.status != 200:
                 return False
             body = json.loads(response.read())

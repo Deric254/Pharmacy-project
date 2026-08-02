@@ -21,10 +21,13 @@ export function PosPage() {
   const [error, setError] = useState<string | null>(null)
   const [receipt, setReceipt] = useState<SaleOut | null>(null)
   const [checkingOut, setCheckingOut] = useState(false)
+  const [customerName, setCustomerName] = useState('')
   const [customerPhone, setCustomerPhone] = useState('')
   const [attachedCustomer, setAttachedCustomer] = useState<CustomerOut | null>(null)
   const [customerLookupError, setCustomerLookupError] = useState<string | null>(null)
   const [lookingUpCustomer, setLookingUpCustomer] = useState(false)
+  const [nameMatches, setNameMatches] = useState<CustomerOut[] | null>(null)
+  const [registeringCustomer, setRegisteringCustomer] = useState(false)
 
   const estimatedSubtotal = cart.reduce(
     (sum, line) => sum + line.product.default_selling_price * line.quantity,
@@ -175,21 +178,57 @@ export function PosPage() {
   const submittingRef = useRef(false)
 
   async function handleCustomerLookup() {
-    if (!customerPhone.trim()) return
+    const phone = customerPhone.trim()
+    const name = customerName.trim()
+    if (!phone && !name) return
     setLookingUpCustomer(true)
     setCustomerLookupError(null)
+    setNameMatches(null)
     try {
-      const customer = await customersApi.getByPhone(customerPhone.trim())
-      setAttachedCustomer(customer)
+      if (phone) {
+        const customer = await customersApi.getByPhone(phone)
+        setAttachedCustomer(customer)
+        return
+      }
+      const matches = await customersApi.list(name)
+      if (matches.length === 1) {
+        setAttachedCustomer(matches[0])
+      } else if (matches.length > 1) {
+        setNameMatches(matches)
+      } else {
+        setCustomerLookupError('No matching customer found. You can register them below.')
+      }
     } catch (err) {
       setAttachedCustomer(null)
-      setCustomerLookupError(
-        err instanceof ApiError && err.status === 404
-          ? 'No customer with that phone number. Sale will be walk-in unless you register them.'
-          : 'Could not look up that customer.',
-      )
+      if (err instanceof ApiError && err.status === 404) {
+        setCustomerLookupError('No customer with that phone number. You can register them below.')
+      } else {
+        setCustomerLookupError('Could not look up that customer.')
+      }
     } finally {
       setLookingUpCustomer(false)
+    }
+  }
+
+  async function handleRegisterCustomer() {
+    const name = customerName.trim()
+    if (!name) {
+      setCustomerLookupError('A name is needed to register a new customer.')
+      return
+    }
+    setRegisteringCustomer(true)
+    setCustomerLookupError(null)
+    try {
+      const customer = await customersApi.create({
+        name,
+        phone: customerPhone.trim() || null,
+      })
+      setAttachedCustomer(customer)
+      setNameMatches(null)
+    } catch (err) {
+      setCustomerLookupError(err instanceof ApiError ? err.message : 'Could not register customer.')
+    } finally {
+      setRegisteringCustomer(false)
     }
   }
 
@@ -213,6 +252,8 @@ export function PosPage() {
       setQuery('')
       setAttachedCustomer(null)
       setCustomerPhone('')
+      setCustomerName('')
+      setNameMatches(null)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Checkout failed. Nothing was charged.')
     } finally {
@@ -322,11 +363,18 @@ export function PosPage() {
           </label>
           {attachedCustomer ? (
             <div className="mt-1 flex items-center justify-between border border-rule bg-panel px-2 py-1.5 text-sm">
-              <span>{attachedCustomer.name}</span>
+              <span>
+                {attachedCustomer.name}
+                {attachedCustomer.phone && (
+                  <span className="text-ink-soft"> · {attachedCustomer.phone}</span>
+                )}
+              </span>
               <button
                 onClick={() => {
                   setAttachedCustomer(null)
                   setCustomerPhone('')
+                  setCustomerName('')
+                  setNameMatches(null)
                 }}
                 className="text-xs text-stamp-red underline decoration-dotted"
               >
@@ -334,33 +382,83 @@ export function PosPage() {
               </button>
             </div>
           ) : (
-            <div className="mt-1 flex gap-2">
-              <input
-                value={customerPhone}
-                onChange={(e) => {
-                  setCustomerPhone(e.target.value)
-                  setCustomerLookupError(null)
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    void handleCustomerLookup()
+            <>
+              <div className="mt-1 flex gap-2">
+                <input
+                  value={customerName}
+                  onChange={(e) => {
+                    setCustomerName(e.target.value)
+                    setCustomerLookupError(null)
+                    setNameMatches(null)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      void handleCustomerLookup()
+                    }
+                  }}
+                  placeholder="Name"
+                  className="flex-1 border border-rule bg-paper px-2 py-1.5 text-sm"
+                />
+                <input
+                  value={customerPhone}
+                  onChange={(e) => {
+                    setCustomerPhone(e.target.value)
+                    setCustomerLookupError(null)
+                    setNameMatches(null)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      void handleCustomerLookup()
+                    }
+                  }}
+                  placeholder="Phone"
+                  className="flex-1 border border-rule bg-paper px-2 py-1.5 text-sm"
+                />
+                <button
+                  onClick={() => void handleCustomerLookup()}
+                  disabled={
+                    lookingUpCustomer || (!customerPhone.trim() && !customerName.trim())
                   }
-                }}
-                placeholder="Phone number"
-                className="flex-1 border border-rule bg-paper px-2 py-1.5 text-sm"
-              />
-              <button
-                onClick={() => void handleCustomerLookup()}
-                disabled={lookingUpCustomer || !customerPhone.trim()}
-                className="border border-rule px-3 py-1.5 text-sm text-ink-soft hover:border-brass disabled:opacity-50"
-              >
-                {lookingUpCustomer ? 'Looking up…' : 'Find'}
-              </button>
-            </div>
-          )}
-          {customerLookupError && (
-            <p className="mt-1 text-xs text-stamp-red">{customerLookupError}</p>
+                  className="border border-rule px-3 py-1.5 text-sm text-ink-soft hover:border-brass disabled:opacity-50"
+                >
+                  {lookingUpCustomer ? 'Looking up…' : 'Find'}
+                </button>
+              </div>
+              {nameMatches && nameMatches.length > 0 && (
+                <ul className="mt-1 divide-y divide-rule border border-rule text-sm">
+                  {nameMatches.map((c) => (
+                    <li key={c.id}>
+                      <button
+                        onClick={() => {
+                          setAttachedCustomer(c)
+                          setNameMatches(null)
+                        }}
+                        className="block w-full px-2 py-1.5 text-left hover:bg-panel"
+                      >
+                        {c.name}
+                        {c.phone && <span className="text-ink-soft"> · {c.phone}</span>}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {customerLookupError && (
+                <div className="mt-1 flex items-center justify-between gap-2">
+                  <p className="text-xs text-stamp-red">{customerLookupError}</p>
+                  {customerName.trim() && (
+                    <button
+                      onClick={() => void handleRegisterCustomer()}
+                      disabled={registeringCustomer}
+                      className="shrink-0 border border-rule px-2 py-1 text-xs text-ink-soft hover:border-brass disabled:opacity-50"
+                    >
+                      {registeringCustomer ? 'Registering…' : 'Register new customer'}
+                    </button>
+                  )}
+                </div>
+              )}
+            </>
           )}
 
           <label className="mt-3 block text-xs uppercase tracking-wide text-ink-soft">
@@ -416,6 +514,46 @@ function Receipt({ sale, onNewSale }: { sale: SaleOut; onNewSale: () => void }) 
   async function fetchReceiptBlob(): Promise<Blob> {
     return salesApi.receiptBlob(sale.id)
   }
+
+  useEffect(() => {
+    let cancelled = false
+    let iframe: HTMLIFrameElement | null = null
+    let objectUrl: string | null = null
+
+    void (async () => {
+      try {
+        const blob = await fetchReceiptBlob()
+        if (cancelled) return
+        objectUrl = URL.createObjectURL(blob)
+        iframe = document.createElement('iframe')
+        iframe.style.position = 'fixed'
+        iframe.style.width = '0'
+        iframe.style.height = '0'
+        iframe.style.border = 'none'
+        iframe.src = objectUrl
+        document.body.appendChild(iframe)
+        iframe.onload = () => {
+          try {
+            iframe?.contentWindow?.print()
+          } catch {
+            // No printer, print dialog unavailable, anything at all --
+            // this was automatic, so it fails silently and the person
+            // still has the manual Print button below as a fallback.
+          }
+        }
+      } catch {
+        // Same as above: an automatic action must never surface an
+        // error or block getting back to selling.
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      if (iframe && document.body.contains(iframe)) document.body.removeChild(iframe)
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sale.id])
 
   async function handlePrintOrPreview() {
     setBusy(true)

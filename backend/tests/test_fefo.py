@@ -7,7 +7,7 @@ prevention for the pharmacy. Tested directly against the service layer
 through.
 """
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -51,7 +51,7 @@ class TestFEFOSelection:
                 db,
                 [
                     ("FAR", "2028-01-01", 50),
-                    ("NEAR", "2026-08-01", 50),
+                    ("NEAR", (date.today() + timedelta(days=1)).isoformat(), 50),
                     ("MID", "2027-01-01", 50),
                 ],
             )
@@ -68,7 +68,7 @@ class TestFEFOSelection:
             product_id = await _make_product_with_batches(
                 db,
                 [
-                    ("NEAR", "2026-08-01", 5),
+                    ("NEAR", (date.today() + timedelta(days=1)).isoformat(), 5),
                     ("MID", "2027-01-01", 20),
                 ],
             )
@@ -97,7 +97,7 @@ class TestFEFOSelection:
             product_id = await _make_product_with_batches(
                 db,
                 [
-                    ("EMPTY", "2026-08-01", 0),
+                    ("EMPTY", (date.today() + timedelta(days=1)).isoformat(), 0),
                     ("HAS_STOCK", "2027-01-01", 20),
                 ],
             )
@@ -120,7 +120,7 @@ class TestApplyAllocations:
             product_id = await _make_product_with_batches(
                 db,
                 [
-                    ("NEAR", "2026-08-01", 5),
+                    ("NEAR", (date.today() + timedelta(days=1)).isoformat(), 5),
                     ("MID", "2027-01-01", 20),
                 ],
             )

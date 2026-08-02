@@ -354,7 +354,6 @@ export function DashboardPage() {
               </p>
             </div>
           </div>
-          <p className="mt-3 text-xs italic text-ink-soft">{revenuePotential.caveat}</p>
         </div>
       )}
 

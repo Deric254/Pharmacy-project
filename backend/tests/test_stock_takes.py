@@ -218,6 +218,103 @@ class TestSaleLockInteraction:
         )
         assert r.status_code == 201
 
+    async def test_locked_batch_correctly_excluded_from_available_quantity(
+        self, client, owner_user
+    ):
+        """
+        The real, confirmed bug this closes: a locked batch still
+        counted toward "total_qty_available" shown in the product
+        list and POS, even though the exact same batch correctly
+        failed every real sale attempt -- a product could show
+        "20 in stock" while genuinely being completely unsellable.
+        """
+        product_id, batch_id = await _make_product_with_batch(qty=20)
+        owner_token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {owner_token}"}
+
+        await client.post(
+            "/api/v1/stock-takes", json={"product_ids": [product_id]}, headers=headers
+        )
+
+        r = await client.get(f"/api/v1/products/{product_id}", headers=headers)
+        assert r.status_code == 200
+        assert r.json()["total_qty_available"] == 0
+
+    async def test_cancel_releases_the_lock_without_a_completed_count(
+        self, client, owner_user, employee_user
+    ):
+        """
+        The real fix for the confirmed bug: before this, the only way
+        to release a stock take's locked batches was finishing the
+        entire count and closing it. Abandon one partway through and
+        there was no way out -- the batches stayed locked forever,
+        showing as available everywhere while every real sale kept
+        failing. Cancel releases the lock immediately, with zero items
+        counted.
+        """
+        product_id, batch_id = await _make_product_with_batch(qty=20)
+        owner_token = await _login(client, "lucy", "S3curePass!")
+        owner_headers = {"Authorization": f"Bearer {owner_token}"}
+
+        create_resp = await client.post(
+            "/api/v1/stock-takes", json={"product_ids": [product_id]}, headers=owner_headers
+        )
+        stock_take_id = create_resp.json()["id"]
+
+        # Confirm it's genuinely locked and unsellable before cancelling.
+        blocked = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 5}],
+                "payments": [{"method": "CASH", "amount": 50.0}],
+            },
+            headers=owner_headers,
+        )
+        assert blocked.status_code == 409
+
+        cancel_resp = await client.post(
+            f"/api/v1/stock-takes/{stock_take_id}/cancel", headers=owner_headers
+        )
+        assert cancel_resp.status_code == 200
+        assert cancel_resp.json()["status"] == "CANCELLED"
+
+        # The real proof: available quantity is restored, and a real
+        # sale against the same stock now genuinely succeeds.
+        product_check = await client.get(f"/api/v1/products/{product_id}", headers=owner_headers)
+        assert product_check.json()["total_qty_available"] == 20
+
+        employee_token = await _login(client, "joe", "pass1234")
+        sale = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 5}],
+                "payments": [{"method": "CASH", "amount": 50.0}],
+            },
+            headers={"Authorization": f"Bearer {employee_token}"},
+        )
+        assert sale.status_code == 201
+
+    async def test_cannot_cancel_an_already_closed_stock_take(self, client, owner_user):
+        product_id, batch_id = await _make_product_with_batch(qty=20)
+        owner_token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {owner_token}"}
+
+        create_resp = await client.post(
+            "/api/v1/stock-takes", json={"product_ids": [product_id]}, headers=headers
+        )
+        stock_take_id = create_resp.json()["id"]
+        item_id = create_resp.json()["items"][0]["id"]
+
+        await client.post(
+            f"/api/v1/stock-takes/{stock_take_id}/items/{item_id}/count",
+            json={"physical_qty": 20},
+            headers=headers,
+        )
+        await client.post(f"/api/v1/stock-takes/{stock_take_id}/close", headers=headers)
+
+        r = await client.post(f"/api/v1/stock-takes/{stock_take_id}/cancel", headers=headers)
+        assert r.status_code == 400
+
 
 class TestCountSubmission:
     async def test_matching_count_auto_approves_with_no_reason(self, client, owner_user):

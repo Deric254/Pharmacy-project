@@ -23,8 +23,8 @@
     ],
     "extraResources": [
       {
-        "from": "../dist/Pharmacy-ERP.exe",
-        "to": "backend/Pharmacy-ERP.exe"
+        "from": "../dist/Pharmacy-ERP/",
+        "to": "backend"
       }
     ],
     "win": {

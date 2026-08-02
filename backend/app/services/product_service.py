@@ -122,10 +122,11 @@ class ProductService:
             return []
 
         # "Available" means actually sellable -- matching exactly what
-        # select_batches_fefo allows, expired batches excluded. Before
-        # this, a product with only expired stock could show as
-        # available here while every real sale attempt correctly
-        # failed against it -- a genuine, confusing inconsistency.
+        # select_batches_fefo allows: expired batches excluded, and
+        # batches currently locked by an open stock take excluded too.
+        # Before this, a product could show as available here while
+        # every real sale attempt correctly failed against it -- a
+        # genuine, confusing inconsistency.
         product_ids = [p.id for p in products]
         qty_result = await self.db.execute(
             select(
@@ -134,6 +135,7 @@ class ProductService:
             .where(
                 MedicineBatch.product_id.in_(product_ids),
                 MedicineBatch.expiry_date >= date.today(),
+                MedicineBatch.locked_by_stock_take_id.is_(None),
             )
             .group_by(MedicineBatch.product_id)
         )
@@ -218,6 +220,7 @@ class ProductService:
             select(func.coalesce(func.sum(MedicineBatch.qty_remaining), 0)).where(
                 MedicineBatch.product_id == product.id,
                 MedicineBatch.expiry_date >= date.today(),
+                MedicineBatch.locked_by_stock_take_id.is_(None),
             )
         )
         total_qty = qty_result.scalar_one()

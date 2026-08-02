@@ -5,6 +5,7 @@ import type {
   BatchOut,
   CountSubmit,
   CustomerCreate,
+  CustomerLifetimeValueOut,
   CustomerOut,
   ExpiringBatchOut,
   KanbanBoard,
@@ -104,6 +105,7 @@ export const customersApi = {
   create: (payload: CustomerCreate) => api.post<CustomerOut>('/customers', payload),
   purchaseHistory: (id: number) =>
     api.get<PurchaseHistoryEntryOut[]>(`/customers/${id}/purchase-history`),
+  lifetimeValue: () => api.get<CustomerLifetimeValueOut>('/customers/lifetime-value'),
   downloadImportTemplate: () =>
     downloadFile('/customers/import-template', 'customer-import-template.xlsx'),
   importFromExcel: (file: File) =>
@@ -122,6 +124,7 @@ export const stockTakesApi = {
   approveVariance: (stockTakeId: number, itemId: number) =>
     api.post<StockTakeItemOut>(`/stock-takes/${stockTakeId}/items/${itemId}/approve`),
   close: (stockTakeId: number) => api.post<StockTakeOut>(`/stock-takes/${stockTakeId}/close`),
+  cancel: (stockTakeId: number) => api.post<StockTakeOut>(`/stock-takes/${stockTakeId}/cancel`),
   downloadCountTemplate: (stockTakeId: number) =>
     downloadFile(
       `/stock-takes/${stockTakeId}/count-template`,

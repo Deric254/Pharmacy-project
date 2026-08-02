@@ -1,7 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
 Bundles backend/desktop_main.py plus everything it needs at runtime
-into a single executable:
+into a folder containing Pharmacy-ERP.exe and its dependencies
+(onedir mode, not onefile) -- onefile re-extracts its entire bundle to
+a temp directory on every single launch, a well-documented source of
+inconsistent startup delay (especially with antivirus scanning the
+freshly-extracted files each time). Onedir extracts once, at install
+time, so every subsequent launch is genuinely instant:
   - backend/alembic/ and backend/alembic.ini, because desktop_main.py
     runs migrations via the Alembic Config API against these actual
     files on disk (not something static analysis can discover).
@@ -16,6 +21,10 @@ Run from the repo root:
 Requires frontend/dist to already exist (`cd frontend && npm run
 build` first) -- the release workflow does this before invoking
 PyInstaller; it is not done here.
+
+Output: dist/Pharmacy-ERP/Pharmacy-ERP.exe (a folder, not a single
+file) -- electron/main.js and electron/package.json's extraResources
+both reference this nested path.
 """
 
 import sys
@@ -77,10 +86,8 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="Pharmacy-ERP",
     debug=False,
     bootloader_ignore_signals=False,
@@ -93,4 +100,14 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    name="Pharmacy-ERP",
 )

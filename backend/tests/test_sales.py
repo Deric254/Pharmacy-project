@@ -180,7 +180,7 @@ class TestCreateSale:
                 MedicineBatch(
                     product_id=product.id,
                     batch_number="FAR",
-                    expiry_date=date(2028, 1, 1),
+                    expiry_date=date.today() + timedelta(days=700),
                     qty_received=50,
                     qty_remaining=50,
                     cost_price=2.0,
@@ -190,7 +190,7 @@ class TestCreateSale:
                 MedicineBatch(
                     product_id=product.id,
                     batch_number="NEAR",
-                    expiry_date=date(2026, 8, 1),
+                    expiry_date=date.today() + timedelta(days=30),
                     qty_received=10,
                     qty_remaining=10,
                     cost_price=2.0,

@@ -16,14 +16,20 @@ from __future__ import annotations
 from typing import Any, cast
 
 from fastapi import HTTPException
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business_config import BusinessConfig
 from app.models.customer import Customer
 from app.models.sale import Sale
-from app.schemas.customer import CustomerCreate, CustomerOut, PurchaseHistoryEntryOut
+from app.schemas.customer import (
+    CustomerCreate,
+    CustomerLifetimeValueEntry,
+    CustomerLifetimeValueOut,
+    CustomerOut,
+    PurchaseHistoryEntryOut,
+)
 
 
 class CustomerService:
@@ -50,6 +56,42 @@ class CustomerService:
             query = query.where((Customer.name.ilike(f"%{search}%")) | (Customer.phone == search))
         result = await self.db.execute(query.order_by(Customer.name))
         return [CustomerOut.model_validate(c) for c in result.scalars().all()]
+
+    async def lifetime_value(self) -> CustomerLifetimeValueOut:
+        """
+        Real total spend per customer, computed directly from actual
+        sales -- never a stored, cacheable figure that could drift
+        from reality as new sales happen. Customers with zero
+        purchases are excluded entirely from both the list and the
+        average, rather than padding it with real customers who
+        simply haven't bought anything yet.
+        """
+        result = await self.db.execute(
+            select(
+                Customer.id,
+                Customer.name,
+                Customer.phone,
+                func.sum(Sale.total_amount).label("lifetime_value"),
+                func.count(Sale.id).label("sale_count"),
+            )
+            .join(Sale, Sale.customer_id == Customer.id)
+            .group_by(Customer.id)
+            .order_by(func.sum(Sale.total_amount).desc())
+        )
+        rows = result.all()
+
+        entries = [
+            CustomerLifetimeValueEntry(
+                customer_id=row.id,
+                name=row.name,
+                phone=row.phone,
+                lifetime_value=float(row.lifetime_value),
+                sale_count=int(row.sale_count),
+            )
+            for row in rows
+        ]
+        average = sum(e.lifetime_value for e in entries) / len(entries) if entries else None
+        return CustomerLifetimeValueOut(entries=entries, average_lifetime_value=average)
 
     async def get(self, customer_id: int) -> CustomerOut:
         customer = await self._get_or_404(customer_id)

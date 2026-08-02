@@ -1,6 +1,7 @@
 import {
   Line,
   LineChart,
+  LabelList,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -14,6 +15,10 @@ import { useCurrencyFormatter } from '../../lib/currency'
 export function RevenueTrendChart({ data }: { data: RevenueTrendOut }) {
   const formatCurrency = useCurrencyFormatter()
   const hasProfit = data.points.some((p) => p.profit !== null)
+  // Enough points on screen at once and a label on every one becomes
+  // unreadable clutter rather than useful -- only label when there's
+  // real room for it.
+  const showLabels = data.points.length <= 15
 
   if (data.points.length === 0) {
     return <p className="text-sm text-ink-soft">No sales in this range yet.</p>
@@ -51,7 +56,16 @@ export function RevenueTrendChart({ data }: { data: RevenueTrendOut }) {
             stroke="var(--color-brass)"
             strokeWidth={2}
             dot={data.points.length <= 31}
-          />
+          >
+            {showLabels && (
+              <LabelList
+                dataKey="revenue"
+                position="top"
+                formatter={(value) => formatCurrency(Number(value))}
+                style={{ fill: 'var(--color-brass)', fontSize: 10 }}
+              />
+            )}
+          </Line>
           {hasProfit && (
             <Line
               type="monotone"
@@ -60,7 +74,16 @@ export function RevenueTrendChart({ data }: { data: RevenueTrendOut }) {
               stroke="var(--color-stamp-green)"
               strokeWidth={2}
               dot={data.points.length <= 31}
-            />
+            >
+              {showLabels && (
+                <LabelList
+                  dataKey="profit"
+                  position="bottom"
+                  formatter={(value) => formatCurrency(Number(value))}
+                  style={{ fill: 'var(--color-stamp-green)', fontSize: 10 }}
+                />
+              )}
+            </Line>
           )}
         </LineChart>
       </ResponsiveContainer>

@@ -217,3 +217,42 @@ class TestPurchaseOrderBulkImport:
             files={"file": ("import.xlsx", content, "application/octet-stream")},
         )
         assert r.status_code == 403
+
+    async def test_uploading_the_same_list_twice_merges_not_duplicates(self, client, owner_user):
+        """
+        The real, confirmed bug this closes: uploading the same
+        purchase list a second time (or an updated one for the same
+        real-world delivery) created a second, separate batch row
+        instead of adding to the one already there -- genuine
+        inventory duplication despite being the same product and the
+        same batch number. This is the exact real-world scenario:
+        upload once, upload again, confirm exactly one batch exists
+        with the combined quantity, not two.
+        """
+        product_id = await _make_product("Reupload Test Product")
+        supplier_id = await _make_supplier()
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        content = _build_workbook([["Reupload Test Product", 100, "REUP1", "2027-06-30", 10.0]])
+
+        first = await client.post(
+            "/api/v1/purchase-orders/import",
+            headers=headers,
+            data={"supplier_id": str(supplier_id)},
+            files={"file": ("import.xlsx", content, "application/octet-stream")},
+        )
+        assert first.status_code == 201
+
+        second = await client.post(
+            "/api/v1/purchase-orders/import",
+            headers=headers,
+            data={"supplier_id": str(supplier_id)},
+            files={"file": ("import.xlsx", content, "application/octet-stream")},
+        )
+        assert second.status_code == 201
+
+        batches = await client.get(f"/api/v1/products/{product_id}/batches", headers=headers)
+        matching = [b for b in batches.json() if b["batch_number"] == "REUP1"]
+        assert len(matching) == 1, "Expected exactly one batch, found duplication"
+        assert matching[0]["qty_remaining"] == 200

@@ -345,3 +345,98 @@ class TestLoyaltyPoints:
         r = await client.get(f"/api/v1/customers/{customer_id}", headers=headers)
         # 10 points each, both must land -- not 10 (one award lost).
         assert r.json()["loyalty_points"] == 20
+
+
+class TestLifetimeValue:
+    """
+    Real total spend per customer, computed directly from actual
+    sales. The properties that matter: exact math, correct ordering
+    (highest spender first), the average excludes customers with no
+    purchases (never diluted toward a meaninglessly low number by
+    real customers who simply haven't bought anything), and Employees
+    -- who can see individual customers but not aggregate revenue
+    rankings -- correctly cannot reach this.
+    """
+
+    async def test_exact_math_and_ordering(self, client, owner_user):
+        product_id = await _make_product_with_batch(price=50.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        big_spender = (
+            await client.post(
+                "/api/v1/customers",
+                json={"name": "Big Spender", "phone": "0700111111"},
+                headers=headers,
+            )
+        ).json()
+        small_spender = (
+            await client.post(
+                "/api/v1/customers",
+                json={"name": "Small Spender", "phone": "0700222222"},
+                headers=headers,
+            )
+        ).json()
+        await client.post(
+            "/api/v1/customers",
+            json={"name": "Never Bought", "phone": "0700333333"},
+            headers=headers,
+        )
+
+        # Big spender: 2 sales of 100 each = 200 total
+        for _ in range(2):
+            await client.post(
+                "/api/v1/sales",
+                json={
+                    "items": [{"product_id": product_id, "quantity": 2}],
+                    "payments": [{"method": "CASH", "amount": 100.0}],
+                    "customer_id": big_spender["id"],
+                },
+                headers=headers,
+            )
+        # Small spender: 1 sale of 50
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 50.0}],
+                "customer_id": small_spender["id"],
+            },
+            headers=headers,
+        )
+
+        r = await client.get("/api/v1/customers/lifetime-value", headers=headers)
+        assert r.status_code == 200
+        body = r.json()
+
+        names = [e["name"] for e in body["entries"]]
+        assert "Never Bought" not in names  # zero purchases -- excluded entirely
+        assert names[0] == "Big Spender"  # highest spender first
+        assert names[1] == "Small Spender"
+
+        big_entry = next(e for e in body["entries"] if e["name"] == "Big Spender")
+        assert big_entry["lifetime_value"] == 200.0
+        assert big_entry["sale_count"] == 2
+
+        small_entry = next(e for e in body["entries"] if e["name"] == "Small Spender")
+        assert small_entry["lifetime_value"] == 50.0
+
+        # Average across only the two real customers with purchases:
+        # (200 + 50) / 2 = 125 -- never diluted by "Never Bought".
+        assert body["average_lifetime_value"] == 125.0
+
+    async def test_no_customers_with_purchases_gives_none_not_zero(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        r = await client.get(
+            "/api/v1/customers/lifetime-value", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 200
+        assert r.json()["entries"] == []
+        assert r.json()["average_lifetime_value"] is None
+
+    async def test_requires_reports_view_permission(self, client, employee_user):
+        token = await _login(client, "joe", "pass1234")
+        r = await client.get(
+            "/api/v1/customers/lifetime-value", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 403

@@ -340,7 +340,20 @@ export interface PurchaseHistoryEntryOut {
   created_at: string
 }
 
-export type StockTakeStatus = 'OPEN' | 'CLOSED'
+export interface CustomerLifetimeValueEntry {
+  customer_id: number
+  name: string
+  phone: string | null
+  lifetime_value: number
+  sale_count: number
+}
+
+export interface CustomerLifetimeValueOut {
+  entries: CustomerLifetimeValueEntry[]
+  average_lifetime_value: number | null
+}
+
+export type StockTakeStatus = 'OPEN' | 'CLOSED' | 'CANCELLED'
 
 export interface StockTakeCreate {
   product_ids?: number[] | null

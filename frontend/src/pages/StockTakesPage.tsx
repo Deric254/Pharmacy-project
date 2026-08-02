@@ -100,7 +100,7 @@ function StockTakeList({
   }
 
   const open = stockTakes.filter((s) => s.status === 'OPEN')
-  const closed = stockTakes.filter((s) => s.status === 'CLOSED')
+  const finished = stockTakes.filter((s) => s.status !== 'OPEN')
 
   return (
     <div>
@@ -132,10 +132,10 @@ function StockTakeList({
       <section>
         <h2 className="mb-2 text-xs uppercase tracking-wide text-ink-soft">History</h2>
         <div className="space-y-2">
-          {closed.map((st) => (
+          {finished.map((st) => (
             <StockTakeRow key={st.id} stockTake={st} onSelect={onSelect} />
           ))}
-          {closed.length === 0 && <p className="text-sm text-ink-soft">No closed stock takes yet.</p>}
+          {finished.length === 0 && <p className="text-sm text-ink-soft">No closed stock takes yet.</p>}
         </div>
       </section>
     </div>
@@ -162,7 +162,7 @@ function StockTakeRow({
         </span>
       </span>
       <span className="figure text-ink-soft">
-        {counted}/{stockTake.items.length} counted
+        {stockTake.status === 'CANCELLED' ? 'Cancelled' : `${counted}/${stockTake.items.length} counted`}
       </span>
     </button>
   )
@@ -197,6 +197,27 @@ function StockTakeDetail({
       onChanged()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not close stock take.')
+    } finally {
+      setClosing(false)
+    }
+  }
+
+  async function handleCancel() {
+    if (
+      !window.confirm(
+        'Cancel this stock take? Any counts entered so far will be discarded, and the locked ' +
+          'stock will become sellable again immediately. This cannot be undone.',
+      )
+    ) {
+      return
+    }
+    setClosing(true)
+    setError(null)
+    try {
+      await stockTakesApi.cancel(stockTake.id)
+      onChanged()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not cancel stock take.')
     } finally {
       setClosing(false)
     }
@@ -256,6 +277,15 @@ function StockTakeDetail({
           )}
           {stockTake.status === 'OPEN' && (
             <button
+              onClick={() => void handleCancel()}
+              disabled={closing}
+              className="border border-rule px-3 py-2 text-sm text-stamp-red hover:border-stamp-red disabled:opacity-40"
+            >
+              Cancel stock take
+            </button>
+          )}
+          {stockTake.status === 'OPEN' && (
+            <button
               onClick={() => void handleClose()}
               disabled={closing || unapproved.length > 0}
               className="border border-ink bg-ink px-4 py-2 text-sm text-paper disabled:opacity-40"
@@ -265,6 +295,9 @@ function StockTakeDetail({
           )}
           {stockTake.status === 'CLOSED' && (
             <span className="text-sm text-stamp-green">Closed</span>
+          )}
+          {stockTake.status === 'CANCELLED' && (
+            <span className="text-sm text-ink-soft">Cancelled</span>
           )}
         </div>
       </div>

@@ -2,11 +2,13 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { aiApi } from '../api/ai'
 import { ApiError } from '../api/client'
 import { Modal } from '../components/Modal'
+import { useAuthStore } from '../auth/store'
 import type { AIProviderKeyOut, AIProviderName } from '../types/api'
 
 const PROVIDERS: AIProviderName[] = ['CLAUDE', 'OPENAI', 'GEMINI', 'DEEPSEEK', 'NVIDIA']
 
 export function AiAssistantPage() {
+  const canManageKeys = useAuthStore((s) => s.hasPermission('users.manage'))
   const [keys, setKeys] = useState<AIProviderKeyOut[]>([])
   const [error, setError] = useState<string | null>(null)
   const [showAddKey, setShowAddKey] = useState(false)
@@ -43,10 +45,9 @@ export function AiAssistantPage() {
     <div className="p-6">
       <h1 className="mb-1 font-display text-2xl text-ink">AI Settings</h1>
       <p className="mb-6 text-sm text-ink-soft">
-        Bring your own API key from any supported provider. Keys are encrypted at rest and never
-        shown again after you save them — only a masked preview. If your first-priority provider
-        is unavailable, the next one by priority is tried automatically. Once a key is added, the
-        assistant is available from the icon in the corner of every page.
+        {canManageKeys
+          ? 'Bring your own API key from any supported provider. Keys are encrypted at rest and never shown again after you save them — only a masked preview. If your first-priority provider is unavailable, the next one by priority is tried automatically. Once a key is added, the assistant is available from the icon in the corner of every page.'
+          : 'Provider keys are shared across your whole team and managed by your pharmacy owner or administrator. Once one is added, the assistant is available from the icon in the corner of every page — there is nothing for you to configure here.'}
       </p>
 
       {error && (
@@ -58,12 +59,14 @@ export function AiAssistantPage() {
       <section className="ledger-panel p-4">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-xs uppercase tracking-wide text-ink-soft">Provider keys</h2>
-          <button
-            onClick={() => setShowAddKey(true)}
-            className="border border-rule px-2 py-1 text-xs hover:border-brass"
-          >
-            Add key
-          </button>
+          {canManageKeys && (
+            <button
+              onClick={() => setShowAddKey(true)}
+              className="border border-rule px-2 py-1 text-xs hover:border-brass"
+            >
+              Add key
+            </button>
+          )}
         </div>
         <ul className="divide-y divide-rule">
           {keys.map((k) => (
@@ -75,17 +78,21 @@ export function AiAssistantPage() {
                   <span className="ml-2 text-xs uppercase text-stamp-red">inactive</span>
                 )}
               </span>
-              <button
-                onClick={() => void handleDeleteKey(k.id)}
-                className="text-xs text-stamp-red underline decoration-dotted"
-              >
-                Remove
-              </button>
+              {canManageKeys && (
+                <button
+                  onClick={() => void handleDeleteKey(k.id)}
+                  className="text-xs text-stamp-red underline decoration-dotted"
+                >
+                  Remove
+                </button>
+              )}
             </li>
           ))}
           {keys.length === 0 && (
             <li className="py-3 text-sm text-ink-soft">
-              No provider keys configured yet. Add one to start using the assistant.
+              {canManageKeys
+                ? 'No provider keys configured yet. Add one to start using the assistant.'
+                : 'No provider keys configured yet. Ask your pharmacy owner or administrator to add one.'}
             </li>
           )}
         </ul>

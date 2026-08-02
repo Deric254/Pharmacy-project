@@ -104,15 +104,41 @@ class PurchasingService:
 
         total_owed = 0.0
         for line in payload.lines:
-            batch = MedicineBatch(
-                product_id=line.product_id,
-                batch_number=line.batch_number,
-                expiry_date=line.expiry_date,
-                qty_received=line.quantity,
-                qty_remaining=line.quantity,
-                cost_price=line.unit_cost,
+            # Receiving the same physical batch again -- same product,
+            # same batch number, same expiry -- merges into the
+            # existing record via standard weighted-average cost,
+            # rather than creating a second, separate batch row for
+            # what is physically the identical batch. This is exactly
+            # what re-uploading the same (or an updated) purchase list
+            # should do: add to what's already there, never duplicate it.
+            existing_result = await self.db.execute(
+                select(MedicineBatch).where(
+                    MedicineBatch.product_id == line.product_id,
+                    MedicineBatch.batch_number == line.batch_number,
+                    MedicineBatch.expiry_date == line.expiry_date,
+                )
             )
-            self.db.add(batch)
+            existing_batch = existing_result.scalar_one_or_none()
+
+            if existing_batch is not None:
+                combined_qty = existing_batch.qty_remaining + line.quantity
+                existing_batch.cost_price = (
+                    existing_batch.qty_remaining * existing_batch.cost_price
+                    + line.quantity * line.unit_cost
+                ) / combined_qty
+                existing_batch.qty_received += line.quantity
+                existing_batch.qty_remaining = combined_qty
+                batch = existing_batch
+            else:
+                batch = MedicineBatch(
+                    product_id=line.product_id,
+                    batch_number=line.batch_number,
+                    expiry_date=line.expiry_date,
+                    qty_received=line.quantity,
+                    qty_remaining=line.quantity,
+                    cost_price=line.unit_cost,
+                )
+                self.db.add(batch)
             await self.db.flush()
 
             self.db.add(

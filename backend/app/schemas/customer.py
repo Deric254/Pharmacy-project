@@ -24,3 +24,18 @@ class PurchaseHistoryEntryOut(BaseModel):
     sale_id: int
     total_amount: float
     created_at: datetime
+
+
+class CustomerLifetimeValueEntry(BaseModel):
+    customer_id: int
+    name: str
+    phone: str | None
+    lifetime_value: float
+    sale_count: int
+
+
+class CustomerLifetimeValueOut(BaseModel):
+    entries: list[CustomerLifetimeValueEntry]
+    # None entirely (never zero) when no customer has any purchases
+    # yet -- a real absence of data, not a real average of zero.
+    average_lifetime_value: float | None

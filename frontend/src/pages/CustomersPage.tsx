@@ -3,11 +3,15 @@ import { customersApi } from '../api/domain'
 import { useCurrencyFormatter } from '../lib/currency'
 import { ApiError, downloadExport } from '../api/client'
 import { Modal } from '../components/Modal'
-import type { CustomerOut, ImportRowError, PurchaseHistoryEntryOut } from '../types/api'
+import { useAuthStore } from '../auth/store'
+import type { CustomerLifetimeValueOut, CustomerOut, ImportRowError, PurchaseHistoryEntryOut } from '../types/api'
 
 export function CustomersPage() {
+  const canSeeLtv = useAuthStore((s) => s.hasPermission('reports.view'))
+  const formatCurrency = useCurrencyFormatter()
   const [query, setQuery] = useState('')
   const [customers, setCustomers] = useState<CustomerOut[]>([])
+  const [ltv, setLtv] = useState<CustomerLifetimeValueOut | null>(null)
   const [selected, setSelected] = useState<CustomerOut | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [showImport, setShowImport] = useState(false)
@@ -27,6 +31,22 @@ export function CustomersPage() {
   }
 
   useEffect(() => load(), [])
+  useEffect(() => {
+    if (!canSeeLtv) return
+    customersApi.lifetimeValue().then(setLtv).catch(() => undefined)
+  }, [canSeeLtv])
+
+  const ltvByCustomerId = new Map(ltv?.entries.map((e) => [e.customer_id, e]) ?? [])
+  // Ordered by lifetime value, highest first -- customers with no
+  // purchases yet (not in the LTV data at all) keep the existing
+  // alphabetical order and simply sort after every real spender.
+  const orderedCustomers = query.trim()
+    ? customers
+    : [...customers].sort((a, b) => {
+        const av = ltvByCustomerId.get(a.id)?.lifetime_value ?? -1
+        const bv = ltvByCustomerId.get(b.id)?.lifetime_value ?? -1
+        return bv - av
+      })
 
   function handleSearch(e: FormEvent) {
     e.preventDefault()
@@ -83,8 +103,17 @@ export function CustomersPage() {
         </p>
       )}
 
+      {canSeeLtv && ltv && ltv.average_lifetime_value !== null && (
+        <div className="mb-4 ledger-panel p-3">
+          <span className="text-xs uppercase tracking-wide text-ink-soft">
+            Average lifetime value
+          </span>
+          <p className="figure text-xl text-ink">{formatCurrency(ltv.average_lifetime_value)}</p>
+        </div>
+      )}
+
       <div className="ledger-panel divide-y divide-rule">
-        {customers.map((c) => (
+        {orderedCustomers.map((c) => (
           <button
             key={c.id}
             onClick={() => setSelected(c)}
@@ -94,7 +123,16 @@ export function CustomersPage() {
               <p className="font-medium">{c.name}</p>
               <p className="text-xs text-ink-soft">{c.phone ?? 'No phone on file'}</p>
             </div>
-            <span className="figure text-brass">{c.loyalty_points} pts</span>
+            <div className="text-right">
+              {canSeeLtv && (
+                <p className="figure text-ink">
+                  {ltvByCustomerId.has(c.id)
+                    ? formatCurrency(ltvByCustomerId.get(c.id)!.lifetime_value)
+                    : '—'}
+                </p>
+              )}
+              <span className="figure text-xs text-brass">{c.loyalty_points} pts</span>
+            </div>
           </button>
         ))}
         {customers.length === 0 && !loading && (

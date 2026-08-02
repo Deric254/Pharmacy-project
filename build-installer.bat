@@ -159,8 +159,8 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-if not exist "dist\Pharmacy-ERP.exe" (
-    echo [ERROR] Build reported success but dist\Pharmacy-ERP.exe is missing.
+if not exist "dist\Pharmacy-ERP\Pharmacy-ERP.exe" (
+    echo [ERROR] Build reported success but dist\Pharmacy-ERP\Pharmacy-ERP.exe is missing.
     pause
     exit /b 1
 )

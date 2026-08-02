@@ -66,6 +66,21 @@ class Settings(BaseSettings):
         db_path = Path(self.database_url[len(prefix) :]).resolve()
         return db_path.parent / "backups"
 
+    @property
+    def log_file_path(self) -> Path:
+        """
+        A real, persistent log file next to the database -- same
+        convention as local_backup_dir. Without this, an unhandled
+        error in the packaged desktop app (which has no visible
+        console) was completely invisible: not to the person using
+        it, and not to anyone trying to diagnose it afterward.
+        """
+        prefix = "sqlite+aiosqlite:///"
+        if not self.database_url.startswith(prefix):
+            return Path("logs") / "pharmacy-erp.log"
+        db_path = Path(self.database_url[len(prefix) :]).resolve()
+        return db_path.parent / "logs" / "pharmacy-erp.log"
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -620,3 +620,99 @@ class TestQuickPurchase:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert r.status_code == 403
+
+    async def test_receiving_the_same_batch_again_merges_not_duplicates(self, client, owner_user):
+        """
+        The real, confirmed bug this closes: receiving the same
+        physical batch twice (same product, same batch number, same
+        expiry -- e.g. re-uploading the same purchase list, or simply
+        restocking the identical batch) created a second, separate
+        batch row instead of adding to the existing one. Proven with
+        exact weighted-average cost math, not just "no duplicate row".
+        """
+        product_id = await _make_product("Merge Test Product")
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        supplier = await client.post(
+            "/api/v1/suppliers", json={"name": "Merge Supplier"}, headers=headers
+        )
+        supplier_id = supplier.json()["id"]
+
+        first_line = {
+            "product_id": product_id,
+            "quantity": 100,
+            "batch_number": "MERGE-001",
+            "expiry_date": "2027-06-30",
+            "unit_cost": 10.0,
+        }
+        r1 = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={"supplier_id": supplier_id, "lines": [first_line]},
+            headers=headers,
+        )
+        assert r1.status_code == 201
+
+        # Receive the identical batch again, at a different cost --
+        # exactly the "re-uploaded the same list" real-world scenario.
+        second_line = {
+            "product_id": product_id,
+            "quantity": 50,
+            "batch_number": "MERGE-001",
+            "expiry_date": "2027-06-30",
+            "unit_cost": 16.0,
+        }
+        r2 = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={"supplier_id": supplier_id, "lines": [second_line]},
+            headers=headers,
+        )
+        assert r2.status_code == 201
+
+        product = await client.get(f"/api/v1/products/{product_id}", headers=headers)
+        body = product.json()
+        # Never duplicated: exactly 150 total, not 100 and 50 sitting
+        # in two separate batches.
+        assert body["total_qty_available"] == 150
+        # Real weighted-average cost: (100*10 + 50*16) / 150 = 12.0
+        assert body["current_cost"] == 12.0
+
+        batches = await client.get(f"/api/v1/products/{product_id}/batches", headers=headers)
+        assert len(batches.json()) == 1
+
+    async def test_different_expiry_dates_never_merge(self, client, owner_user):
+        """
+        Same batch number, different expiry -- genuinely different
+        physical batches (a real-world relabeling/re-count case) --
+        must never be merged into one, since that would corrupt which
+        units expire when.
+        """
+        product_id = await _make_product("No Merge Expiry Product")
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        supplier = await client.post(
+            "/api/v1/suppliers", json={"name": "No Merge Supplier"}, headers=headers
+        )
+        supplier_id = supplier.json()["id"]
+
+        for expiry in ["2027-06-30", "2028-01-15"]:
+            await client.post(
+                "/api/v1/purchase-orders/quick-purchase",
+                json={
+                    "supplier_id": supplier_id,
+                    "lines": [
+                        {
+                            "product_id": product_id,
+                            "quantity": 20,
+                            "batch_number": "SAME-NUMBER",
+                            "expiry_date": expiry,
+                            "unit_cost": 5.0,
+                        }
+                    ],
+                },
+                headers=headers,
+            )
+
+        batches = await client.get(f"/api/v1/products/{product_id}/batches", headers=headers)
+        assert len(batches.json()) == 2

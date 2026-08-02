@@ -274,7 +274,7 @@ function RefundModal({
       saleItemId: item.id,
       productName: item.product_name,
       maxQuantity: item.quantity,
-      quantity: 0,
+      quantity: item.quantity,
       restock: true,
     })),
   )

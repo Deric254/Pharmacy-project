@@ -1,4 +1,13 @@
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  LabelList,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 import type { TopProductEntry } from '../../types/api'
 import { useCurrencyFormatter } from '../../lib/currency'
 
@@ -42,7 +51,14 @@ export function ProductRevenueChart({ data }: { data: TopProductEntry[] }) {
             color: 'var(--color-ink)',
           }}
         />
-        <Bar dataKey="revenue" name="Revenue" fill="var(--color-brass)" radius={[0, 3, 3, 0]} />
+        <Bar dataKey="revenue" name="Revenue" fill="var(--color-brass)" radius={[0, 3, 3, 0]}>
+          <LabelList
+            dataKey="revenue"
+            position="right"
+            formatter={(value) => formatCurrency(Number(value))}
+            style={{ fill: 'var(--color-ink)', fontSize: 11 }}
+          />
+        </Bar>
       </BarChart>
     </ResponsiveContainer>
   )

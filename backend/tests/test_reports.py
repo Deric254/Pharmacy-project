@@ -102,7 +102,8 @@ class TestSalesSummaryAndProfit:
             cheap_batch = MedicineBatch(
                 product_id=product.id,
                 batch_number="CHEAP",
-                expiry_date=date(2026, 8, 1),  # nearer expiry, FEFO picks this first
+                # Nearer expiry than EXPENSIVE below -- FEFO picks this batch first.
+                expiry_date=date.today() + timedelta(days=30),
                 qty_received=5,
                 qty_remaining=5,
                 cost_price=3.0,
@@ -110,7 +111,7 @@ class TestSalesSummaryAndProfit:
             expensive_batch = MedicineBatch(
                 product_id=product.id,
                 batch_number="EXPENSIVE",
-                expiry_date=date(2027, 1, 1),
+                expiry_date=date.today() + timedelta(days=700),
                 qty_received=5,
                 qty_remaining=5,
                 cost_price=7.0,

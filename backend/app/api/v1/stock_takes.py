@@ -107,3 +107,12 @@ async def close_stock_take(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> StockTakeOut:
     return await StockTakeService(db).close(stock_take_id, user)
+
+
+@router.post("/{stock_take_id}/cancel", response_model=StockTakeOut)
+async def cancel_stock_take(
+    stock_take_id: int,
+    user: Annotated[User, Depends(require_permission("stocktake.perform"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> StockTakeOut:
+    return await StockTakeService(db).cancel(stock_take_id, user)

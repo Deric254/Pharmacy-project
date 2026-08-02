@@ -7,6 +7,8 @@ clients have migrated — this is the forward/backward compatibility
 contract at the API layer. See README.md "Compatibility Policy".
 """
 
+import logging
+import logging.handlers
 import math
 import sys
 from collections.abc import AsyncIterator
@@ -52,6 +54,16 @@ from app.core.websocket_manager import manager as ws_manager
 from app.services.notification_dispatcher import start_dispatcher_task, stop_dispatcher_task
 
 settings = get_settings()
+
+_log_path = settings.log_file_path
+_log_path.parent.mkdir(parents=True, exist_ok=True)
+_log_handler = logging.handlers.RotatingFileHandler(
+    _log_path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+)
+_log_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+logging.getLogger().addHandler(_log_handler)
+logging.getLogger().setLevel(logging.INFO)
+logger = logging.getLogger("app")
 
 
 def _frontend_dist_dir() -> Path | None:
@@ -135,6 +147,23 @@ async def _validation_error_handler(_request: Request, exc: RequestValidationErr
     return JSONResponse(
         status_code=422,
         content={"detail": _sanitize_for_json(encoded)},
+    )
+
+
+@app.exception_handler(Exception)
+async def _unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    """
+    The one thing that makes any future 500 actually diagnosable: the
+    packaged desktop app has no visible console, so without this, an
+    unhandled error was completely invisible -- not to the person
+    using it, not to anyone trying to figure out what happened
+    afterward. Logs the full real traceback; the client only ever
+    sees a generic message, never internal details.
+    """
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Something went wrong on our end. This has been logged."},
     )
 
 

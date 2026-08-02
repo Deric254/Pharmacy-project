@@ -766,6 +766,14 @@ interface QuickPurchaseLineDraft {
   unitCost: number
 }
 
+function generateSessionBatchNumber(): string {
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`
+  const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+  return `BATCH-${date}-${time}`
+}
+
 function QuickPurchaseModal({
   suppliers,
   onClose,
@@ -776,8 +784,21 @@ function QuickPurchaseModal({
   onReceived: () => void
 }) {
   const [supplierId, setSupplierId] = useState<number | ''>(suppliers[0]?.id ?? '')
+  // Computed once per modal open (lazy initializer), not on every
+  // render -- every line in this same delivery shares one batch
+  // identifier by default, matching "received together, same batch",
+  // while staying fully editable per line for anyone who wants a
+  // different one for a specific product.
+  const [sessionBatchNumber] = useState(generateSessionBatchNumber)
   const [lines, setLines] = useState<QuickPurchaseLineDraft[]>([
-    { productId: '', productName: '', quantity: 1, batchNumber: '', expiryDate: '', unitCost: 0 },
+    {
+      productId: '',
+      productName: '',
+      quantity: 1,
+      batchNumber: sessionBatchNumber,
+      expiryDate: '',
+      unitCost: 0,
+    },
   ])
   const [productResults, setProductResults] = useState<ProductOut[]>([])
   const [activeSearchIndex, setActiveSearchIndex] = useState<number | null>(null)
@@ -804,7 +825,14 @@ function QuickPurchaseModal({
   function addLine() {
     setLines((prev) => [
       ...prev,
-      { productId: '', productName: '', quantity: 1, batchNumber: '', expiryDate: '', unitCost: 0 },
+      {
+        productId: '',
+        productName: '',
+        quantity: 1,
+        batchNumber: sessionBatchNumber,
+        expiryDate: '',
+        unitCost: 0,
+      },
     ])
   }
 

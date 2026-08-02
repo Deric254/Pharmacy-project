@@ -416,6 +416,7 @@ class ReportService:
                 and_(
                     MedicineBatch.product_id == Product.id,
                     MedicineBatch.expiry_date >= date.today(),
+                    MedicineBatch.locked_by_stock_take_id.is_(None),
                 ),
             )
             .where(Product.deleted_at.is_(None))
@@ -562,6 +563,7 @@ class ReportService:
                 and_(
                     MedicineBatch.product_id == Product.id,
                     MedicineBatch.expiry_date >= date.today(),
+                    MedicineBatch.locked_by_stock_take_id.is_(None),
                 ),
             )
             .where(Product.deleted_at.is_(None))

@@ -6,7 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.rbac import require_permission
-from app.schemas.customer import CustomerCreate, CustomerOut, PurchaseHistoryEntryOut
+from app.schemas.customer import (
+    CustomerCreate,
+    CustomerLifetimeValueOut,
+    CustomerOut,
+    PurchaseHistoryEntryOut,
+)
 from app.schemas.product import BulkImportResult
 from app.services.customer_import_service import (
     bulk_import_customers,
@@ -88,6 +93,17 @@ async def get_customer_by_phone(
     phone: str, db: Annotated[AsyncSession, Depends(get_db)]
 ) -> CustomerOut:
     return await CustomerService(db).get_by_phone(phone)
+
+
+@router.get(
+    "/lifetime-value",
+    response_model=CustomerLifetimeValueOut,
+    dependencies=[Depends(require_permission("reports.view"))],
+)
+async def customer_lifetime_value(
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> CustomerLifetimeValueOut:
+    return await CustomerService(db).lifetime_value()
 
 
 @router.get(

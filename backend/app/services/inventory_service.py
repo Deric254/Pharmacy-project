@@ -61,6 +61,7 @@ class InventoryService:
                 and_(
                     MedicineBatch.product_id == Product.id,
                     MedicineBatch.expiry_date >= date.today(),
+                    MedicineBatch.locked_by_stock_take_id.is_(None),
                 ),
             )
             .where(Product.deleted_at.is_(None))
@@ -262,6 +263,7 @@ async def check_and_publish_low_stock(db: AsyncSession, product_ids: list[int]) 
             and_(
                 MedicineBatch.product_id == Product.id,
                 MedicineBatch.expiry_date >= date.today(),
+                MedicineBatch.locked_by_stock_take_id.is_(None),
             ),
         )
         .where(Product.id.in_(product_ids))

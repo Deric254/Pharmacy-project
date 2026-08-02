@@ -230,6 +230,47 @@ class StockTakeService:
 
         return StockTakeOut.model_validate(stock_take)
 
+    async def cancel(self, stock_take_id: int, user: User) -> StockTakeOut:
+        """
+        Abandons an in-progress stock take and releases every batch it
+        locked -- deliberately without requiring a completed count.
+        Before this, the only way to release a stock take's locked
+        batches was finishing the entire count and closing it; someone
+        who started one and then walked away had no way out, and
+        those batches would silently show as available everywhere
+        while every real sale attempt against them kept failing.
+        """
+        result = await self.db.execute(select(StockTake).where(StockTake.id == stock_take_id))
+        stock_take = result.scalar_one_or_none()
+        if stock_take is None:
+            raise HTTPException(status_code=404, detail="Stock take not found")
+        if stock_take.status != StockTakeStatus.OPEN:
+            raise HTTPException(status_code=400, detail="Only an open stock take can be cancelled")
+
+        # Same atomic-claim guarantee as close(): a losing concurrent
+        # call fails fast instead of redundantly releasing locks a
+        # winning close()/cancel() has already handled.
+        claim_result = cast(
+            "CursorResult[Any]",
+            await self.db.execute(
+                update(StockTake)
+                .where(StockTake.id == stock_take_id, StockTake.status == StockTakeStatus.OPEN)
+                .values(status=StockTakeStatus.CANCELLED, closed_at=datetime.now(UTC))
+            ),
+        )
+        if claim_result.rowcount == 0:
+            raise HTTPException(status_code=400, detail="Only an open stock take can be cancelled")
+
+        await self.db.execute(
+            update(MedicineBatch)
+            .where(MedicineBatch.locked_by_stock_take_id == stock_take_id)
+            .values(locked_by_stock_take_id=None)
+        )
+        await self.db.commit()
+        await self.db.refresh(stock_take, attribute_names=["items", "status", "closed_at"])
+
+        return StockTakeOut.model_validate(stock_take)
+
     async def get(self, stock_take_id: int) -> StockTakeOut:
         result = await self.db.execute(select(StockTake).where(StockTake.id == stock_take_id))
         stock_take = result.scalar_one_or_none()

@@ -1,10 +1,8 @@
-# Changelog
+# CHANGELOG
 
-<<<<<<< HEAD
-All notable changes to this project are documented here automatically
-by the release pipeline (python-semantic-release), driven by Conventional
-Commit messages. Do not hand-edit — entries are generated on each release.
-=======
+
+## v0.0.15 (2026-08-02)
+
 
 ## v0.0.14 (2026-08-02)
 
@@ -49,4 +47,3 @@ Commit messages. Do not hand-edit — entries are generated on each release.
 
 
 ## v0.0.0 (2026-07-21)
->>>>>>> ed4d74667a56d5ee832f9e5d5e7f08bbd099dc5f

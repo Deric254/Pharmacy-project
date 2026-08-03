@@ -76,7 +76,7 @@ class InMemoryPubSub:
         while True:
             try:
                 message = await asyncio.wait_for(self._queue.get(), timeout=timeout or None)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 return None
             if ignore_subscribe_messages and message.get("type") == "subscribe":
                 continue

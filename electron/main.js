@@ -32,6 +32,20 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
 let backendProcess = null
 let mainWindow = null
 
+function logDesktopDiagnostic(message) {
+  try {
+    const logDir = path.join(app.getPath('userData'), 'logs')
+    fs.mkdirSync(logDir, { recursive: true })
+    fs.appendFileSync(
+      path.join(logDir, 'desktop.log'),
+      `${new Date().toISOString()} ${message}\n`,
+      'utf8',
+    )
+  } catch {
+    // Diagnostics must never be the reason the app fails to open.
+  }
+}
+
 // Electron's own native answer to the exact bug a real report showed:
 // two copies of this app fighting over the same port. Checked before
 // anything else even starts, so a second launch never gets far enough
@@ -77,6 +91,22 @@ if (!gotSingleInstanceLock) {
 function packagedBackendPath() {
   const exeName = process.platform === 'win32' ? 'Pharmacy-ERP.exe' : 'Pharmacy-ERP'
   return path.join(process.resourcesPath, 'backend', exeName)
+}
+
+function devFrontendDistPath() {
+  return path.join(__dirname, '..', 'frontend', 'dist', 'index.html')
+}
+
+function ensureDevFrontendBuilt() {
+  if (app.isPackaged || fs.existsSync(devFrontendDistPath())) {
+    return
+  }
+
+  throw new Error(
+    'The frontend build is missing, so there is no login screen to show.\n\n' +
+      'Start the desktop app with `cd electron && npm start`, or run ' +
+      '`cd frontend && npm run build` before launching Electron directly.',
+  )
 }
 
 function startBackend() {
@@ -194,6 +224,18 @@ function createWindow() {
     }
   }, 10000)
 
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    logDesktopDiagnostic(`did-fail-load ${errorCode} ${errorDescription} ${validatedURL}`)
+  })
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    logDesktopDiagnostic(`render-process-gone ${JSON.stringify(details)}`)
+  })
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    if (level >= 2) {
+      logDesktopDiagnostic(`renderer-console level=${level} ${sourceId}:${line} ${message}`)
+    }
+  })
+
   mainWindow.loadURL(BACKEND_URL)
 
   mainWindow.on('closed', () => {
@@ -232,13 +274,20 @@ async function startApp() {
       })
     })
 
+    ensureDevFrontendBuilt()
     await startBackend()
     await waitForBackendHealthy()
+    await session.defaultSession.clearStorageData({
+      storages: ['serviceworkers', 'cachestorage'],
+    })
     createWindow()
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    const stack = err instanceof Error ? err.stack : undefined
+    logDesktopDiagnostic(`startup-error ${stack ?? message}`)
     dialog.showErrorBox(
       'Pharmacy ERP could not start',
-      `${err.message}\n\nTry restarting your computer. If this keeps happening, ` +
+      `${message}\n\nTry restarting your computer. If this keeps happening, ` +
         'contact whoever set this up for you with this exact message.',
     )
     stopBackend()

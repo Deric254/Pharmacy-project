@@ -78,3 +78,25 @@
     transform: translateX(0);
   }
 }
+
+@media (prefers-reduced-motion: reduce) {
+  /* The generic *, *::before, *::after rule above collapses this animation
+     to 0.001ms/1 iteration, which freezes it on the "to" keyframe
+     (translateX(0)) -- the un-scrolled resting position where both
+     duplicated copies sit side by side. Overflow-hidden then clips it
+     mid-second-copy (e.g. "...our prideYour h"). Force a clean static
+     single-copy state instead of relying on the frozen animation frame. */
+  .marquee-track {
+    animation: none !important;
+    transform: translateX(0) !important;
+  }
+  .marquee-track span:nth-child(n + 2) {
+    display: none;
+  }
+  .marquee-track span:first-child {
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}

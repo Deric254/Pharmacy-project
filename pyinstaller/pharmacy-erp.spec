@@ -30,6 +30,8 @@ both reference this nested path.
 import sys
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_data_files
+
 block_cipher = None
 
 REPO_ROOT = Path(SPECPATH).resolve().parent
@@ -39,6 +41,12 @@ FRONTEND_DIST = REPO_ROOT / "frontend" / "dist"
 datas = [
     (str(BACKEND_DIR / "alembic"), "alembic"),
     (str(BACKEND_DIR / "alembic.ini"), "."),
+    # tzdata is pure IANA timezone data, no importable code -- PyInstaller's
+    # static analysis never discovers it on its own. Windows has no OS-level
+    # tzdata to fall back on (unlike Linux/macOS), so without this every
+    # zoneinfo.ZoneInfo(...) call -- including the code's own fallback to
+    # ZoneInfo("UTC") -- fails with ModuleNotFoundError on every install.
+    *collect_data_files("tzdata"),
 ]
 if FRONTEND_DIST.is_dir():
     datas.append((str(FRONTEND_DIST), "frontend_dist"))
@@ -72,6 +80,7 @@ a = Analysis(
         "uvicorn.protocols.http.auto",
         "uvicorn.protocols.websockets.auto",
         "uvicorn.lifespan.on",
+        "tzdata",
     ],
     hookspath=[],
     hooksconfig={},

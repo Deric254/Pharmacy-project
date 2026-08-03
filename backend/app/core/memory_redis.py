@@ -48,15 +48,39 @@ class InMemoryPubSub:
         # "message", so this is here for shape-fidelity, not behavior.
         await self._queue.put({"type": "subscribe", "channel": channel, "data": 1})
 
-    async def unsubscribe(self) -> None:
-        for channel in self._channels:
+    async def unsubscribe(self, *channels: str) -> None:
+        # Matches real redis-py: no channels given unsubscribes from
+        # everything this pubsub is currently on; specific channel
+        # names unsubscribe only those.
+        targets = list(channels) if channels else list(self._channels)
+        for channel in targets:
             self._hub._unregister_subscriber(channel, self._queue)
-        self._channels.clear()
+            self._channels.discard(channel)
 
     async def listen(self) -> AsyncIterator[dict[str, object]]:
         while True:
             message = await self._queue.get()
             yield message
+
+    async def get_message(
+        self, ignore_subscribe_messages: bool = False, timeout: float = 0.0
+    ) -> dict[str, object] | None:
+        """
+        Matches real redis-py's PubSub.get_message(): waits up to
+        `timeout` seconds for the next message, returning None on
+        timeout rather than blocking forever. Needed alongside listen()
+        because some call sites poll for one message at a time (e.g.
+        tests asserting a specific event fired) instead of iterating
+        an unbounded stream.
+        """
+        while True:
+            try:
+                message = await asyncio.wait_for(self._queue.get(), timeout=timeout or None)
+            except asyncio.TimeoutError:
+                return None
+            if ignore_subscribe_messages and message.get("type") == "subscribe":
+                continue
+            return message
 
 
 @dataclass

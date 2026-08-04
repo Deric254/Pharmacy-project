@@ -17,11 +17,14 @@ from sqlalchemy import select
 
 from app.core.database import AsyncSessionLocal
 from app.core.security import decrypt_secret, encrypt_secret
+from app.models.ai_conversation import AIConversation, AIConversationMessage
 from app.models.ai_provider_key import AIProviderKey, AIProviderName
+from app.models.user import User
 from app.schemas.ai import AIAskRequest
 from app.services.ai.adapters import ClaudeAdapter, OpenAIAdapter
 from app.services.ai.base import AIProviderError, AIResponse
 from app.services.ai_assistant_service import AIAssistantService
+from app.services.ai_conversation_service import ConversationNotFound
 
 
 async def _login(client, username: str, password: str) -> str:
@@ -889,3 +892,208 @@ class TestNoKeyGuidance:
             response = await service.ask(joe, AIAskRequest(prompt="how's business?"))
         assert "owner or administrator" in response.answer.lower()
         assert "Add an API key" not in response.answer
+
+
+class TestConversationHistory:
+    """
+    The real gap this closes: every /ai/ask call used to be entirely
+    stateless -- no history saved anywhere, no way to start a fresh
+    thread or delete an old one, and the frontend's own on-screen log
+    was lost on every refresh. These tests verify the three properties
+    that actually matter for a real, persisted, per-user chat history:
+    a thread survives across separate ask() calls, a thread is
+    strictly private to the user who started it (not even readable by
+    another authenticated user guessing ids), and deleting a thread
+    really removes its messages, not just the parent row.
+    """
+
+    @staticmethod
+    def _working_factory(provider, api_key):
+        class FakeAdapter:
+            async def ask(self, prompt, context):
+                return AIResponse(text=f"answer to: {prompt}")
+
+        return FakeAdapter()
+
+    async def _give_owner_a_key(self, owner_user) -> None:
+        async with AsyncSessionLocal() as db:
+            db.add(
+                AIProviderKey(
+                    user_id=owner_user.id,
+                    provider=AIProviderName.OPENAI,
+                    encrypted_key=encrypt_secret("fake-key"),
+                    key_hint="fake",
+                    priority=1,
+                )
+            )
+            await db.commit()
+
+    async def test_ask_without_conversation_id_creates_a_new_conversation(self, owner_user):
+        await self._give_owner_a_key(owner_user)
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=self._working_factory)
+            response = await service.ask(owner_user, AIAskRequest(prompt="how's business today?"))
+
+        assert response.conversation_id is not None
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(AIConversation).where(AIConversation.id == response.conversation_id)
+            )
+            conversation = result.scalar_one()
+            assert conversation.user_id == owner_user.id
+            assert conversation.title == "how's business today?"
+
+            messages_result = await db.execute(
+                select(AIConversationMessage).where(
+                    AIConversationMessage.conversation_id == conversation.id
+                )
+            )
+            messages = list(messages_result.scalars().all())
+            assert len(messages) == 1
+            assert messages[0].prompt == "how's business today?"
+            assert "answer to:" in messages[0].answer
+
+    async def test_second_ask_with_same_conversation_id_appends_not_replaces(self, owner_user):
+        await self._give_owner_a_key(owner_user)
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=self._working_factory)
+            first = await service.ask(owner_user, AIAskRequest(prompt="first question"))
+
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=self._working_factory)
+            second = await service.ask(
+                owner_user,
+                AIAskRequest(prompt="second question", conversation_id=first.conversation_id),
+            )
+
+        assert second.conversation_id == first.conversation_id
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(AIConversationMessage)
+                .where(AIConversationMessage.conversation_id == first.conversation_id)
+                .order_by(AIConversationMessage.created_at)
+            )
+            messages = list(result.scalars().all())
+            assert len(messages) == 2
+            assert messages[0].prompt == "first question"
+            assert messages[1].prompt == "second question"
+
+            conv_result = await db.execute(
+                select(AIConversation).where(AIConversation.id == first.conversation_id)
+            )
+            conversation = conv_result.scalar_one()
+            # Title stays as it was set on turn one -- a label for
+            # finding the thread again, not a live summary.
+            assert conversation.title == "first question"
+
+    async def test_ask_with_someone_elses_conversation_id_raises_not_found(
+        self, owner_user, employee_user
+    ):
+        await self._give_owner_a_key(owner_user)
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=self._working_factory)
+            owners_conversation = await service.ask(
+                owner_user, AIAskRequest(prompt="owner's private question")
+            )
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(User).where(User.username == "joe"))
+            joe = result.scalar_one()
+            service = AIAssistantService(db, adapter_factory=self._working_factory)
+            try:
+                await service.ask(
+                    joe,
+                    AIAskRequest(
+                        prompt="trying to read someone else's thread",
+                        conversation_id=owners_conversation.conversation_id,
+                    ),
+                )
+                raise AssertionError("expected ConversationNotFound")
+            except ConversationNotFound:
+                pass
+
+    async def test_list_conversations_only_shows_own_via_http(
+        self, client, owner_user, employee_user
+    ):
+        await self._give_owner_a_key(owner_user)
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=self._working_factory)
+            await service.ask(owner_user, AIAskRequest(prompt="owner's question"))
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(User).where(User.username == "joe"))
+            joe = result.scalar_one()
+            service = AIAssistantService(db, adapter_factory=self._working_factory)
+            await service.ask(joe, AIAskRequest(prompt="employee's question"))
+
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        r = await client.get("/api/v1/ai/conversations", headers=headers)
+        assert r.status_code == 200, r.text
+        titles = [c["title"] for c in r.json()]
+        assert titles == ["owner's question"]
+
+    async def test_get_someone_elses_conversation_is_404_via_http(
+        self, client, owner_user, employee_user
+    ):
+        await self._give_owner_a_key(owner_user)
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=self._working_factory)
+            owners_conversation = await service.ask(
+                owner_user, AIAskRequest(prompt="owner's private question")
+            )
+
+        token = await _login(client, "joe", "pass1234")
+        headers = {"Authorization": f"Bearer {token}"}
+        r = await client.get(
+            f"/api/v1/ai/conversations/{owners_conversation.conversation_id}", headers=headers
+        )
+        assert r.status_code == 404
+
+    async def test_delete_conversation_removes_its_messages_too(self, client, owner_user):
+        await self._give_owner_a_key(owner_user)
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=self._working_factory)
+            conversation = await service.ask(owner_user, AIAskRequest(prompt="to be deleted"))
+
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        r = await client.delete(
+            f"/api/v1/ai/conversations/{conversation.conversation_id}", headers=headers
+        )
+        assert r.status_code == 204
+
+        async with AsyncSessionLocal() as db:
+            conv_result = await db.execute(
+                select(AIConversation).where(AIConversation.id == conversation.conversation_id)
+            )
+            assert conv_result.scalar_one_or_none() is None
+
+            msg_result = await db.execute(
+                select(AIConversationMessage).where(
+                    AIConversationMessage.conversation_id == conversation.conversation_id
+                )
+            )
+            assert list(msg_result.scalars().all()) == []
+
+        # Deleting again (already gone) is a 404, not a 500 -- deletes
+        # in this codebase are idempotent-safe, never crash on repeat.
+        r2 = await client.delete(
+            f"/api/v1/ai/conversations/{conversation.conversation_id}", headers=headers
+        )
+        assert r2.status_code == 404
+
+    async def test_long_prompt_produces_truncated_title_with_ellipsis(self, owner_user):
+        await self._give_owner_a_key(owner_user)
+        long_prompt = "what is the current stock level of " + "paracetamol " * 15
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=self._working_factory)
+            response = await service.ask(owner_user, AIAskRequest(prompt=long_prompt))
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(AIConversation).where(AIConversation.id == response.conversation_id)
+            )
+            conversation = result.scalar_one()
+            assert len(conversation.title) <= 61  # 60 chars + the ellipsis char
+            assert conversation.title.endswith("…")

@@ -647,6 +647,25 @@ export interface AIAskResponse {
   answer: string
   provider_used: AIProviderName | null
   fallback_used: boolean
+  conversation_id: number
+}
+
+export interface AIConversationMessageOut {
+  prompt: string
+  answer: string
+  provider_used: AIProviderName | null
+  created_at: string
+}
+
+export interface AIConversationOut {
+  id: number
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+export interface AIConversationDetailOut extends AIConversationOut {
+  messages: AIConversationMessageOut[]
 }
 
 export interface SetupStatusOut {

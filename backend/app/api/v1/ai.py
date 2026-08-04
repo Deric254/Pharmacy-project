@@ -1,13 +1,21 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.rbac import require_permission
 from app.models.user import User
-from app.schemas.ai import AIAskRequest, AIAskResponse, AIProviderKeyCreate, AIProviderKeyOut
+from app.schemas.ai import (
+    AIAskRequest,
+    AIAskResponse,
+    AIConversationDetailOut,
+    AIConversationOut,
+    AIProviderKeyCreate,
+    AIProviderKeyOut,
+)
 from app.services.ai_assistant_service import AIAssistantService
+from app.services.ai_conversation_service import AIConversationService, ConversationNotFound
 from app.services.ai_key_service import AIKeyService
 
 router = APIRouter(prefix="/ai", tags=["ai-assistant"])
@@ -39,10 +47,46 @@ async def delete_key(
     await AIKeyService(db).delete_key(user, key_id)
 
 
+@router.get("/conversations", response_model=list[AIConversationOut])
+async def list_conversations(
+    user: Annotated[User, Depends(require_permission("ai.use"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[AIConversationOut]:
+    return await AIConversationService(db).list_conversations(user)
+
+
+@router.get("/conversations/{conversation_id}", response_model=AIConversationDetailOut)
+async def get_conversation(
+    conversation_id: int,
+    user: Annotated[User, Depends(require_permission("ai.use"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> AIConversationDetailOut:
+    conversation = await AIConversationService(db).get_conversation_detail(user, conversation_id)
+    if conversation is None:
+        # Same message whether the id doesn't exist or belongs to
+        # someone else -- never reveal which, to a user probing ids.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Conversation not found")
+    return conversation
+
+
+@router.delete("/conversations/{conversation_id}", status_code=204)
+async def delete_conversation(
+    conversation_id: int,
+    user: Annotated[User, Depends(require_permission("ai.use"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    deleted = await AIConversationService(db).delete_conversation(user, conversation_id)
+    if not deleted:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Conversation not found")
+
+
 @router.post("/ask", response_model=AIAskResponse)
 async def ask(
     payload: AIAskRequest,
     user: Annotated[User, Depends(require_permission("ai.use"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> AIAskResponse:
-    return await AIAssistantService(db).ask(user, payload)
+    try:
+        return await AIAssistantService(db).ask(user, payload)
+    except ConversationNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Conversation not found") from exc

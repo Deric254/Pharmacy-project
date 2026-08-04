@@ -53,12 +53,8 @@ class AIConversationMessage(Base):
     __tablename__ = "ai_conversation_messages"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    conversation_id: Mapped[int] = mapped_column(
-        ForeignKey("ai_conversations.id"), index=True
-    )
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("ai_conversations.id"), index=True)
     prompt: Mapped[str] = mapped_column(Text)
     answer: Mapped[str] = mapped_column(Text)
     provider_used: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), index=True
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)

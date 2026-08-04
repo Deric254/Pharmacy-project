@@ -2,9 +2,14 @@
 AI assistant service.
 
 The panel must never show a broken state to the user: `ask()` always
-returns a 200-shaped AIAskResponse, never raises past this layer. If
-every configured provider fails (or none are configured at all), the
-response is a graceful message explaining that, not an exception.
+returns a 200-shaped AIAskResponse for any *provider* problem (no keys
+configured, a provider erroring, every provider failing) -- never
+raises past this layer for those. The one deliberate exception is
+ConversationNotFound: passing a conversation_id that doesn't exist or
+belongs to someone else is a genuine client error (wrong resource
+reference), not a "the AI backend is having a bad day" situation, so
+it raises rather than being swallowed into a chat message. The API
+route translates that into a 404.
 
 `adapter_factory` is injectable specifically so tests can verify the
 fallback chain (first fails -> tries second -> succeeds, or all fail ->
@@ -19,6 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import decrypt_secret
+from app.models.ai_conversation import AIConversation, AIConversationMessage
 from app.models.ai_provider_key import AIProviderKey, AIProviderName
 from app.models.user import User
 from app.schemas.ai import AIAskRequest, AIAskResponse
@@ -30,6 +36,7 @@ from app.services.ai.adapters import (
     OpenAIAdapter,
 )
 from app.services.ai.base import AIProvider, AIProviderError
+from app.services.ai_conversation_service import AIConversationService, ConversationNotFound
 from app.services.report_service import ReportService
 
 AdapterFactory = Callable[[AIProviderName, str], AIProvider]
@@ -153,6 +160,21 @@ class AIAssistantService:
         return context
 
     async def ask(self, user: User, payload: AIAskRequest) -> AIAskResponse:
+        conversation_service = AIConversationService(self.db)
+        conversation: AIConversation | None
+        if payload.conversation_id is None:
+            conversation = await conversation_service.create_conversation(user, payload.prompt)
+        else:
+            conversation = await conversation_service.get_owned_conversation(
+                user, payload.conversation_id
+            )
+            if conversation is None:
+                raise ConversationNotFound(payload.conversation_id)
+
+        answer: str
+        provider_used: AIProviderName | None
+        fallback_used: bool
+
         result = await self.db.execute(
             select(AIProviderKey)
             .where(AIProviderKey.is_active.is_(True))
@@ -163,36 +185,56 @@ class AIAssistantService:
         if not keys:
             user_permission_codes = {p.code for p in user.role.permissions}
             can_self_serve = "users.manage" in user_permission_codes
-            message = _NO_KEYS_MESSAGE_SELF_SERVE if can_self_serve else _NO_KEYS_MESSAGE_ESCALATE
-            return AIAskResponse(answer=message, provider_used=None, fallback_used=False)
+            answer = _NO_KEYS_MESSAGE_SELF_SERVE if can_self_serve else _NO_KEYS_MESSAGE_ESCALATE
+            provider_used = None
+            fallback_used = False
+        else:
+            # Real business numbers always included, computed fresh for
+            # this exact question -- whatever the client sent in
+            # payload.context is layered underneath, so it can add extra
+            # detail (e.g. "the product I'm asking about") but can never
+            # override or fake the real business figures. The one thing
+            # pulled out of it deliberately is a date range (e.g. "the
+            # Dashboard's slicer is currently set to last month") -- never
+            # a number, just what period to freshly recompute here.
+            viewed_start = _parse_context_date(payload.context, "viewing_start_date")
+            viewed_end = _parse_context_date(payload.context, "viewing_end_date")
+            business_context = await self._build_business_context(user, viewed_start, viewed_end)
+            full_context: dict[str, object] = {**(payload.context or {}), **business_context}
 
-        # Real business numbers always included, computed fresh for
-        # this exact question -- whatever the client sent in
-        # payload.context is layered underneath, so it can add extra
-        # detail (e.g. "the product I'm asking about") but can never
-        # override or fake the real business figures. The one thing
-        # pulled out of it deliberately is a date range (e.g. "the
-        # Dashboard's slicer is currently set to last month") -- never
-        # a number, just what period to freshly recompute here.
-        viewed_start = _parse_context_date(payload.context, "viewing_start_date")
-        viewed_end = _parse_context_date(payload.context, "viewing_end_date")
-        business_context = await self._build_business_context(user, viewed_start, viewed_end)
-        full_context: dict[str, object] = {**(payload.context or {}), **business_context}
+            answer = _ALL_FAILED_MESSAGE
+            provider_used = None
+            fallback_used = True
+            for index, key_row in enumerate(keys):
+                try:
+                    decrypted_key = decrypt_secret(key_row.encrypted_key)
+                    adapter = self.adapter_factory(key_row.provider, decrypted_key)
+                    response = await adapter.ask(payload.prompt, full_context)
+                except AIProviderError:
+                    continue  # try the next provider in priority order
+                except Exception:  # noqa: BLE001 - adapter failure must fall through, never crash the panel
+                    continue
 
-        for index, key_row in enumerate(keys):
-            try:
-                decrypted_key = decrypt_secret(key_row.encrypted_key)
-                adapter = self.adapter_factory(key_row.provider, decrypted_key)
-                response = await adapter.ask(payload.prompt, full_context)
-            except AIProviderError:
-                continue  # try the next provider in priority order
-            except Exception:  # noqa: BLE001 - any adapter failure must fall through, never crash the panel
-                continue
+                key_row.last_used_at = datetime.now(UTC)
+                answer = response.text
+                provider_used = key_row.provider
+                fallback_used = index > 0
+                break
 
-            key_row.last_used_at = datetime.now(UTC)
-            await self.db.commit()
-            return AIAskResponse(
-                answer=response.text, provider_used=key_row.provider, fallback_used=index > 0
+        self.db.add(
+            AIConversationMessage(
+                conversation_id=conversation.id,
+                prompt=payload.prompt,
+                answer=answer,
+                provider_used=provider_used.value if provider_used else None,
             )
+        )
+        conversation.updated_at = datetime.now(UTC)
+        await self.db.commit()
 
-        return AIAskResponse(answer=_ALL_FAILED_MESSAGE, provider_used=None, fallback_used=True)
+        return AIAskResponse(
+            answer=answer,
+            provider_used=provider_used,
+            fallback_used=fallback_used,
+            conversation_id=conversation.id,
+        )

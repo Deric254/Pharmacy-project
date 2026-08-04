@@ -3,6 +3,7 @@ import { aiApi } from '../api/ai'
 import { ApiError } from '../api/client'
 import { MarkdownLite } from './MarkdownLite'
 import { useViewedRangeStore } from '../lib/viewedRangeStore'
+import type { AIConversationOut } from '../types/api'
 
 interface Turn {
   prompt: string
@@ -15,7 +16,14 @@ export function FloatingAiWidget() {
   const [prompt, setPrompt] = useState('')
   const [asking, setAsking] = useState(false)
   const [conversation, setConversation] = useState<Turn[]>([])
+  const [conversationId, setConversationId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [history, setHistory] = useState<AIConversationOut[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState<string | null>(null)
+
   const viewedRange = useViewedRangeStore((s) => s.range)
 
   async function handleAsk(e: FormEvent) {
@@ -29,7 +37,8 @@ export function FloatingAiWidget() {
       const context = viewedRange
         ? { viewing_start_date: viewedRange.start, viewing_end_date: viewedRange.end }
         : undefined
-      const response = await aiApi.ask(askedPrompt, context)
+      const response = await aiApi.ask(askedPrompt, conversationId, context)
+      setConversationId(response.conversation_id)
       setConversation((prev) => [
         ...prev,
         { prompt: askedPrompt, answer: response.answer, providerUsed: response.provider_used },
@@ -38,6 +47,58 @@ export function FloatingAiWidget() {
       setError(err instanceof ApiError ? err.message : 'Could not reach the assistant.')
     } finally {
       setAsking(false)
+    }
+  }
+
+  function startNewChat() {
+    setConversationId(null)
+    setConversation([])
+    setError(null)
+    setHistoryOpen(false)
+  }
+
+  async function toggleHistory() {
+    const next = !historyOpen
+    setHistoryOpen(next)
+    if (!next) return
+    setHistoryLoading(true)
+    setHistoryError(null)
+    try {
+      setHistory(await aiApi.listConversations())
+    } catch (err) {
+      setHistoryError(err instanceof ApiError ? err.message : 'Could not load past chats.')
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
+  async function openConversation(id: number) {
+    setHistoryError(null)
+    try {
+      const detail = await aiApi.getConversation(id)
+      setConversation(
+        detail.messages.map((m) => ({
+          prompt: m.prompt,
+          answer: m.answer,
+          providerUsed: m.provider_used,
+        })),
+      )
+      setConversationId(detail.id)
+      setError(null)
+      setHistoryOpen(false)
+    } catch (err) {
+      setHistoryError(err instanceof ApiError ? err.message : 'Could not load that chat.')
+    }
+  }
+
+  async function handleDelete(id: number, title: string) {
+    if (!window.confirm(`Delete "${title}"? This cannot be undone.`)) return
+    try {
+      await aiApi.deleteConversation(id)
+      setHistory((prev) => prev.filter((c) => c.id !== id))
+      if (id === conversationId) startNewChat()
+    } catch (err) {
+      setHistoryError(err instanceof ApiError ? err.message : 'Could not delete that chat.')
     }
   }
 
@@ -57,10 +118,57 @@ export function FloatingAiWidget() {
     <div className="fixed bottom-5 right-5 z-50 flex max-h-[70vh] w-96 flex-col border border-rule bg-paper shadow-xl">
       <div className="flex items-center justify-between border-b border-rule bg-ink px-3 py-2">
         <span className="text-sm font-medium text-paper">Assistant</span>
-        <button onClick={() => setOpen(false)} aria-label="Close" className="text-paper">
-          ×
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => void toggleHistory()}
+            className="text-xs text-paper underline decoration-dotted underline-offset-2 hover:text-brass"
+          >
+            History
+          </button>
+          <button
+            onClick={startNewChat}
+            className="text-xs text-paper underline decoration-dotted underline-offset-2 hover:text-brass"
+          >
+            New chat
+          </button>
+          <button onClick={() => setOpen(false)} aria-label="Close" className="text-paper">
+            ×
+          </button>
+        </div>
       </div>
+
+      {historyOpen && (
+        <div className="max-h-48 overflow-y-auto border-b border-rule bg-paper">
+          {historyLoading && <p className="p-3 text-sm text-ink-soft">Loading…</p>}
+          {historyError && <p className="p-3 text-sm text-stamp-red">{historyError}</p>}
+          {!historyLoading && !historyError && history.length === 0 && (
+            <p className="p-3 text-sm text-ink-soft">No past chats yet.</p>
+          )}
+          {history.map((c) => (
+            <div
+              key={c.id}
+              className={`flex items-center justify-between gap-2 border-b border-rule px-3 py-2 hover:bg-rule/20 ${
+                c.id === conversationId ? 'bg-rule/30' : ''
+              }`}
+            >
+              <button
+                onClick={() => void openConversation(c.id)}
+                className="min-w-0 flex-1 truncate text-left text-sm text-ink"
+                title={c.title}
+              >
+                {c.title}
+              </button>
+              <button
+                onClick={() => void handleDelete(c.id, c.title)}
+                aria-label={`Delete ${c.title}`}
+                className="text-xs text-stamp-red hover:underline"
+              >
+                Delete
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="flex-1 space-y-3 overflow-y-auto p-3">
         {conversation.length === 0 && (

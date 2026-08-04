@@ -42,6 +42,31 @@ class Settings(BaseSettings):
 
     cors_origins: list[str] = ["http://localhost:5173"]
 
+    # Controls the `Secure` flag on the refresh-token cookie. Browsers
+    # (Chromium/Electron included) silently REFUSE to store a cookie
+    # marked Secure unless the page was loaded over HTTPS -- there is
+    # no error, no exception, nothing in the network tab to notice.
+    # The bundled desktop .exe sets ENVIRONMENT=production (correctly,
+    # for logging/docs behavior) but always serves the app over plain
+    # http://127.0.0.1:8000, never HTTPS. Tying the cookie's Secure
+    # flag directly to environment == "production" therefore silently
+    # dropped the refresh cookie on every single desktop install: the
+    # first login of a session worked (access token lives in memory),
+    # but any page reload, app restart, or access-token expiry had no
+    # refresh cookie to redeem, so bootstrap()/refresh failed and the
+    # app was stuck on the blank pre-render screen or bounced back to
+    # a login that wouldn't take. None by default means "derive from
+    # environment" for real HTTPS-fronted deployments; desktop_main.py
+    # explicitly overrides this to false, since loopback-only HTTP has
+    # no meaningful HTTPS threat model to protect against anyway.
+    cookie_secure: bool | None = None
+
+    @property
+    def effective_cookie_secure(self) -> bool:
+        if self.cookie_secure is not None:
+            return self.cookie_secure
+        return self.environment == "production"
+
     # Optional -- only needed if the Google Drive backup provider is used.
     # Blank by default so environments without backups configured don't
     # need to set these.

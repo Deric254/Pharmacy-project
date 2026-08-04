@@ -11,12 +11,17 @@
  * proven to work.
  *
  * Honesty check, matching every other honesty note in this project:
- * this was written carefully against Electron's stable, long-standing
- * APIs (app, BrowserWindow, single-instance-lock) and reasoned through
- * line by line, but has never actually been run -- Electron needs a
- * real display to launch a window, which the environment this was
- * built in does not have. The backend it wraps has been tested
- * extremely thoroughly; this wrapper has not been run once.
+ * this file was written against Electron's stable, long-standing APIs
+ * (app, BrowserWindow, single-instance-lock) and has since been run
+ * on real Windows machines. That real-world running is what surfaced
+ * the refresh-cookie bug (Secure=true on a plain-HTTP cookie -- see
+ * app/core/config.py's cookie_secure setting) -- the exact class of
+ * bug this note used to warn wasn't yet ruled out. No other startup
+ * or window-lifecycle defect has been reported against this file.
+ * That is a track record, not a guarantee: this is still a thin
+ * wrapper, still worth watching, and any new failure report on it
+ * should come with the actual %LOCALAPPDATA%\PharmacyERP\logs\desktop.log
+ * from the machine it happened on, not a guess.
  */
 
 const { app, BrowserWindow, dialog, session } = require('electron')

@@ -74,6 +74,14 @@ def _configure_environment(data_dir: Path) -> None:
     os.environ.setdefault("ENVIRONMENT", "production")
     os.environ.setdefault("DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     os.environ.setdefault("REDIS_MODE", "memory")
+    # The desktop app is always served over plain http://127.0.0.1 --
+    # never HTTPS -- so a Secure-flagged cookie would never be stored
+    # by the browser (Secure requires HTTPS, no exception for
+    # loopback). ENVIRONMENT=production above is correct for other
+    # behavior (logging, docs), but must NOT also force Secure=True on
+    # the refresh-token cookie here, or login silently breaks on every
+    # reload/restart. See Settings.effective_cookie_secure.
+    os.environ.setdefault("COOKIE_SECURE", "false")
     os.environ.setdefault("JWT_SECRET_KEY", secrets_values["jwt_secret_key"])
     os.environ.setdefault("ENCRYPTION_KEY", secrets_values["encryption_key"])
     os.environ.setdefault("CORS_ORIGINS", '["http://127.0.0.1:8000","http://localhost:8000"]')

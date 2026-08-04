@@ -175,41 +175,25 @@ class TestSupplierBalanceConsistency:
 
         for i in range(2):
             po = await client.post(
-                "/api/v1/purchase-orders",
+                "/api/v1/purchase-orders/quick-purchase",
                 json={
                     "supplier_id": supplier_id,
-                    "items": [
+                    "lines": [
                         {
                             "product_id": product_id,
-                            "quantity_ordered": 20,
-                            "unit_cost_expected": 5.0,
+                            "quantity": 20,
+                            "batch_number": f"SUPPLIER-CONS-{i}",
+                            "expiry_date": "2027-01-01",
+                            "unit_cost": 5.0,
                         }
                     ],
                 },
                 headers=headers,
             )
-            po_id = po.json()["id"]
-            item_id = po.json()["items"][0]["id"]
-            await client.post(f"/api/v1/purchase-orders/{po_id}/send", headers=headers)
-            await client.post(f"/api/v1/purchase-orders/{po_id}/mark-in-transit", headers=headers)
+            assert po.status_code == 201, po.text
             await client.post(
-                f"/api/v1/purchase-orders/{po_id}/receive",
-                json={
-                    "lines": [
-                        {
-                            "item_id": item_id,
-                            "batch_number": f"SUPPLIER-CONS-{i}",
-                            "expiry_date": "2027-01-01",
-                            "quantity_received": 20,
-                            "unit_cost_actual": 5.0,
-                        }
-                    ]
-                },
-                headers=headers,
-            )
-            await client.post(
-                f"/api/v1/purchase-orders/{po_id}/reconcile",
-                json={"payment_amount": 50.0},  # partial payment each time
+                f"/api/v1/suppliers/{supplier_id}/payments",
+                json={"amount": 50.0},  # partial payment each time
                 headers=headers,
             )
 

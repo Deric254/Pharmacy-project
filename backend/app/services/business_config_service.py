@@ -57,12 +57,20 @@ def _shrink_logo(logo_url: str | None) -> str | None:
 
         from PIL import Image as PILImage
 
-        img = PILImage.open(io.BytesIO(image_bytes))
+        # Explicitly typed as the base Image type, not the narrower
+        # ImageFile.open() returns -- .convert() below returns a plain
+        # Image, and reassigning that back into a variable mypy has
+        # inferred as ImageFile is a real type error (caught by CI's
+        # mypy job, not just style noise), not just a hypothetical one.
+        img: PILImage.Image = PILImage.open(io.BytesIO(image_bytes))
         img.load()
         if img.width <= _LOGO_MAX_DIMENSION and img.height <= _LOGO_MAX_DIMENSION:
             return logo_url  # already small; don't re-encode and lose quality for nothing
 
-        img.thumbnail((_LOGO_MAX_DIMENSION, _LOGO_MAX_DIMENSION), PILImage.LANCZOS)
+        # Image.LANCZOS (the bare top-level constant) is the deprecated
+        # pre-9.1 spelling; Resampling.LANCZOS is what current Pillow
+        # (this app pins 12.3.*) actually exposes in its type stubs.
+        img.thumbnail((_LOGO_MAX_DIMENSION, _LOGO_MAX_DIMENSION), PILImage.Resampling.LANCZOS)
         # PNG keeps transparency (common for logos) and, at these small
         # dimensions, is reliably smaller than the original upload
         # regardless of its original format.

@@ -6,29 +6,16 @@ import { ApiError } from '../api/client'
 import { Modal } from '../components/Modal'
 import type {
   ImportRowError,
-  KanbanBoard,
   ProductOut,
   PurchaseOrderOut,
-  PurchaseOrderStatus,
-  ReceivingLine,
-  ReceivingVarianceOut,
   SupplierOut,
 } from '../types/api'
-
-const COLUMNS: { status: PurchaseOrderStatus; label: string }[] = [
-  { status: 'DRAFT', label: 'Draft' },
-  { status: 'SENT', label: 'Sent' },
-  { status: 'IN_TRANSIT', label: 'In Transit' },
-  { status: 'RECEIVED', label: 'Received' },
-  { status: 'RECONCILED', label: 'Reconciled' },
-]
 
 export function PurchasingPage() {
   const hasPermission = useAuthStore((s) => s.hasPermission)
   const canApprove = hasPermission('purchasing.approve_po')
-  const canReceive = hasPermission('purchasing.receive_stock')
 
-  const [board, setBoard] = useState<KanbanBoard | null>(null)
+  const [orders, setOrders] = useState<PurchaseOrderOut[]>([])
   const [suppliers, setSuppliers] = useState<SupplierOut[]>([])
   const [error, setError] = useState<string | null>(null)
   const [showQuickPurchase, setShowQuickPurchase] = useState(false)
@@ -39,10 +26,10 @@ export function PurchasingPage() {
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([purchaseOrdersApi.kanban(), suppliersApi.list()])
-      .then(([kanban, supplierList]) => {
+    Promise.all([purchaseOrdersApi.list(), suppliersApi.list()])
+      .then(([orderList, supplierList]) => {
         if (cancelled) return
-        setBoard(kanban)
+        setOrders(orderList)
         setSuppliers(supplierList)
         setError(null)
       })
@@ -60,9 +47,9 @@ export function PurchasingPage() {
     setReloadKey((k) => k + 1)
   }
 
-  const allPurchases = Object.values(board ?? {})
-    .flat()
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+  const allPurchases = [...orders].sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+  )
 
   return (
     <div className="p-6">
@@ -194,10 +181,7 @@ export function PurchasingPage() {
         <PODetailModal
           po={selectedPO}
           supplierName={supplierName(suppliers, selectedPO.supplier_id)}
-          canApprove={canApprove}
-          canReceive={canReceive}
           onClose={() => setSelectedPO(null)}
-          onChanged={refresh}
         />
       )}
     </div>
@@ -317,36 +301,13 @@ function SuppliersModal({
 function PODetailModal({
   po,
   supplierName,
-  canApprove,
-  canReceive,
   onClose,
-  onChanged,
 }: {
   po: PurchaseOrderOut
   supplierName: string
-  canApprove: boolean
-  canReceive: boolean
   onClose: () => void
-  onChanged: () => void
 }) {
   const formatCurrency = useCurrencyFormatter()
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [showReceive, setShowReceive] = useState(false)
-  const [variances, setVariances] = useState<ReceivingVarianceOut[] | null>(null)
-
-  async function transition(action: () => Promise<unknown>) {
-    setBusy(true)
-    setError(null)
-    try {
-      await action()
-      onChanged()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Action failed.')
-    } finally {
-      setBusy(false)
-    }
-  }
 
   return (
     <Modal title={`Purchase order #${po.id}`} onClose={onClose}>
@@ -354,7 +315,7 @@ function PODetailModal({
         Supplier: <span className="font-medium">{supplierName}</span>
       </p>
       <p className="mb-3 text-sm text-ink-soft">
-        Status: {COLUMNS.find((c) => c.status === po.status)?.label ?? po.status}
+        Received {new Date(po.received_at ?? po.created_at).toLocaleString()}
       </p>
 
       <ul className="mb-4 divide-y divide-rule border border-rule">
@@ -362,252 +323,19 @@ function PODetailModal({
           <li key={item.id} className="flex justify-between px-3 py-2 text-sm">
             <span>{item.product_name}</span>
             <span className="figure">
-              {item.quantity_ordered} @ {formatCurrency(item.unit_cost_expected)}
-              {item.quantity_received !== null && (
-                <span className="text-ink-soft"> (recv {item.quantity_received})</span>
-              )}
+              {item.quantity_received ?? item.quantity_ordered} @{' '}
+              {formatCurrency(item.unit_cost_actual ?? item.unit_cost_expected)}
             </span>
           </li>
         ))}
       </ul>
 
-      {error && <p className="mb-3 text-sm text-stamp-red">{error}</p>}
-      {variances && variances.length > 0 && (
-        <div className="mb-3 border border-stamp-red-soft bg-stamp-red-soft/30 p-2 text-sm text-stamp-red">
-          <p className="font-medium">Receiving variance detected:</p>
-          {variances.map((v) => (
-            <p key={v.item_id}>
-              {v.product_name}: ordered {v.quantity_ordered}, received {v.quantity_received} (
-              {v.variance > 0 ? '+' : ''}
-              {v.variance})
-            </p>
-          ))}
-        </div>
-      )}
-
-      <div className="flex flex-wrap gap-2">
-        {po.status === 'DRAFT' && canApprove && (
-          <ActionButton
-            busy={busy}
-            onClick={() => transition(() => purchaseOrdersApi.send(po.id))}
-          >
-            Send to supplier
-          </ActionButton>
-        )}
-        {po.status === 'SENT' && (
-          <ActionButton
-            busy={busy}
-            onClick={() => transition(() => purchaseOrdersApi.markInTransit(po.id))}
-          >
-            Mark in transit
-          </ActionButton>
-        )}
-        {po.status === 'IN_TRANSIT' && canReceive && (
-          <ActionButton busy={busy} onClick={() => setShowReceive(true)}>
-            Receive shipment
-          </ActionButton>
-        )}
-        {po.status === 'RECEIVED' && canApprove && (
-          <ActionButton
-            busy={busy}
-            onClick={() =>
-              transition(async () => {
-                await purchaseOrdersApi.reconcile(po.id, {})
-              })
-            }
-          >
-            Reconcile
-          </ActionButton>
-        )}
+      <div className="flex justify-end">
+        <button onClick={onClose} className="border border-rule px-4 py-2 text-sm">
+          Close
+        </button>
       </div>
-
-      {showReceive && (
-        <ReceiveForm
-          po={po}
-          onClose={() => setShowReceive(false)}
-          onReceived={(result) => {
-            setVariances(result.variances)
-            setShowReceive(false)
-            onChanged()
-          }}
-        />
-      )}
     </Modal>
-  )
-}
-
-function ReceiveForm({
-  po,
-  onClose,
-  onReceived,
-}: {
-  po: PurchaseOrderOut
-  onClose: () => void
-  onReceived: (result: { variances: ReceivingVarianceOut[] }) => void
-}) {
-  const [lines, setLines] = useState<Record<number, ReceivingLine>>(() =>
-    Object.fromEntries(
-      po.items.map((item) => [
-        item.id,
-        {
-          item_id: item.id,
-          batch_number: '',
-          expiry_date: '',
-          quantity_received: item.quantity_ordered,
-          unit_cost_actual: item.unit_cost_expected,
-        },
-      ]),
-    ),
-  )
-  const [error, setError] = useState<string | null>(null)
-  const [submitting, setSubmitting] = useState(false)
-
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault()
-    const lineList = Object.values(lines)
-    if (lineList.some((l) => !l.batch_number || !l.expiry_date)) {
-      setError('Every line needs a batch number and expiry date.')
-      return
-    }
-    setSubmitting(true)
-    setError(null)
-    try {
-      const result = await purchaseOrdersApi.receive(po.id, { lines: lineList })
-      onReceived(result)
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not receive shipment.')
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  return (
-    <div className="mt-4 border-t border-rule pt-4">
-      <p className="mb-2 text-xs uppercase tracking-wide text-ink-soft">
-        Receiving -- enter what actually arrived
-      </p>
-      <form onSubmit={handleSubmit} className="space-y-3">
-        {po.items.map((item) => (
-          <div key={item.id} className="border border-rule p-3 text-sm">
-            <p className="mb-2 font-medium">
-              {item.product_name}{' '}
-              <span className="font-normal text-ink-soft">
-                (ordered {item.quantity_ordered})
-              </span>
-            </p>
-            <div className="grid grid-cols-2 gap-2">
-              <label className="block">
-                <span className="block text-xs uppercase tracking-wide text-ink-soft">
-                  Batch number
-                </span>
-                <input
-                  value={lines[item.id].batch_number}
-                  onChange={(e) =>
-                    setLines((prev) => ({
-                      ...prev,
-                      [item.id]: { ...prev[item.id], batch_number: e.target.value },
-                    }))
-                  }
-                  className="mt-1 w-full border border-rule px-2 py-1"
-                />
-              </label>
-              <label className="block">
-                <span className="block text-xs uppercase tracking-wide text-ink-soft">
-                  Expiry date
-                </span>
-                <input
-                  type="date"
-                  value={lines[item.id].expiry_date}
-                  onChange={(e) =>
-                    setLines((prev) => ({
-                      ...prev,
-                      [item.id]: { ...prev[item.id], expiry_date: e.target.value },
-                    }))
-                  }
-                  className="mt-1 w-full border border-rule px-2 py-1"
-                />
-              </label>
-              <label className="block">
-                <span className="block text-xs uppercase tracking-wide text-ink-soft">
-                  Quantity received
-                </span>
-                <input
-                  type="number"
-                  min={0}
-                  value={lines[item.id].quantity_received}
-                  onChange={(e) =>
-                    setLines((prev) => ({
-                      ...prev,
-                      [item.id]: {
-                        ...prev[item.id],
-                        quantity_received: Number(e.target.value),
-                      },
-                    }))
-                  }
-                  className="figure mt-1 w-full border border-rule px-2 py-1"
-                />
-              </label>
-              <label className="block">
-                <span className="block text-xs uppercase tracking-wide text-ink-soft">
-                  Actual unit cost
-                </span>
-                <input
-                  type="number"
-                  min={0}
-                  step={0.01}
-                  value={lines[item.id].unit_cost_actual}
-                  onChange={(e) =>
-                    setLines((prev) => ({
-                      ...prev,
-                      [item.id]: {
-                        ...prev[item.id],
-                        unit_cost_actual: Number(e.target.value),
-                      },
-                    }))
-                  }
-                  className="figure mt-1 w-full border border-rule px-2 py-1"
-                />
-              </label>
-            </div>
-          </div>
-        ))}
-
-        {error && <p className="text-sm text-stamp-red">{error}</p>}
-
-        <div className="flex justify-end gap-2">
-          <button type="button" onClick={onClose} className="border border-rule px-4 py-2 text-sm">
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={submitting}
-            className="border border-stamp-green bg-stamp-green px-4 py-2 text-sm text-paper disabled:opacity-50"
-          >
-            {submitting ? 'Receiving…' : 'Confirm receipt'}
-          </button>
-        </div>
-      </form>
-    </div>
-  )
-}
-
-function ActionButton({
-  busy,
-  onClick,
-  children,
-}: {
-  busy: boolean
-  onClick: () => void
-  children: string
-}) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={busy}
-      className="border border-ink bg-ink px-3 py-1.5 text-sm text-paper disabled:opacity-50"
-    >
-      {children}
-    </button>
   )
 }
 

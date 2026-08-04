@@ -53,13 +53,6 @@ class BatchExpiringEvent(DomainEvent):
     days_remaining: int
 
 
-class PurchaseOrderStatusChangedEvent(DomainEvent):
-    event_type: ClassVar[str] = "po.status_changed"
-    purchase_order_id: int
-    old_status: str
-    new_status: str
-
-
 class BackupFailedEvent(DomainEvent):
     event_type: ClassVar[str] = "backup.failed"
     reason: str

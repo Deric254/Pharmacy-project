@@ -232,7 +232,13 @@ class AuthService:
             # Deliberately generic error — don't reveal whether the username exists.
             raise generic_error
 
-        if not verify_password(security_answer, user.security_answer_hash):
+        # Registration strips the answer before hashing it (see
+        # UserCreate.security_answer / NonBlankName), so the value
+        # compared here must be stripped the same way -- otherwise a
+        # user who happens to type a stray leading/trailing space at
+        # recovery time (easy to do, invisible on screen) would be
+        # told their correct answer is wrong.
+        if not verify_password(security_answer.strip(), user.security_answer_hash):
             raise generic_error
 
         user.hashed_password = hash_password(new_password)

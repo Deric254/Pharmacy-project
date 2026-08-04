@@ -286,39 +286,6 @@ export interface PurchaseOrderOut {
   items: PurchaseOrderItemOut[]
 }
 
-export interface ReceivingLine {
-  item_id: number
-  batch_number: string
-  expiry_date: string
-  quantity_received: number
-  unit_cost_actual: number
-}
-
-export interface ReceiveRequest {
-  lines: ReceivingLine[]
-}
-
-export interface ReceivingVarianceOut {
-  item_id: number
-  product_id: number
-  product_name: string
-  quantity_ordered: number
-  quantity_received: number
-  variance: number
-}
-
-export interface ReceiveResponse {
-  purchase_order: PurchaseOrderOut
-  variances: ReceivingVarianceOut[]
-}
-
-export interface ReconcileRequest {
-  payment_amount?: number | null
-  notes?: string | null
-}
-
-export type KanbanBoard = Record<string, PurchaseOrderOut[]>
-
 export interface CustomerOut {
   id: number
   name: string

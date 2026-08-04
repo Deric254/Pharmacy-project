@@ -1,19 +1,9 @@
 from datetime import datetime
-from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel, Field
+from pydantic import BaseModel, Field
 
 from app.schemas._money import Money, Quantity
-
-
-def _must_have_real_content(value: str) -> str:
-    stripped = value.strip()
-    if not stripped:
-        raise ValueError("Name cannot be empty or just whitespace.")
-    return stripped
-
-
-NonBlankName = Annotated[str, AfterValidator(_must_have_real_content)]
+from app.schemas._text import NonBlankName
 
 
 class ProductCreate(BaseModel):

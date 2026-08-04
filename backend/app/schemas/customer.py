@@ -2,11 +2,13 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.schemas._text import NonBlankName, OptionalStrippedText
+
 
 class CustomerCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=150)
-    phone: str | None = Field(default=None, max_length=30)
-    email: str | None = Field(default=None, max_length=120)
+    name: NonBlankName = Field(min_length=1, max_length=150)
+    phone: OptionalStrippedText = Field(default=None, max_length=30)
+    email: OptionalStrippedText = Field(default=None, max_length=120)
 
 
 class CustomerOut(BaseModel):

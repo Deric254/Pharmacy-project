@@ -3,6 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.schemas._money import Money
+from app.schemas._text import NonBlankName
 
 BUILT_IN_THEMES = ("ledger", "clinical", "midnight", "sunrise")
 ThemeName = Literal["ledger", "clinical", "midnight", "sunrise"]
@@ -41,7 +42,7 @@ class BusinessConfigUpdate(BaseModel):
     resend the entire config every time.
     """
 
-    business_name: str | None = Field(default=None, min_length=1, max_length=120)
+    business_name: NonBlankName | None = Field(default=None, min_length=1, max_length=120)
     slogan: str | None = Field(default=None, max_length=255)
     logo_url: str | None = Field(default=None, max_length=3_000_000)
     theme_name: ThemeName | None = None

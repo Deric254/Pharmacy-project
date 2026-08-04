@@ -3,46 +3,7 @@ from datetime import date, datetime
 from pydantic import BaseModel, Field
 
 from app.models.purchase_order import PurchaseOrderStatus
-from app.schemas._money import Money, PositiveMoney, PositiveQuantity, Quantity
-
-
-class PurchaseOrderItemCreate(BaseModel):
-    product_id: int
-    quantity_ordered: PositiveQuantity
-    unit_cost_expected: Money
-
-
-class PurchaseOrderCreate(BaseModel):
-    supplier_id: int
-    items: list[PurchaseOrderItemCreate] = Field(min_length=1)
-    notes: str | None = Field(default=None, max_length=255)
-
-
-class ReceivingLine(BaseModel):
-    """
-    One line of what actually arrived. quantity_received/unit_cost_actual
-    may differ from what was ordered -- that's the receiving variance,
-    detected and flagged, never silently corrected.
-    """
-
-    item_id: int
-    batch_number: str = Field(min_length=1, max_length=80)
-    expiry_date: date
-    quantity_received: Quantity
-    unit_cost_actual: Money
-
-
-class ReceiveRequest(BaseModel):
-    lines: list[ReceivingLine] = Field(min_length=1)
-
-
-class ReceivingVarianceOut(BaseModel):
-    item_id: int
-    product_id: int
-    product_name: str
-    quantity_ordered: int
-    quantity_received: int
-    variance: int
+from app.schemas._money import Money, PositiveQuantity
 
 
 class PurchaseOrderItemOut(BaseModel):
@@ -72,16 +33,6 @@ class PurchaseOrderOut(BaseModel):
     items: list[PurchaseOrderItemOut]
 
     model_config = {"from_attributes": True}
-
-
-class ReconcileRequest(BaseModel):
-    payment_amount: PositiveMoney | None = None
-    notes: str | None = Field(default=None, max_length=255)
-
-
-class ReceiveResponse(BaseModel):
-    purchase_order: PurchaseOrderOut
-    variances: list[ReceivingVarianceOut]
 
 
 class QuickPurchaseLine(BaseModel):

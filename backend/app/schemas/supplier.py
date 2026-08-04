@@ -3,12 +3,13 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.schemas._money import PositiveMoney
+from app.schemas._text import NonBlankName, OptionalStrippedText
 
 
 class SupplierCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=150)
-    contact_phone: str | None = Field(default=None, max_length=30)
-    contact_email: str | None = Field(default=None, max_length=120)
+    name: NonBlankName = Field(min_length=1, max_length=150)
+    contact_phone: OptionalStrippedText = Field(default=None, max_length=30)
+    contact_email: OptionalStrippedText = Field(default=None, max_length=120)
     address: str | None = Field(default=None, max_length=255)
     notes: str | None = Field(default=None, max_length=255)
 

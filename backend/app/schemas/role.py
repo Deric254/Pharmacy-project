@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field
 
+from app.schemas._text import NonBlankName
+
 
 class PermissionOut(BaseModel):
     code: str
@@ -20,12 +22,12 @@ class RoleDetailOut(BaseModel):
 
 
 class RoleCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=50)
+    name: NonBlankName = Field(min_length=1, max_length=50)
     description: str = Field(default="", max_length=255)
     permission_codes: list[str] = Field(default_factory=list)
 
 
 class RoleUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=50)
+    name: NonBlankName | None = Field(default=None, min_length=1, max_length=50)
     description: str | None = Field(default=None, max_length=255)
     permission_codes: list[str] | None = None

@@ -8,7 +8,6 @@ import type {
   CustomerLifetimeValueOut,
   CustomerOut,
   ExpiringBatchOut,
-  KanbanBoard,
   LowStockProductOut,
   PaymentRecordRequest,
   ProductCreate,
@@ -17,9 +16,6 @@ import type {
   PurchaseHistoryEntryOut,
   PurchaseOrderOut,
   QuickPurchaseRequest,
-  ReceiveRequest,
-  ReceiveResponse,
-  ReconcileRequest,
   ReconciliationIssueOut,
   RefundOut,
   RefundRequest,
@@ -78,17 +74,10 @@ export const suppliersApi = {
 }
 
 export const purchaseOrdersApi = {
-  kanban: () => api.get<KanbanBoard>('/purchase-orders/kanban'),
+  list: () => api.get<PurchaseOrderOut[]>('/purchase-orders'),
   get: (id: number) => api.get<PurchaseOrderOut>(`/purchase-orders/${id}`),
   quickPurchase: (payload: QuickPurchaseRequest) =>
     api.post<PurchaseOrderOut>('/purchase-orders/quick-purchase', payload),
-  send: (id: number) => api.post<PurchaseOrderOut>(`/purchase-orders/${id}/send`),
-  markInTransit: (id: number) =>
-    api.post<PurchaseOrderOut>(`/purchase-orders/${id}/mark-in-transit`),
-  receive: (id: number, payload: ReceiveRequest) =>
-    api.post<ReceiveResponse>(`/purchase-orders/${id}/receive`, payload),
-  reconcile: (id: number, payload: ReconcileRequest) =>
-    api.post<PurchaseOrderOut>(`/purchase-orders/${id}/reconcile`, payload),
   downloadImportTemplate: () =>
     downloadFile('/purchase-orders/import-template', 'purchase-order-import-template.xlsx'),
   importFromExcel: (file: File, supplierId: number) =>

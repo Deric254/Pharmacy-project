@@ -70,7 +70,13 @@ async def create_first_user(
             hashed_password=hash_password(password),
             role_id=role.id,
             security_question=security_question,
-            security_answer_hash=hash_password(security_answer),
+            # Stripped for the same reason UserCreate.security_answer
+            # is (see app/schemas/_text.py's NonBlankName) -- the
+            # normal user-creation path and this bootstrap path must
+            # hash the same normalized value, or reset_password_via_
+            # security_question's own .strip() on the recovery input
+            # would only match one of the two.
+            security_answer_hash=hash_password(security_answer.strip()),
         )
         db.add(user)
         await db.commit()

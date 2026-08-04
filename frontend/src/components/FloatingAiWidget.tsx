@@ -41,12 +41,6 @@ export function FloatingAiWidget() {
     }
   }
 
-  function handleNewChat() {
-    setConversation([])
-    setError(null)
-    setPrompt('')
-  }
-
   if (!open) {
     return (
       <button
@@ -63,18 +57,9 @@ export function FloatingAiWidget() {
     <div className="fixed bottom-5 right-5 z-50 flex max-h-[70vh] w-96 flex-col border border-rule bg-paper shadow-xl">
       <div className="flex items-center justify-between border-b border-rule bg-ink px-3 py-2">
         <span className="text-sm font-medium text-paper">Assistant</span>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleNewChat}
-            disabled={conversation.length === 0 && !error}
-            className="text-xs text-paper underline decoration-dotted underline-offset-2 disabled:opacity-40 disabled:no-underline"
-          >
-            New chat
-          </button>
-          <button onClick={() => setOpen(false)} aria-label="Close" className="text-paper">
-            ×
-          </button>
-        </div>
+        <button onClick={() => setOpen(false)} aria-label="Close" className="text-paper">
+          ×
+        </button>
       </div>
 
       <div className="flex-1 space-y-3 overflow-y-auto p-3">

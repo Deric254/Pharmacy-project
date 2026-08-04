@@ -17,6 +17,7 @@ import pytest_asyncio
 from app.core.database import AsyncSessionLocal, Base, engine
 from app.core.redis_client import aclose_for_current_loop, redis_client
 from app.core.security import hash_password
+from app.models.ai_conversation import AIConversation, AIConversationMessage  # noqa: F401
 from app.models.ai_provider_key import AIProviderKey  # noqa: F401
 from app.models.audit_log import AuditLog  # noqa: F401
 from app.models.backup import BackupLog, BackupOAuthToken  # noqa: F401

@@ -21,6 +21,7 @@ model directly for the same reason; keep both lists in sync when
 adding a model.
 """
 
+from app.models.ai_conversation import AIConversation, AIConversationMessage
 from app.models.ai_provider_key import AIProviderKey
 from app.models.audit_log import AuditLog
 from app.models.backup import BackupLog, BackupOAuthToken
@@ -40,6 +41,8 @@ from app.models.supplier import Supplier, SupplierTransaction
 from app.models.user import User, UserSession
 
 __all__ = [
+    "AIConversation",
+    "AIConversationMessage",
     "AIProviderKey",
     "AuditLog",
     "BackupLog",

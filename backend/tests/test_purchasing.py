@@ -14,9 +14,7 @@ Purchasing tests. The properties that matter:
 """
 
 from app.core.database import AsyncSessionLocal
-from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
-from app.models.stock_movement import MovementType, StockMovement
 from app.models.supplier import Supplier
 
 
@@ -66,7 +64,6 @@ class TestSupplierCRUD:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert r.status_code == 403
-
 
 
 class TestQuickPurchase:

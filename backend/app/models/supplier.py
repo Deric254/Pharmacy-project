@@ -6,6 +6,7 @@ from sqlalchemy import DateTime, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.core.money_types import MoneyCents
 
 
 class Supplier(Base):
@@ -32,7 +33,7 @@ class SupplierTransaction(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id"), index=True)
-    amount: Mapped[float] = mapped_column()
+    amount: Mapped[float] = mapped_column(MoneyCents)
     reference: Mapped[str | None] = mapped_column(String(100), nullable=True)  # e.g. "po:12"
     notes: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

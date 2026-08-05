@@ -8,6 +8,7 @@ from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.core.money_types import MoneyCents
 
 if TYPE_CHECKING:
     from app.models.product import Product
@@ -64,10 +65,10 @@ class PurchaseOrderItem(Base):
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
 
     quantity_ordered: Mapped[int] = mapped_column(Integer)
-    unit_cost_expected: Mapped[float] = mapped_column()
+    unit_cost_expected: Mapped[float] = mapped_column(MoneyCents)
 
     quantity_received: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    unit_cost_actual: Mapped[float | None] = mapped_column(nullable=True)
+    unit_cost_actual: Mapped[float | None] = mapped_column(MoneyCents, nullable=True)
     batch_id: Mapped[int | None] = mapped_column(ForeignKey("medicine_batches.id"), nullable=True)
 
     product: Mapped[Product] = relationship(lazy="selectin")

@@ -8,6 +8,7 @@ from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.core.money_types import MoneyCents
 
 if TYPE_CHECKING:
     from app.models.product import Product
@@ -28,9 +29,9 @@ class Sale(Base):
     customer_id: Mapped[int | None] = mapped_column(
         ForeignKey("customers.id"), nullable=True, index=True
     )
-    subtotal: Mapped[float] = mapped_column()
-    discount_amount: Mapped[float] = mapped_column(default=0.0)
-    total_amount: Mapped[float] = mapped_column()
+    subtotal: Mapped[float] = mapped_column(MoneyCents)
+    discount_amount: Mapped[float] = mapped_column(MoneyCents, default=0.0)
+    total_amount: Mapped[float] = mapped_column(MoneyCents)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
 
     items: Mapped[list[SaleItem]] = relationship(lazy="selectin")
@@ -54,8 +55,9 @@ class SaleItem(Base):
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), index=True)
     batch_id: Mapped[int] = mapped_column(ForeignKey("medicine_batches.id"))
     quantity: Mapped[int] = mapped_column(Integer)
-    unit_price: Mapped[float] = mapped_column()  # price at time of sale, never recomputed later
-    line_total: Mapped[float] = mapped_column()
+    # price at time of sale, never recomputed later
+    unit_price: Mapped[float] = mapped_column(MoneyCents)
+    line_total: Mapped[float] = mapped_column(MoneyCents)
 
     product: Mapped[Product] = relationship(lazy="selectin")
 
@@ -79,5 +81,5 @@ class Payment(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     sale_id: Mapped[int] = mapped_column(ForeignKey("sales.id"), index=True)
     method: Mapped[PaymentMethod] = mapped_column(Enum(PaymentMethod))
-    amount: Mapped[float] = mapped_column()
+    amount: Mapped[float] = mapped_column(MoneyCents)
     reference: Mapped[str | None] = mapped_column(String(100), nullable=True)  # e.g. M-Pesa code

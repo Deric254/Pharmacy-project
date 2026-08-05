@@ -7,6 +7,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, fu
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.core.money_types import MoneyCents
 
 if TYPE_CHECKING:
     from app.models.category import Category
@@ -54,7 +55,7 @@ class Product(Base):
     category: Mapped[Category | None] = relationship(lazy="selectin")
 
     reorder_point: Mapped[int] = mapped_column(Integer, default=10)
-    default_selling_price: Mapped[float] = mapped_column(default=0.0)
+    default_selling_price: Mapped[float] = mapped_column(MoneyCents, default=0.0)
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

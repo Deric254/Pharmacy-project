@@ -6,6 +6,7 @@ from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.core.money_types import MoneyCents
 
 
 class MedicineBatch(Base):
@@ -30,7 +31,7 @@ class MedicineBatch(Base):
     qty_received: Mapped[int] = mapped_column(Integer)
     qty_remaining: Mapped[int] = mapped_column(Integer)  # derived/cached, reconciled vs ledger
 
-    cost_price: Mapped[float] = mapped_column(default=0.0)
+    cost_price: Mapped[float] = mapped_column(MoneyCents, default=0.0)
 
     # Non-null while an open stock take is counting this batch -- FEFO
     # selection excludes locked batches so a sale mid-count can't

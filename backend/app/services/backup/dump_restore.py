@@ -77,7 +77,22 @@ def _coerce_row_for_table(table: Table, row: dict[str, Any]) -> dict[str, Any]:
             coerced[column.name] = None
             continue
 
-        python_type = getattr(column.type, "python_type", None)
+        # column.type.python_type can raise NotImplementedError (not
+        # AttributeError) for a type that doesn't override it -- every
+        # built-in SQLAlchemy type does, but a custom TypeDecorator
+        # doesn't get that for free (see MoneyCents.python_type's own
+        # docstring for how this exact crash was first found). A bare
+        # `getattr(..., "python_type", None)` does NOT catch that,
+        # since getattr's default only covers a genuinely missing
+        # attribute, not a property that exists and raises when
+        # accessed. Guarding this explicitly means any future custom
+        # column type that forgets to override python_type degrades to
+        # "value passed through as-is" here, not a hard crash that
+        # takes down the entire restore.
+        try:
+            python_type = getattr(column.type, "python_type", None)
+        except NotImplementedError:
+            python_type = None
         enum_class = getattr(column.type, "enum_class", None)
 
         if enum_class is not None:

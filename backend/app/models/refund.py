@@ -7,6 +7,7 @@ from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, fun
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.core.money_types import MoneyCents
 from app.models.sale import PaymentMethod
 
 
@@ -35,7 +36,7 @@ class Refund(Base):
     reason: Mapped[RefundReason] = mapped_column(Enum(RefundReason))
     notes: Mapped[str | None] = mapped_column(String(255), nullable=True)
     method: Mapped[PaymentMethod] = mapped_column(Enum(PaymentMethod))
-    total_amount: Mapped[float] = mapped_column()
+    total_amount: Mapped[float] = mapped_column(MoneyCents)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
 
     items: Mapped[list[RefundItem]] = relationship(lazy="selectin")
@@ -50,8 +51,8 @@ class RefundItem(Base):
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
     batch_id: Mapped[int] = mapped_column(ForeignKey("medicine_batches.id"))
     quantity: Mapped[int] = mapped_column(Integer)
-    unit_price: Mapped[float] = mapped_column()
-    line_total: Mapped[float] = mapped_column()
+    unit_price: Mapped[float] = mapped_column(MoneyCents)
+    line_total: Mapped[float] = mapped_column(MoneyCents)
     # False when the returned item was NOT put back into sellable
     # stock (damaged/expired) -- the refund still pays the customer
     # back, but the batch's qty_remaining is deliberately left alone.

@@ -210,6 +210,17 @@ export function PosPage() {
     }
   }
 
+  async function registerCustomer(): Promise<CustomerOut> {
+    const name = customerName.trim()
+    const customer = await customersApi.create({
+      name,
+      phone: customerPhone.trim() || null,
+    })
+    setAttachedCustomer(customer)
+    setNameMatches(null)
+    return customer
+  }
+
   async function handleRegisterCustomer() {
     const name = customerName.trim()
     if (!name) {
@@ -219,12 +230,7 @@ export function PosPage() {
     setRegisteringCustomer(true)
     setCustomerLookupError(null)
     try {
-      const customer = await customersApi.create({
-        name,
-        phone: customerPhone.trim() || null,
-      })
-      setAttachedCustomer(customer)
-      setNameMatches(null)
+      await registerCustomer()
     } catch (err) {
       setCustomerLookupError(err instanceof ApiError ? err.message : 'Could not register customer.')
     } finally {
@@ -239,21 +245,60 @@ export function PosPage() {
     setCheckingOut(true)
     setError(null)
     try {
+      // A cashier typing a name is a reasonable, common thing to do
+      // without also remembering to press "Find" then "Register" as
+      // two separate extra clicks first -- previously, skipping those
+      // meant the typed name was silently discarded at checkout and
+      // no customer record was ever created, with no error shown.
+      // This makes "type a name, complete the sale" actually save
+      // them, the way a cashier would expect, while still respecting
+      // an explicit match from Find/the suggestion list if one was
+      // already picked.
+      let customerId = attachedCustomer?.id ?? null
+      if (customerId === null && customerName.trim()) {
+        try {
+          const customer = await registerCustomer()
+          customerId = customer.id
+        } catch (err) {
+          setError(
+            err instanceof ApiError
+              ? `Could not save customer "${customerName.trim()}": ${err.message}`
+              : 'Could not save the customer for this sale.',
+          )
+          return
+        }
+      }
+
       const sale = await salesApi.create({
         items: cart.map((l) => ({ product_id: l.product.id, quantity: l.quantity })),
         payments: [{ method: paymentMethod, amount: estimatedTotal }],
         discount_amount: discount,
-        customer_id: attachedCustomer?.id ?? null,
+        customer_id: customerId,
       })
       setReceipt(sale)
       setCart([])
       setDiscount(0)
-      setResults([])
       setQuery('')
       setAttachedCustomer(null)
       setCustomerPhone('')
       setCustomerName('')
       setNameMatches(null)
+      // Explicit re-fetch, not just clearing results and hoping the
+      // debounced [query] effect notices -- if the cashier was
+      // already on the default (empty-query, "all in stock") view
+      // when this sale completed, query goes from '' to '' as part
+      // of the reset above, which is not a *change* React's effect
+      // dependency array would ever re-fire on. Without this, the
+      // product list would sit there blank, or worse, keep showing
+      // pre-sale stock counts, until something else happened to
+      // change the query. searchProducts('') directly, not query.trim(),
+      // sidesteps React's batched-update timing entirely -- reading
+      // the query state variable here could still see its pre-reset
+      // value depending on when this line actually runs relative to
+      // the setQuery('') above.
+      searchProducts('')
+        .then(setResults)
+        .catch(() => undefined) // a failed silent refresh is not worth surfacing as an error over a completed sale
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Checkout failed. Nothing was charged.')
     } finally {
@@ -552,6 +597,42 @@ function Receipt({ sale, onNewSale }: { sale: SaleOut; onNewSale: () => void }) 
       if (iframe && document.body.contains(iframe)) document.body.removeChild(iframe)
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sale.id])
+
+  useEffect(() => {
+    // Any keypress dismisses the receipt back to a fresh sale -- a
+    // busy pharmacy counter wants the fastest possible path back to
+    // selling, not a specific button to hunt for. Attached after a
+    // short delay, specifically so the keypress that triggered
+    // checkout in the first place (e.g. pressing Enter while focused
+    // on "Charge & complete sale") can never bleed through and
+    // instantly dismiss a receipt the cashier hasn't even seen yet.
+    // Bare modifier keys are ignored -- someone resting a finger on
+    // Shift isn't asking to start a new sale.
+    const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta'])
+    let active = false
+    const activateTimer = setTimeout(() => {
+      active = true
+    }, 200)
+
+    function handleKeyDown(e: globalThis.KeyboardEvent) {
+      if (!active || MODIFIER_KEYS.has(e.key)) return
+      onNewSale()
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      clearTimeout(activateTimer)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+    // Deliberately [sale.id], not [onNewSale] -- onNewSale is a fresh
+    // inline closure on every PosPage render, and several state
+    // updates land right after this receipt appears (cart/discount/
+    // query/customer fields resetting, the product list refreshing).
+    // Depending on it would re-subscribe this effect on each of those
+    // renders, repeatedly restarting the 200ms activation delay for
+    // no reason. One sale, one receipt, one subscription.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sale.id])
 

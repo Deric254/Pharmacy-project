@@ -81,7 +81,7 @@ export function SetupPage({ onComplete }: { onComplete: () => void }) {
   }
 
   return (
-    <div className="grid min-h-screen place-items-center bg-paper px-4">
+    <div className="grid min-h-screen place-items-center bg-paper px-4 setup-bg">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
           <Logo className="mx-auto mb-3 h-12 w-12" />

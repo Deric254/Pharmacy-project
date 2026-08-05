@@ -45,22 +45,7 @@ export function LoginPage() {
   }
 
   return (
-    <div
-      className="grid min-h-screen place-items-center bg-paper px-4"
-      style={{
-        // Purely decorative -- an inline data-URI, not an external
-        // file, so there's nothing to fail to load and no network
-        // dependency for a desktop app that may run offline. Built
-        // from the same ledger palette as the rest of the app
-        // (paper/rule/brass tokens in index.css), not a new color
-        // choice, and scoped to this one page only -- it can't affect
-        // any other screen, any data, or any request path.
-        backgroundImage:
-          'radial-gradient(circle at 50% 0%, var(--color-paper) 0%, var(--color-paper-dim) 70%), ' +
-          `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cg fill='none' stroke='%23c9c0a4' stroke-width='1' opacity='0.35'%3E%3Cpath d='M0 60h120M60 0v120'/%3E%3C/g%3E%3C/svg%3E")`,
-        backgroundBlendMode: 'normal, multiply',
-      }}
-    >
+    <div className="grid min-h-screen place-items-center bg-paper px-4 login-bg">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
           <Logo className="mx-auto mb-3 h-12 w-12" />

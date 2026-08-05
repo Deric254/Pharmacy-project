@@ -20,7 +20,7 @@
  * or window-lifecycle defect has been reported against this file.
  * That is a track record, not a guarantee: this is still a thin
  * wrapper, still worth watching, and any new failure report on it
- * should come with the actual %LOCALAPPDATA%\PharmacyERP\logs\desktop.log
+ * should come with the actual %APPDATA%\PharmacyERP\logs\desktop.log
  * from the machine it happened on, not a guess.
  */
 
@@ -35,28 +35,26 @@ const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`
 const BACKEND_STARTUP_TIMEOUT_MS = 30000
 
 // Pinned explicitly, not left to Electron's defaults. Two real,
-// confirmed problems this fixes, both against this file's own header
-// comment claiming logs live in %LOCALAPPDATA%\PharmacyERP:
+// Pinned explicitly, not left to Electron's default. Without this,
+// app.getPath('userData') (and therefore where desktop.log actually
+// lives) falls back to package.json's "name" field
+// ("pharmacy-erp-desktop"), not the human-facing "productName"
+// ("Pharmacy ERP"/"PharmacyERP") this file's header comment assumes.
+// This alone is enough to make that comment's claim true: Electron's
+// own default userData root (%APPDATA% on Windows) plus this name
+// gives a real, predictable, findable path.
 //
-// 1. Without app.setName(), Electron's app name (and therefore the
-//    userData folder name) falls back to package.json's "name" field
-//    ("pharmacy-erp-desktop"), not the human-facing "productName"
-//    ("Pharmacy ERP"/"PharmacyERP") the comment assumes.
-// 2. Electron's own default userData location is %APPDATA% (Roaming),
-//    on every platform, always -- there is no built-in Electron
-//    default that uses Local AppData. The backend (see desktop_main.py's
-//    _app_data_dir) deliberately uses %LOCALAPPDATA%\PharmacyERP for
-//    the database and secrets. Left unpinned, Electron's own log file
-//    would end up in a second, different folder from the database it's
-//    describing -- which is exactly the situation a real support
-//    conversation just ran into.
-//
-// Pinning both here means logs, database, and secrets all live in the
-// same one folder, matching what the header comment always claimed.
+// Deliberately NOT also forcing userData to the backend's own
+// %LOCALAPPDATA%\PharmacyERP data folder (database, secrets) here,
+// even though that would put logs right next to them. That would mean
+// two separately-spawned OS processes -- this Electron main process
+// and the backend child process -- both creating and locking files in
+// the exact same directory at the exact same moment on every launch.
+// That's a real, untested new failure mode with no way to verify it's
+// safe on real Windows from where this was written. Not worth it for
+// a convenience; app.setName alone already solves the actual problem
+// (logs being unfindable).
 app.setName('PharmacyERP')
-if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
-  app.setPath('userData', path.join(process.env.LOCALAPPDATA, 'PharmacyERP'))
-}
 
 let backendProcess = null
 let mainWindow = null

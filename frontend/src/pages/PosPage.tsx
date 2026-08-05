@@ -177,6 +177,40 @@ export function PosPage() {
 
   const submittingRef = useRef(false)
 
+  /**
+   * Same matching rules as the manual "Find" button, extracted so
+   * checkout can reuse them instead of skipping straight to creating
+   * a new customer -- which is exactly what caused real duplicates:
+   * typing an EXISTING customer's name and going straight to
+   * checkout (skipping "Find") used to always create a brand new
+   * customer record, never reusing the one that already existed.
+   * Pure lookup, no UI state touched here -- callers decide what to
+   * do with the result.
+   */
+  async function findExistingCustomer(): Promise<
+    | { status: 'found'; customer: CustomerOut }
+    | { status: 'ambiguous'; matches: CustomerOut[] }
+    | { status: 'not_found' }
+  > {
+    const phone = customerPhone.trim()
+    const name = customerName.trim()
+    if (phone) {
+      try {
+        const customer = await customersApi.getByPhone(phone)
+        return { status: 'found', customer }
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) return { status: 'not_found' }
+        throw err
+      }
+    }
+    if (name) {
+      const matches = await customersApi.list(name)
+      if (matches.length === 1) return { status: 'found', customer: matches[0] }
+      if (matches.length > 1) return { status: 'ambiguous', matches }
+    }
+    return { status: 'not_found' }
+  }
+
   async function handleCustomerLookup() {
     const phone = customerPhone.trim()
     const name = customerName.trim()
@@ -185,26 +219,21 @@ export function PosPage() {
     setCustomerLookupError(null)
     setNameMatches(null)
     try {
-      if (phone) {
-        const customer = await customersApi.getByPhone(phone)
-        setAttachedCustomer(customer)
-        return
-      }
-      const matches = await customersApi.list(name)
-      if (matches.length === 1) {
-        setAttachedCustomer(matches[0])
-      } else if (matches.length > 1) {
-        setNameMatches(matches)
+      const result = await findExistingCustomer()
+      if (result.status === 'found') {
+        setAttachedCustomer(result.customer)
+      } else if (result.status === 'ambiguous') {
+        setNameMatches(result.matches)
       } else {
-        setCustomerLookupError('No matching customer found. You can register them below.')
+        setCustomerLookupError(
+          phone
+            ? 'No customer with that phone number. You can register them below.'
+            : 'No matching customer found. You can register them below.',
+        )
       }
     } catch (err) {
       setAttachedCustomer(null)
-      if (err instanceof ApiError && err.status === 404) {
-        setCustomerLookupError('No customer with that phone number. You can register them below.')
-      } else {
-        setCustomerLookupError('Could not look up that customer.')
-      }
+      setCustomerLookupError(err instanceof ApiError ? err.message : 'Could not look up that customer.')
     } finally {
       setLookingUpCustomer(false)
     }
@@ -246,19 +275,36 @@ export function PosPage() {
     setError(null)
     try {
       // A cashier typing a name is a reasonable, common thing to do
-      // without also remembering to press "Find" then "Register" as
-      // two separate extra clicks first -- previously, skipping those
-      // meant the typed name was silently discarded at checkout and
-      // no customer record was ever created, with no error shown.
-      // This makes "type a name, complete the sale" actually save
-      // them, the way a cashier would expect, while still respecting
-      // an explicit match from Find/the suggestion list if one was
-      // already picked.
+      // without also remembering to press "Find" first -- but jumping
+      // straight to "create a new customer" whenever nothing was
+      // explicitly attached is exactly what caused real duplicates:
+      // typing an EXISTING customer's name and checking out directly
+      // (skipping "Find") used to always create a second, separate
+      // record for the same person instead of reusing the one that
+      // already existed. This looks the person up first, the same
+      // way the manual "Find" button does, and only creates a new
+      // customer when a lookup genuinely finds nobody. If the name
+      // matches more than one existing customer, checkout stops and
+      // shows the same picker "Find" would -- guessing which
+      // same-named customer this sale belongs to would be its own
+      // way of getting the data wrong.
       let customerId = attachedCustomer?.id ?? null
-      if (customerId === null && customerName.trim()) {
+      if (customerId === null && (customerName.trim() || customerPhone.trim())) {
         try {
-          const customer = await registerCustomer()
-          customerId = customer.id
+          const lookup = await findExistingCustomer()
+          if (lookup.status === 'found') {
+            customerId = lookup.customer.id
+            setAttachedCustomer(lookup.customer)
+          } else if (lookup.status === 'ambiguous') {
+            setNameMatches(lookup.matches)
+            setError(
+              `More than one customer named "${customerName.trim()}" -- pick the right one below before completing the sale.`,
+            )
+            return
+          } else {
+            const customer = await registerCustomer()
+            customerId = customer.id
+          }
         } catch (err) {
           setError(
             err instanceof ApiError
@@ -428,7 +474,7 @@ export function PosPage() {
             </div>
           ) : (
             <>
-              <div className="mt-1 flex gap-2">
+              <div className="mt-1 space-y-2">
                 <input
                   value={customerName}
                   onChange={(e) => {
@@ -443,7 +489,7 @@ export function PosPage() {
                     }
                   }}
                   placeholder="Name"
-                  className="flex-1 border border-rule bg-paper px-2 py-1.5 text-sm"
+                  className="w-full border border-rule bg-paper px-2 py-1.5 text-sm"
                 />
                 <input
                   value={customerPhone}
@@ -459,14 +505,14 @@ export function PosPage() {
                     }
                   }}
                   placeholder="Phone"
-                  className="flex-1 border border-rule bg-paper px-2 py-1.5 text-sm"
+                  className="w-full border border-rule bg-paper px-2 py-1.5 text-sm"
                 />
                 <button
                   onClick={() => void handleCustomerLookup()}
                   disabled={
                     lookingUpCustomer || (!customerPhone.trim() && !customerName.trim())
                   }
-                  className="border border-rule px-3 py-1.5 text-sm text-ink-soft hover:border-brass disabled:opacity-50"
+                  className="w-full border border-rule px-3 py-1.5 text-sm text-ink-soft hover:border-brass disabled:opacity-50"
                 >
                   {lookingUpCustomer ? 'Looking up…' : 'Find'}
                 </button>

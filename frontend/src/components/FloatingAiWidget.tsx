@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { aiApi } from '../api/ai'
 import { ApiError } from '../api/client'
 import { MarkdownLite } from './MarkdownLite'
@@ -11,10 +11,54 @@ interface Turn {
   providerUsed: string | null
 }
 
+/**
+ * A real answer touches real business data before it touches the AI
+ * provider at all (today's revenue, stock levels, top products --
+ * see ai_assistant_service.py's _build_business_context), then makes
+ * an actual network call to a hosted LLM, which can itself take
+ * several seconds -- and if more than one provider is configured,
+ * a slow or down first choice is retried against the next one rather
+ * than failing fast. None of that is a bug to hide; it's genuinely
+ * what a grounded, multi-provider answer requires. This just narrates
+ * it honestly instead of leaving a static "…" for however long that
+ * takes.
+ */
+function ThinkingIndicator() {
+  const [elapsedMs, setElapsedMs] = useState(0)
+  useEffect(() => {
+    const start = Date.now()
+    const timer = setInterval(() => setElapsedMs(Date.now() - start), 200)
+    return () => clearInterval(timer)
+  }, [])
+
+  const label =
+    elapsedMs < 3000
+      ? 'Reading your numbers…'
+      : elapsedMs < 9000
+        ? 'Checking today\u2019s sales and stock…'
+        : 'Still working \u2014 a slow provider can take a moment…'
+
+  return (
+    <div className="flex items-center gap-2 border-l-2 border-brass py-1 pl-2 text-sm text-ink-soft">
+      <span className="flex gap-1">
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            className="inline-block h-1.5 w-1.5 animate-bounce rounded-full bg-brass"
+            style={{ animationDelay: `${i * 0.15}s` }}
+          />
+        ))}
+      </span>
+      <span>{label}</span>
+    </div>
+  )
+}
+
 export function FloatingAiWidget() {
   const [open, setOpen] = useState(false)
   const [prompt, setPrompt] = useState('')
   const [asking, setAsking] = useState(false)
+  const [pendingPrompt, setPendingPrompt] = useState<string | null>(null)
   const [conversation, setConversation] = useState<Turn[]>([])
   const [conversationId, setConversationId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -33,6 +77,7 @@ export function FloatingAiWidget() {
     setError(null)
     const askedPrompt = prompt
     setPrompt('')
+    setPendingPrompt(askedPrompt)
     try {
       const context = viewedRange
         ? { viewing_start_date: viewedRange.start, viewing_end_date: viewedRange.end }
@@ -47,6 +92,7 @@ export function FloatingAiWidget() {
       setError(err instanceof ApiError ? err.message : 'Could not reach the assistant.')
     } finally {
       setAsking(false)
+      setPendingPrompt(null)
     }
   }
 
@@ -185,6 +231,12 @@ export function FloatingAiWidget() {
             </div>
           </div>
         ))}
+        {pendingPrompt && (
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-ink">{pendingPrompt}</p>
+            <ThinkingIndicator />
+          </div>
+        )}
         {error && <p className="text-sm text-stamp-red">{error}</p>}
       </div>
 

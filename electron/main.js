@@ -34,6 +34,30 @@ const BACKEND_PORT = 8000
 const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`
 const BACKEND_STARTUP_TIMEOUT_MS = 30000
 
+// Pinned explicitly, not left to Electron's defaults. Two real,
+// confirmed problems this fixes, both against this file's own header
+// comment claiming logs live in %LOCALAPPDATA%\PharmacyERP:
+//
+// 1. Without app.setName(), Electron's app name (and therefore the
+//    userData folder name) falls back to package.json's "name" field
+//    ("pharmacy-erp-desktop"), not the human-facing "productName"
+//    ("Pharmacy ERP"/"PharmacyERP") the comment assumes.
+// 2. Electron's own default userData location is %APPDATA% (Roaming),
+//    on every platform, always -- there is no built-in Electron
+//    default that uses Local AppData. The backend (see desktop_main.py's
+//    _app_data_dir) deliberately uses %LOCALAPPDATA%\PharmacyERP for
+//    the database and secrets. Left unpinned, Electron's own log file
+//    would end up in a second, different folder from the database it's
+//    describing -- which is exactly the situation a real support
+//    conversation just ran into.
+//
+// Pinning both here means logs, database, and secrets all live in the
+// same one folder, matching what the header comment always claimed.
+app.setName('PharmacyERP')
+if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
+  app.setPath('userData', path.join(process.env.LOCALAPPDATA, 'PharmacyERP'))
+}
+
 let backendProcess = null
 let mainWindow = null
 

@@ -37,6 +37,11 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Pharmacy ERP"
+    },
+    "copyright": "Copyright (c) 2026 Dericbi",
+    "extraMetadata": {
+      "author": "Dericbi"
     }
-  }
+  },
+  "author": "Deric Marangu <dericmarangu@gmail.com>"
 }

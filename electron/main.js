@@ -271,6 +271,39 @@ function createWindow() {
   })
 }
 
+/**
+ * Unconditionally clears anything listening on the backend's port
+ * before every single launch -- not a health check, not "is this a
+ * legitimate previous instance", just a guaranteed clean slate every
+ * time, regardless of how a leftover process got there. Electron's
+ * own single-instance-lock (see the top of this file) already
+ * guarantees no other copy of THIS app is legitimately running by the
+ * time this runs -- so anything still on this port at this exact
+ * moment is, by definition, either a leftover from an imperfect past
+ * shutdown or an unrelated program, never something worth preserving.
+ * A user should never have to open Task Manager to make this app
+ * work; this exists so they never have to.
+ */
+function forceClearPort(port) {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') {
+      resolve()
+      return
+    }
+    const ps = spawn('powershell.exe', [
+      '-NoProfile',
+      '-Command',
+      `Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | ` +
+        `ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }`,
+    ])
+    ps.on('error', (err) => {
+      logDesktopDiagnostic(`force-clear-port-failed ${err.message}`)
+      resolve() // never let this block startup -- worst case, the existing health-check path still applies
+    })
+    ps.on('exit', () => resolve())
+  })
+}
+
 async function startApp() {
   try {
     // Without this, Electron's default behavior for the blob-URL
@@ -303,6 +336,14 @@ async function startApp() {
     })
 
     ensureDevFrontendBuilt()
+    await forceClearPort(BACKEND_PORT)
+    // A killed process's port isn't always instantly free at the OS
+    // level -- Stop-Process returning doesn't guarantee the socket
+    // has been released yet. This is cheap insurance against the new
+    // backend trying to bind a fraction of a second too early and
+    // failing for a completely different reason than the one this
+    // whole fix exists to close off.
+    await new Promise((resolve) => setTimeout(resolve, 400))
     await startBackend()
     await waitForBackendHealthy()
     await session.defaultSession.clearStorageData({

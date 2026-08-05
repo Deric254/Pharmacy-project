@@ -1,6 +1,50 @@
 import type { ApiErrorBody } from '../types/api'
 
 /**
+ * No fetch() in this file had any timeout at all until now -- if a
+ * request hung for any reason (a flaky loopback connection, security
+ * software stalling localhost traffic, anything), the returned
+ * promise never resolved AND never rejected. A .catch() on a hung
+ * promise never fires either; it just never runs. For the calls that
+ * gate the app's very first paint (config, setup-status), that meant
+ * a permanently blank screen with no error, no retry, nothing --
+ * confirmed as a real, reproducible failure mode, not a hypothetical
+ * one. Every request now aborts after a bounded time and turns into
+ * a normal, catchable error instead.
+ *
+ * DEFAULT_TIMEOUT_MS is generous on purpose (large Excel imports,
+ * PDF generation) while still guaranteeing recovery. The AI assistant
+ * gets its own longer override (see api/ai.ts) since a real answer
+ * can legitimately take longer -- see ai_assistant_service.py's own
+ * per-provider timeout and fallback chain -- and cutting that off
+ * early would turn a slow-but-working answer into a false failure.
+ */
+const DEFAULT_TIMEOUT_MS = 30_000
+
+async function fetchWithTimeout(
+  input: string,
+  init: RequestInit,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(input, { ...init, signal: controller.signal })
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new ApiError(
+        0,
+        'The server took too long to respond. Check that the app is running correctly and try again.',
+        null,
+      )
+    }
+    throw err
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
  * Access token lives ONLY in this module-level variable -- never in
  * localStorage/sessionStorage, which are readable by any injected
  * script (XSS). It's lost on a hard refresh by design; the refresh
@@ -47,7 +91,7 @@ async function doRefresh(): Promise<boolean> {
   if (!refreshInFlight) {
     refreshInFlight = (async () => {
       try {
-        const res = await fetch('/api/v1/auth/refresh', {
+        const res = await fetchWithTimeout('/api/v1/auth/refresh', {
           method: 'POST',
           credentials: 'include',
         })
@@ -69,6 +113,7 @@ interface RequestOptions {
   method?: string
   body?: unknown
   query?: Record<string, string | number | boolean | undefined>
+  timeoutMs?: number
 }
 
 function buildUrl(path: string, query?: RequestOptions['query']): string {
@@ -85,12 +130,16 @@ async function rawRequest<T>(path: string, options: RequestOptions): Promise<T> 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`
 
-  const res = await fetch(buildUrl(path, options.query), {
-    method: options.method ?? 'GET',
-    headers,
-    credentials: 'include',
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-  })
+  const res = await fetchWithTimeout(
+    buildUrl(path, options.query),
+    {
+      method: options.method ?? 'GET',
+      headers,
+      credentials: 'include',
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    },
+    options.timeoutMs,
+  )
 
   if (res.status === 204) return undefined as T
 
@@ -128,11 +177,13 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 }
 
 export const api = {
-  get: <T>(path: string, query?: RequestOptions['query']) =>
-    apiRequest<T>(path, { method: 'GET', query }),
-  post: <T>(path: string, body?: unknown) => apiRequest<T>(path, { method: 'POST', body }),
-  patch: <T>(path: string, body?: unknown) => apiRequest<T>(path, { method: 'PATCH', body }),
-  delete: <T>(path: string) => apiRequest<T>(path, { method: 'DELETE' }),
+  get: <T>(path: string, query?: RequestOptions['query'], timeoutMs?: number) =>
+    apiRequest<T>(path, { method: 'GET', query, timeoutMs }),
+  post: <T>(path: string, body?: unknown, timeoutMs?: number) =>
+    apiRequest<T>(path, { method: 'POST', body, timeoutMs }),
+  patch: <T>(path: string, body?: unknown, timeoutMs?: number) =>
+    apiRequest<T>(path, { method: 'PATCH', body, timeoutMs }),
+  delete: <T>(path: string, timeoutMs?: number) => apiRequest<T>(path, { method: 'DELETE', timeoutMs }),
 }
 
 async function rawUpload<T>(
@@ -152,12 +203,19 @@ async function rawUpload<T>(
     formData.append(key, value)
   }
 
-  const res = await fetch(`/api/v1${path}`, {
-    method: 'POST',
-    headers,
-    credentials: 'include',
-    body: formData,
-  })
+  // Generous timeout -- this is a large file upload plus real
+  // server-side processing (parsing hundreds/thousands of import
+  // rows), not a quick lookup.
+  const res = await fetchWithTimeout(
+    `/api/v1${path}`,
+    {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: formData,
+    },
+    60_000,
+  )
 
   let parsedBody: ApiErrorBody | null = null
   const text = await res.text()
@@ -207,7 +265,7 @@ async function fetchAndDownload(path: string, fallbackFilename: string): Promise
   const token = getAccessToken()
   if (token) headers.Authorization = `Bearer ${token}`
 
-  const res = await fetch(path, { headers, credentials: 'include' })
+  const res = await fetchWithTimeout(path, { headers, credentials: 'include' }, 60_000)
   if (!res.ok) {
     let message = res.statusText
     try {
@@ -243,12 +301,16 @@ export async function postAndDownload(
   const token = getAccessToken()
   if (token) headers.Authorization = `Bearer ${token}`
 
-  const res = await fetch(`/api/v1${path}`, {
-    method: 'POST',
-    headers,
-    credentials: 'include',
-    body: JSON.stringify(body),
-  })
+  const res = await fetchWithTimeout(
+    `/api/v1${path}`,
+    {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(body),
+    },
+    60_000,
+  )
   if (!res.ok) {
     let message = res.statusText
     try {
@@ -297,7 +359,7 @@ export async function fetchBlob(path: string): Promise<Blob> {
   const token = getAccessToken()
   if (token) headers.Authorization = `Bearer ${token}`
 
-  const res = await fetch(`/api/v1${path}`, { headers, credentials: 'include' })
+  const res = await fetchWithTimeout(`/api/v1${path}`, { headers, credentials: 'include' }, 60_000)
   if (!res.ok) {
     let message = res.statusText
     try {

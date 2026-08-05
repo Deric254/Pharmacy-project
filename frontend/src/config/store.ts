@@ -6,7 +6,7 @@ import { applyTheme } from '../theme/themes'
 interface ConfigState {
   config: BusinessConfigOut | null
   status: 'loading' | 'ready' | 'error'
-  load: () => Promise<void>
+  load: (timeoutMs?: number) => Promise<void>
   refresh: () => Promise<void>
 }
 
@@ -24,9 +24,9 @@ export const useConfigStore = create<ConfigState>((set) => ({
   config: null,
   status: 'loading',
 
-  load: async () => {
+  load: async (timeoutMs?: number) => {
     try {
-      const config = await configApi.get()
+      const config = await configApi.get(timeoutMs)
       applyBranding(config)
       set({ config, status: 'ready' })
     } catch {

@@ -366,7 +366,34 @@ ipcMain.handle('print-receipt-silently', async (_event, base64Pdf) => {
 })
 
 function stopBackend() {
-  if (backendProcess && !backendProcess.killed) {
+  if (!backendProcess || backendProcess.killed) {
+    backendProcess = null
+    return
+  }
+  // Plain .kill() only terminates the single process Node has a
+  // handle to. On Windows, a PyInstaller-frozen onefile exe commonly
+  // runs as a launcher that spawns its own inner process to actually
+  // do the work -- killing just the outer one can leave that inner
+  // process running, invisible to Electron, still bound to port 8000.
+  // The next launch then spawns a brand new backend that can't bind
+  // that port, while the orphan -- possibly from an older version, in
+  // whatever state it happened to be in when orphaned -- is what
+  // actually answers health checks and requests instead. That's the
+  // real mechanism behind "sometimes blank, sometimes can't reach the
+  // server" on relaunch: not randomness, an accumulating leftover
+  // process from an imperfect shutdown.
+  //
+  // taskkill /t kills the entire process tree rooted at this PID, not
+  // just the one process -- the actual fix, not a bigger hammer for
+  // its own sake. Windows-only, matching this deployment target.
+  if (process.platform === 'win32' && backendProcess.pid) {
+    try {
+      spawn('taskkill', ['/pid', String(backendProcess.pid), '/t', '/f'])
+    } catch (err) {
+      logDesktopDiagnostic(`taskkill-failed ${err instanceof Error ? err.message : err}`)
+      backendProcess.kill()
+    }
+  } else {
     backendProcess.kill()
   }
   backendProcess = null

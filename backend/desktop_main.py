@@ -173,6 +173,16 @@ def main() -> None:
             webbrowser.open(f"http://127.0.0.1:{port}")
         print()
         print("This window can be closed -- it isn't the one running the app.")
+        if _running_under_electron():
+            # input() would block here forever: Electron spawns this
+            # process with stdio ignored entirely (no console window,
+            # by design -- see main.js), so there is no keyboard for a
+            # human to press Enter on. Confirmed as a real zombie
+            # process this way, not a hypothetical one: a real bug
+            # report showed a second backend process sitting alive in
+            # this exact state, stuck mid-shutdown, indefinitely.
+            # Nothing to wait for here -- just exit.
+            return
         with contextlib.suppress(EOFError):
             input("Press Enter to close this window...")
         return

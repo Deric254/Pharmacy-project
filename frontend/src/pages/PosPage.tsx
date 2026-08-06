@@ -615,6 +615,30 @@ function Receipt({ sale, onNewSale }: { sale: SaleOut; onNewSale: () => void }) 
       try {
         const blob = await fetchReceiptBlob()
         if (cancelled) return
+
+        // Real silent printing, only possible from inside Electron's
+        // main process (see electron/main.js's print-receipt-silently
+        // handler) -- prints straight to a real printer with zero
+        // dialog if one's available, and does nothing at all (still
+        // zero dialog) if not. This is the actual fix for print
+        // dialogs slowing down checkout: the old approach below
+        // (iframe + window.print()) can only ever show the browser's
+        // own print UI, every time, printer or not, because a
+        // sandboxed web page has no direct access to a printer.
+        const electronPrint = window.electronAPI?.printReceiptSilently
+        if (electronPrint) {
+          const buffer = await blob.arrayBuffer()
+          const base64 = btoa(
+            new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), ''),
+          )
+          await electronPrint(base64)
+          return
+        }
+
+        // Fallback for anywhere this isn't running inside Electron
+        // (e.g. the dev server in a plain browser) -- the only
+        // silent-printing capability doesn't exist there at all, so
+        // this is the best a web page can do, same as before.
         objectUrl = URL.createObjectURL(blob)
         iframe = document.createElement('iframe')
         iframe.style.position = 'fixed'

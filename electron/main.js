@@ -24,7 +24,7 @@
  * from the machine it happened on, not a guess.
  */
 
-const { app, BrowserWindow, dialog, session } = require('electron')
+const { app, BrowserWindow, dialog, session, ipcMain } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const http = require('node:http')
@@ -235,6 +235,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      preload: path.join(__dirname, 'preload.js'),
     },
   })
 
@@ -321,6 +322,48 @@ async function startApp() {
     app.quit()
   }
 }
+
+// Real silent printing -- no OS print dialog at all, either way. If a
+// printer is actually available, this prints straight to it. If not,
+// it does nothing rather than showing a dialog nobody wants: no
+// "no printers found" popup, no browser print preview interrupting
+// checkout. This is only possible because it runs here, in the main
+// process, using webContents.print -- the renderer (a sandboxed web
+// page, even inside Electron) has no way to talk to a printer
+// directly, which is exactly why the old approach
+// (iframe.contentWindow.print() from React) always had to show the
+// browser's own print UI regardless of printer availability.
+ipcMain.handle('print-receipt-silently', async (_event, base64Pdf) => {
+  let printWindow = null
+  try {
+    printWindow = new BrowserWindow({ show: false, webPreferences: { sandbox: true } })
+    await printWindow.loadURL(`data:application/pdf;base64,${base64Pdf}`)
+
+    const printers = await printWindow.webContents.getPrintersAsync()
+    if (printers.length === 0) {
+      return { printed: false }
+    }
+
+    await new Promise((resolve, reject) => {
+      printWindow.webContents.print(
+        { silent: true, printBackground: true },
+        (success, errorType) => {
+          if (success) resolve()
+          else reject(new Error(errorType))
+        },
+      )
+    })
+    return { printed: true }
+  } catch (err) {
+    // A failed silent print must never surface as an error to the
+    // cashier mid-checkout -- same principle as the old auto-print's
+    // own try/catch. Logged for later diagnosis, not shown.
+    logDesktopDiagnostic(`silent-print-failed ${err instanceof Error ? err.message : err}`)
+    return { printed: false }
+  } finally {
+    if (printWindow && !printWindow.isDestroyed()) printWindow.destroy()
+  }
+})
 
 function stopBackend() {
   if (backendProcess && !backendProcess.killed) {

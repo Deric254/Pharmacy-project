@@ -377,7 +377,18 @@ async function startApp() {
 ipcMain.handle('print-receipt-silently', async (_event, base64Pdf) => {
   let printWindow = null
   try {
-    printWindow = new BrowserWindow({ show: false, webPreferences: { sandbox: true } })
+    // `plugins: true` is not optional here -- without it, Electron has
+    // no PDF viewer registered at all, so loading a `data:application/pdf`
+    // URL isn't rendered, it's treated as an unhandled download instead.
+    // That download falls straight into the app's global `will-download`
+    // handler above, which calls dialog.showSaveDialogSync(mainWindow) --
+    // i.e. every single sale would pop a native "Save file" dialog over
+    // the POS screen right after checkout, which is exactly backwards for
+    // a feature whose entire purpose is printing with zero dialogs. With
+    // plugins enabled, Chromium's built-in PDFium viewer renders the PDF
+    // in-process instead, so print() has an actual page to print and
+    // will-download never fires for this window at all.
+    printWindow = new BrowserWindow({ show: false, webPreferences: { sandbox: true, plugins: true } })
     await printWindow.loadURL(`data:application/pdf;base64,${base64Pdf}`)
 
     const printers = await printWindow.webContents.getPrintersAsync()

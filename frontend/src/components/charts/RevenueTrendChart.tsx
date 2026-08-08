@@ -1,3 +1,5 @@
+import type { ReactElement } from 'react'
+import type { Props as RechartsLabelProps } from 'recharts/types/component/Label'
 import {
   Line,
   LineChart,
@@ -34,18 +36,54 @@ export function RevenueTrendChart({ data }: { data: RevenueTrendOut }) {
     return <p className="text-sm text-ink-soft">No sales in this range yet.</p>
   }
 
+  // A profit label fixed at "bottom" collides with the x-axis date
+  // text whenever profit sits close to the bottom of the chart's own
+  // value range -- which, for a pharmacy, is routine: thin or
+  // negative margins are common, not an edge case. Rather than a
+  // fixed pixel guess (fragile against font/margin changes), this
+  // measures "close to bottom" the same way the chart itself does:
+  // relative to the actual plotted value range across both series
+  // (including 0, since the y-axis baseline is always visible).
+  // Below that threshold, the label renders above its point instead.
+  const allPlottedValues = data.points.flatMap((p) => [p.revenue, p.profit ?? 0, 0])
+  const minPlottedValue = Math.min(...allPlottedValues)
+  const maxPlottedValue = Math.max(...allPlottedValues)
+  const plottedRange = maxPlottedValue - minPlottedValue || 1
+  const NEAR_BOTTOM_FRACTION = 0.15
+
+  function renderProfitLabel(props: RechartsLabelProps): ReactElement {
+    const x = Number(props.x ?? 0)
+    const y = Number(props.y ?? 0)
+    const numericValue = Number(props.value)
+    const isNearBottom = (numericValue - minPlottedValue) / plottedRange < NEAR_BOTTOM_FRACTION
+    return (
+      <text
+        x={x}
+        y={isNearBottom ? y - 8 : y + 16}
+        textAnchor="middle"
+        fontSize={10}
+        fill="var(--color-stamp-green)"
+      >
+        {formatCurrency(numericValue)}
+      </text>
+    )
+  }
+
   return (
     <div>
       <ChartScrollArea itemCount={data.points.length} minPxPerItem={PX_PER_POINT}>
       <ResponsiveContainer width="100%" height={260}>
-        {/* top/bottom margins are deliberately larger than the other
-            charts' -- this is the one place labels can sit above AND
-            below the plotted line (revenue on top, profit on bottom),
-            so both need clearance from the container edge or the
-            highest/lowest label gets clipped instead of just crowded. */}
+        {/* top/bottom margins give room for labels above AND below the
+            line (revenue on top, profit on bottom); left/right stay
+            modest -- the actual fix for edge-point labels is XAxis's
+            own `padding` below, not outer margin. Margin only moves
+            the whole chart (axis included) away from the container
+            edge; it does nothing to the gap between the y-axis and
+            the first plotted point, which is what was actually
+            colliding. */}
         <LineChart
           data={data.points}
-          margin={{ top: 20, right: 12, left: 8, bottom: hasProfit && showLabels ? 20 : 8 }}
+          margin={{ top: 20, right: 16, left: 8, bottom: hasProfit && showLabels ? 20 : 8 }}
         >
           <CartesianGrid stroke="var(--color-rule)" strokeDasharray="3 3" />
           <XAxis
@@ -58,6 +96,14 @@ export function RevenueTrendChart({ data }: { data: RevenueTrendOut }) {
             // -- that guess is what caused labels to disappear or
             // crowd together in the first place.
             interval={0}
+            // This is the actual fix for the first/last point's value
+            // label colliding with the y-axis and the container edge:
+            // padding pulls the first and last plotted points inward
+            // from the axis boundaries, so a label centered on either
+            // one has real room on both sides instead of butting
+            // straight up against the y-axis tick text (left) or
+            // getting clipped by the container (right).
+            padding={{ left: 32, right: 32 }}
           />
           <YAxis
             tick={{ fill: 'var(--color-ink-soft)', fontSize: 11 }}
@@ -100,14 +146,7 @@ export function RevenueTrendChart({ data }: { data: RevenueTrendOut }) {
               strokeWidth={2}
               dot={data.points.length <= 31}
             >
-              {showLabels && (
-                <LabelList
-                  dataKey="profit"
-                  position="bottom"
-                  formatter={(value) => formatCurrency(Number(value))}
-                  style={{ fill: 'var(--color-stamp-green)', fontSize: 10 }}
-                />
-              )}
+              {showLabels && <LabelList dataKey="profit" content={renderProfitLabel} />}
             </Line>
           )}
         </LineChart>

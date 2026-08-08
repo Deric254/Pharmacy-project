@@ -392,13 +392,36 @@ ipcMain.handle('print-receipt-silently', async (_event, base64Pdf) => {
     await printWindow.loadURL(`data:application/pdf;base64,${base64Pdf}`)
 
     const printers = await printWindow.webContents.getPrintersAsync()
-    if (printers.length === 0) {
+    // getPrintersAsync() on Windows always includes the built-in
+    // virtual printers ("Microsoft Print to PDF", "Microsoft XPS
+    // Document Writer", sometimes "OneNote" / "Fax") even on a
+    // machine with zero physical printers attached -- so
+    // `printers.length === 0` almost never actually happens. Worse:
+    // if the system's DEFAULT printer happens to be one of these
+    // (very common when no physical printer has ever been set up),
+    // print({ silent: true }) still triggers a real, unsuppressable
+    // native "Save Print Output As" dialog -- that comes from
+    // Windows' own PDF/XPS driver needing a destination file path,
+    // not from Chromium, so Electron's `silent` flag has no power
+    // over it at all. Filtering these out, and only ever printing to
+    // a REAL device, is what actually keeps this silent end to end.
+    const VIRTUAL_PRINTER_NAME_PATTERN = /pdf|xps document writer|onenote|fax/i
+    const realPrinters = printers.filter(
+      (p) => !VIRTUAL_PRINTER_NAME_PATTERN.test(p.name) && !VIRTUAL_PRINTER_NAME_PATTERN.test(p.displayName ?? ''),
+    )
+    if (realPrinters.length === 0) {
       return { printed: false }
     }
+    // Prefer whichever real printer is the OS default; otherwise just
+    // take the first real one. Explicitly named via deviceName below
+    // -- never left to "whatever the system default is", since that
+    // default is exactly what might be the virtual PDF printer this
+    // filtering just excluded.
+    const targetPrinter = realPrinters.find((p) => p.isDefault) ?? realPrinters[0]
 
     await new Promise((resolve, reject) => {
       printWindow.webContents.print(
-        { silent: true, printBackground: true },
+        { silent: true, printBackground: true, deviceName: targetPrinter.name },
         (success, errorType) => {
           if (success) resolve()
           else reject(new Error(errorType))

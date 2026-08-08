@@ -617,6 +617,14 @@ class TestDateBoundaryAccuracy:
     SQL at exactly these boundaries. These tests make that proof
     permanent using the same real insertion path the application
     itself uses, so this can never regress unnoticed.
+
+    The two "final day" tests below construct their near-midnight
+    fixture via business_time.local_day_bounds_utc rather than a bare
+    `datetime.combine(date.today(), 23:59:59)` -- the app's date
+    filtering is timezone-aware (local business day, not UTC
+    calendar day; see business_time.py), so "the last moment of
+    today" only means what these tests need it to mean once it's
+    converted through the same local-to-UTC math the app itself uses.
     """
 
     async def test_single_day_query_finds_a_sale_made_that_day(self, client, owner_user):
@@ -661,18 +669,26 @@ class TestDateBoundaryAccuracy:
             )
         ).json()
 
-        # Push this sale's real timestamp to late in the day, using
-        # the same DateTime column the application itself writes to
-        # -- proving the fix works for real data, not a contrived one.
+        # Push this sale's real timestamp to the last moment of the
+        # LOCAL business day (Africa/Nairobi, UTC+3 by default), not
+        # simply "23:59:59 on today's UTC calendar date" -- those are
+        # not the same instant. The report layer correctly converts
+        # local date ranges to UTC bounds via business_time.py's
+        # local_day_bounds_utc (see its docstring for why); this test
+        # must construct its fixture the same way, or it ends up
+        # testing a boundary three hours away from the one the app
+        # actually enforces.
         async with AsyncSessionLocal() as db:
             from sqlalchemy import select as _select
 
+            from app.core.business_time import local_day_bounds_utc
             from app.models.sale import Sale
 
             result = await db.execute(_select(Sale).where(Sale.id == sale["id"]))
             row = result.scalar_one()
-            just_before_midnight = datetime.max.time().replace(microsecond=0)
-            row.created_at = datetime.combine(date.today(), just_before_midnight)
+            _utc_start, utc_end_exclusive = await local_day_bounds_utc(db, date.today())
+            just_before_local_midnight = utc_end_exclusive - timedelta(seconds=1)
+            row.created_at = just_before_local_midnight
             await db.commit()
 
         today = date.today().isoformat()
@@ -706,12 +722,14 @@ class TestDateBoundaryAccuracy:
         async with AsyncSessionLocal() as db:
             from sqlalchemy import select as _select
 
+            from app.core.business_time import local_day_bounds_utc
             from app.models.sale import Sale
 
             result = await db.execute(_select(Sale).where(Sale.id == sale["id"]))
             row = result.scalar_one()
-            just_before_midnight = datetime.max.time().replace(microsecond=0)
-            row.created_at = datetime.combine(date.today(), just_before_midnight)
+            _utc_start, utc_end_exclusive = await local_day_bounds_utc(db, date.today())
+            just_before_local_midnight = utc_end_exclusive - timedelta(seconds=1)
+            row.created_at = just_before_local_midnight
             await db.commit()
 
         today = date.today().isoformat()

@@ -115,6 +115,7 @@ export interface SaleCreate {
   payments: PaymentRequest[]
   discount_amount: number
   customer_id: number | null
+  idempotency_key?: string | null
 }
 
 export interface SaleItemOut {

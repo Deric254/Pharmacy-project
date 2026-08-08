@@ -13,12 +13,14 @@ publishes `sale.completed`; everything else subscribes to that event
 and reacts independently, so checkout itself stays fast.
 """
 
-from datetime import date
+from datetime import date, datetime, time, timedelta
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.business_time import get_utc_offset_minutes
 from app.core.events import SaleCompletedEvent, publish
 from app.models.customer import Customer
 from app.models.product import Product
@@ -41,6 +43,18 @@ class SaleService:
         self.db = db
 
     async def create_sale(self, payload: SaleCreate, cashier: User) -> SaleOut:
+        # Replay of a checkout attempt whose response never reached the
+        # cashier -- return the sale that already exists rather than
+        # creating a second, fully real one. This check alone has a
+        # theoretical race (two requests with the same brand-new key
+        # both missing here before either commits), which is why the
+        # column is also UNIQUE at the database level -- see the
+        # IntegrityError handling below for the case this check misses.
+        if payload.idempotency_key is not None:
+            existing = await self._find_by_idempotency_key(payload.idempotency_key)
+            if existing is not None:
+                return SaleOut.model_validate(existing)
+
         try:
             products_by_id = await self._load_active_products(
                 [item.product_id for item in payload.items]
@@ -90,6 +104,7 @@ class SaleService:
                 subtotal=subtotal,
                 discount_amount=payload.discount_amount,
                 total_amount=total_amount,
+                idempotency_key=payload.idempotency_key,
             )
             self.db.add(sale)
             await self.db.flush()  # assigns sale.id without ending the transaction
@@ -135,6 +150,19 @@ class SaleService:
                     f"requested {exc.requested}, only {exc.available} available"
                 ),
             ) from exc
+        except IntegrityError:
+            # The UNIQUE constraint on idempotency_key caught a genuine
+            # race the check at the top of this method missed -- two
+            # requests with the same brand-new key both passed that
+            # check before either committed. The other one won; return
+            # its sale rather than surfacing a raw 500 to a cashier
+            # whose sale, from their point of view, already succeeded.
+            await self.db.rollback()
+            if payload.idempotency_key is not None:
+                existing = await self._find_by_idempotency_key(payload.idempotency_key)
+                if existing is not None:
+                    return SaleOut.model_validate(existing)
+            raise
         except HTTPException:
             await self.db.rollback()
             raise
@@ -153,6 +181,10 @@ class SaleService:
         await award_loyalty_points(self.db, sale.customer_id, total_amount)
 
         return SaleOut.model_validate(sale)
+
+    async def _find_by_idempotency_key(self, key: str) -> Sale | None:
+        result = await self.db.execute(select(Sale).where(Sale.idempotency_key == key))
+        return result.scalar_one_or_none()
 
     async def get_sale(self, sale_id: int) -> SaleOut:
         result = await self.db.execute(select(Sale).where(Sale.id == sale_id))
@@ -187,12 +219,22 @@ class SaleService:
         )
         count_query = select(func.count()).select_from(Sale)
 
+        offset_minutes = await get_utc_offset_minutes(self.db)
         if start_date is not None:
-            query = query.where(func.date(Sale.created_at) >= start_date.isoformat())
-            count_query = count_query.where(func.date(Sale.created_at) >= start_date.isoformat())
+            # Local midnight of start_date, converted to the matching
+            # UTC instant -- Sale.created_at is stored in UTC, so a
+            # plain func.date() comparison against a local date would
+            # drop any sale made in the first hours of the local day
+            # (see app/core/business_time.py for the full case).
+            utc_start = datetime.combine(start_date, time.min) - timedelta(minutes=offset_minutes)
+            query = query.where(Sale.created_at >= utc_start)
+            count_query = count_query.where(Sale.created_at >= utc_start)
         if end_date is not None:
-            query = query.where(func.date(Sale.created_at) <= end_date.isoformat())
-            count_query = count_query.where(func.date(Sale.created_at) <= end_date.isoformat())
+            utc_end_exclusive = datetime.combine(
+                end_date + timedelta(days=1), time.min
+            ) - timedelta(minutes=offset_minutes)
+            query = query.where(Sale.created_at < utc_end_exclusive)
+            count_query = count_query.where(Sale.created_at < utc_end_exclusive)
 
         total = await self.db.scalar(count_query) or 0
         result = await self.db.execute(query.limit(limit).offset(offset))

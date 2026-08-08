@@ -29,6 +29,12 @@ class SaleCreate(BaseModel):
     payments: list[PaymentRequest] = Field(min_length=1)
     discount_amount: Money = 0.0
     customer_id: int | None = None
+    # Optional replay-protection token, one per checkout attempt (see
+    # Sale.idempotency_key). A repeat of the same key returns the
+    # sale that already exists instead of creating a second one --
+    # this is what makes it safe for the frontend to retry a checkout
+    # whose response was lost, without risking a duplicate sale.
+    idempotency_key: str | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def items_have_unique_products(self) -> "SaleCreate":

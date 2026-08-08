@@ -176,6 +176,33 @@ export function PosPage() {
   }
 
   const submittingRef = useRef(false)
+  // One identifier per checkout ATTEMPT, not per click -- reused
+  // across a manual retry of the same cart (the real case this
+  // exists for: the sale actually committed server-side, the response
+  // never arrived, the cashier sees "failed" and clicks again). Only
+  // regenerated when what's actually being charged changes, so a
+  // genuinely different sale never reuses a stale key and gets
+  // silently merged into a previous one.
+  const idempotencyKeyRef = useRef<string>(crypto.randomUUID())
+  const idempotencySignatureRef = useRef<string>('')
+
+  function currentSaleSignature(): string {
+    const items = cart
+      .map((l) => `${l.product.id}:${l.quantity}`)
+      .sort()
+      .join(',')
+    const customerKey = attachedCustomer?.id ?? `${customerName.trim()}|${customerPhone.trim()}`
+    return `${items}|${discount}|${paymentMethod}|${customerKey}`
+  }
+
+  function getIdempotencyKeyForThisAttempt(): string {
+    const signature = currentSaleSignature()
+    if (signature !== idempotencySignatureRef.current) {
+      idempotencyKeyRef.current = crypto.randomUUID()
+      idempotencySignatureRef.current = signature
+    }
+    return idempotencyKeyRef.current
+  }
 
   /**
    * Same matching rules as the manual "Find" button, extracted so
@@ -271,6 +298,11 @@ export function PosPage() {
     if (cart.length === 0) return
     if (submittingRef.current) return // synchronous guard against a very fast double-click
     submittingRef.current = true
+    // Computed once per attempt, right up front -- stable across
+    // everything checkout does below (customer lookup, registration)
+    // so a retry of the same attempt sends the same key regardless of
+    // which branch the customer-handling logic takes.
+    const idempotencyKey = getIdempotencyKeyForThisAttempt()
     setCheckingOut(true)
     setError(null)
     try {
@@ -320,7 +352,15 @@ export function PosPage() {
         payments: [{ method: paymentMethod, amount: estimatedTotal }],
         discount_amount: discount,
         customer_id: customerId,
+        idempotency_key: idempotencyKey,
       })
+      // Explicit reset, not just relying on the next signature happening
+      // to differ -- two genuinely separate sales with identical
+      // contents (same product, quantity, payment method, no customer)
+      // would otherwise compute the same signature and silently reuse
+      // this key, merging the second sale into the first server-side.
+      idempotencyKeyRef.current = crypto.randomUUID()
+      idempotencySignatureRef.current = ''
       setReceipt(sale)
       setCart([])
       setDiscount(0)

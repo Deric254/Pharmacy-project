@@ -13,14 +13,14 @@ publishes `sale.completed`; everything else subscribes to that event
 and reacts independently, so checkout itself stays fast.
 """
 
-from datetime import date, datetime, time, timedelta
+from datetime import date
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.business_time import get_utc_offset_minutes
+from app.core.business_time import local_day_bounds_utc
 from app.core.events import SaleCompletedEvent, publish
 from app.models.customer import Customer
 from app.models.product import Product
@@ -219,20 +219,19 @@ class SaleService:
         )
         count_query = select(func.count()).select_from(Sale)
 
-        offset_minutes = await get_utc_offset_minutes(self.db)
         if start_date is not None:
             # Local midnight of start_date, converted to the matching
-            # UTC instant -- Sale.created_at is stored in UTC, so a
-            # plain func.date() comparison against a local date would
-            # drop any sale made in the first hours of the local day
-            # (see app/core/business_time.py for the full case).
-            utc_start = datetime.combine(start_date, time.min) - timedelta(minutes=offset_minutes)
+            # UTC instant using THAT date's own DST rule -- Sale.created_at
+            # is stored in UTC, so a plain func.date() comparison against
+            # a local date would drop any sale made in the first hours of
+            # the local day (see app/core/business_time.py for the full
+            # case, including why "that date's own rule" matters and not
+            # just "today's").
+            utc_start, _ = await local_day_bounds_utc(self.db, start_date)
             query = query.where(Sale.created_at >= utc_start)
             count_query = count_query.where(Sale.created_at >= utc_start)
         if end_date is not None:
-            utc_end_exclusive = datetime.combine(
-                end_date + timedelta(days=1), time.min
-            ) - timedelta(minutes=offset_minutes)
+            _, utc_end_exclusive = await local_day_bounds_utc(self.db, end_date)
             query = query.where(Sale.created_at < utc_end_exclusive)
             count_query = count_query.where(Sale.created_at < utc_end_exclusive)
 

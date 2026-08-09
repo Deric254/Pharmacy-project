@@ -334,11 +334,7 @@ class TestIdempotentCheckout:
 
         async with AsyncSessionLocal() as db:
             all_sales = (
-                (
-                    await db.execute(
-                        select(Sale).where(Sale.idempotency_key == "attempt-abc-123")
-                    )
-                )
+                (await db.execute(select(Sale).where(Sale.idempotency_key == "attempt-abc-123")))
                 .scalars()
                 .all()
             )
@@ -388,11 +384,7 @@ class TestIdempotentCheckout:
 
         async with AsyncSessionLocal() as db:
             all_sales = (
-                (
-                    await db.execute(
-                        select(Sale).where(Sale.idempotency_key == "attempt-race-1")
-                    )
-                )
+                (await db.execute(select(Sale).where(Sale.idempotency_key == "attempt-race-1")))
                 .scalars()
                 .all()
             )
@@ -456,7 +448,6 @@ class TestIdempotentCheckout:
         )
         assert r.status_code == 201, r.text
         assert r.json()["id"] is not None
-
 
     async def test_selling_below_cost_is_rejected(self, client, employee_user):
         # Selling price 10.0, but this batch cost 15.0 -- a real loss.

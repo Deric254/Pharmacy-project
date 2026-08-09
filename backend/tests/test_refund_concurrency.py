@@ -113,7 +113,10 @@ class TestRefundOverRefundConcurrency:
                 .all()
             )
             total_refunded = sum(i.quantity for i in all_items)
-            print(f"[refund-concurrency] total refund_items quantity for this sale_item: {total_refunded}")
+            print(
+                f"[refund-concurrency] total refund_items quantity "
+                f"for this sale_item: {total_refunded}"
+            )
 
         assert total_refunded <= 5, (
             f"OVER-REFUND CONFIRMED: {total_refunded} units refunded against a sale_item "

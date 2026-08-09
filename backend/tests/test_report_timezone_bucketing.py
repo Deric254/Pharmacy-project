@@ -50,9 +50,7 @@ async def _make_product_with_batch(qty: int = 20) -> int:
 
 
 class TestReportTimezoneBucketing:
-    async def test_early_morning_local_sale_counted_in_correct_local_day(
-        self, client, owner_user
-    ):
+    async def test_early_morning_local_sale_counted_in_correct_local_day(self, client, owner_user):
         token = await _login(client, "lucy", "S3curePass!")
         headers = {"Authorization": f"Bearer {token}"}
         product_id = await _make_product_with_batch(qty=20)
@@ -112,8 +110,10 @@ class TestReportTimezoneBucketing:
         )
         assert r.status_code == 200, r.text
         body = r.json()
-        print(f"[report-timezone] kpi-dashboard for local 'today': revenue={body['revenue']} "
-              f"transaction_count={body['transaction_count']}")
+        print(
+            f"[report-timezone] kpi-dashboard for local 'today': revenue={body['revenue']} "
+            f"transaction_count={body['transaction_count']}"
+        )
 
         if body["transaction_count"] == 0:
             raise AssertionError(

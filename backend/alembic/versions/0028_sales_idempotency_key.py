@@ -46,7 +46,10 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     op.add_column("sales", sa.Column("idempotency_key", sa.String(length=64), nullable=True))
     op.create_index(
-        "ix_sales_idempotency_key", "sales", ["idempotency_key"], unique=True,
+        "ix_sales_idempotency_key",
+        "sales",
+        ["idempotency_key"],
+        unique=True,
         sqlite_where=sa.text("idempotency_key IS NOT NULL"),
     )
 

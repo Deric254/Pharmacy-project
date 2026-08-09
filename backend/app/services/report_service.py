@@ -99,7 +99,6 @@ class ReportService:
         offset = await self._get_utc_offset_minutes()
         return func.datetime(column, f"{offset:+d} minutes")
 
-
     async def sales_summary(
         self, start_date: date, end_date: date, group_by: str = "day"
     ) -> SalesSummaryOut:

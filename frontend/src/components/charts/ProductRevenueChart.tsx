@@ -22,16 +22,34 @@ export function ProductRevenueChart({ data }: { data: TopProductEntry[] }) {
   // what makes a bar chart actually readable at a glance.
   const sorted = [...data].sort((a, b) => b.revenue - a.revenue)
 
+  // The value label sits just past the end of each bar, so the bar
+  // with the largest revenue -- the one nearest the right edge of the
+  // plot -- is the one whose label is at risk of running past the
+  // container and getting clipped or overlapping the axis border.
+  // Sizing the right margin off the actual longest formatted label
+  // (rather than a fixed guess) keeps that label fully visible no
+  // matter how many digits the currency and amount add up to.
+  const longestLabel = sorted.reduce(
+    (max, entry) => Math.max(max, formatCurrency(entry.revenue).length),
+    0,
+  )
+  const rightMargin = Math.max(24, longestLabel * 7 + 12)
+
   return (
     <ResponsiveContainer width="100%" height={Math.max(200, sorted.length * 36)}>
       <BarChart
         data={sorted}
         layout="vertical"
-        margin={{ top: 8, right: 24, left: 8, bottom: 8 }}
+        margin={{ top: 8, right: rightMargin, left: 8, bottom: 8 }}
       >
         <CartesianGrid stroke="var(--color-rule)" strokeDasharray="3 3" horizontal={false} />
         <XAxis
           type="number"
+          // A little headroom past the largest bar so its label has
+          // somewhere to sit that isn't directly on top of the axis
+          // line -- without this, the longest bar and its label both
+          // end right at the domain edge and visually collide.
+          domain={[0, (max: number) => Math.ceil(max * 1.12)]}
           tick={{ fill: 'var(--color-ink-soft)', fontSize: 11 }}
           stroke="var(--color-rule-strong)"
           tickFormatter={(v: number) => formatCurrency(v)}

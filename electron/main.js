@@ -271,6 +271,39 @@ function createWindow() {
   })
 }
 
+/**
+ * Unconditionally clears anything listening on the backend's port
+ * before every single launch -- not a health check, not "is this a
+ * legitimate previous instance", just a guaranteed clean slate every
+ * time, regardless of how a leftover process got there. Electron's
+ * own single-instance-lock (see the top of this file) already
+ * guarantees no other copy of THIS app is legitimately running by the
+ * time this runs -- so anything still on this port at this exact
+ * moment is, by definition, either a leftover from an imperfect past
+ * shutdown or an unrelated program, never something worth preserving.
+ * A user should never have to open Task Manager to make this app
+ * work; this exists so they never have to.
+ */
+function forceClearPort(port) {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') {
+      resolve()
+      return
+    }
+    const ps = spawn('powershell.exe', [
+      '-NoProfile',
+      '-Command',
+      `Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | ` +
+        `ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }`,
+    ])
+    ps.on('error', (err) => {
+      logDesktopDiagnostic(`force-clear-port-failed ${err.message}`)
+      resolve() // never let this block startup -- worst case, the existing health-check path still applies
+    })
+    ps.on('exit', () => resolve())
+  })
+}
+
 async function startApp() {
   try {
     // Without this, Electron's default behavior for the blob-URL
@@ -303,6 +336,14 @@ async function startApp() {
     })
 
     ensureDevFrontendBuilt()
+    await forceClearPort(BACKEND_PORT)
+    // A killed process's port isn't always instantly free at the OS
+    // level -- Stop-Process returning doesn't guarantee the socket
+    // has been released yet. This is cheap insurance against the new
+    // backend trying to bind a fraction of a second too early and
+    // failing for a completely different reason than the one this
+    // whole fix exists to close off.
+    await new Promise((resolve) => setTimeout(resolve, 400))
     await startBackend()
     await waitForBackendHealthy()
     await session.defaultSession.clearStorageData({
@@ -336,17 +377,51 @@ async function startApp() {
 ipcMain.handle('print-receipt-silently', async (_event, base64Pdf) => {
   let printWindow = null
   try {
-    printWindow = new BrowserWindow({ show: false, webPreferences: { sandbox: true } })
+    // `plugins: true` is not optional here -- without it, Electron has
+    // no PDF viewer registered at all, so loading a `data:application/pdf`
+    // URL isn't rendered, it's treated as an unhandled download instead.
+    // That download falls straight into the app's global `will-download`
+    // handler above, which calls dialog.showSaveDialogSync(mainWindow) --
+    // i.e. every single sale would pop a native "Save file" dialog over
+    // the POS screen right after checkout, which is exactly backwards for
+    // a feature whose entire purpose is printing with zero dialogs. With
+    // plugins enabled, Chromium's built-in PDFium viewer renders the PDF
+    // in-process instead, so print() has an actual page to print and
+    // will-download never fires for this window at all.
+    printWindow = new BrowserWindow({ show: false, webPreferences: { sandbox: true, plugins: true } })
     await printWindow.loadURL(`data:application/pdf;base64,${base64Pdf}`)
 
     const printers = await printWindow.webContents.getPrintersAsync()
-    if (printers.length === 0) {
+    // getPrintersAsync() on Windows always includes the built-in
+    // virtual printers ("Microsoft Print to PDF", "Microsoft XPS
+    // Document Writer", sometimes "OneNote" / "Fax") even on a
+    // machine with zero physical printers attached -- so
+    // `printers.length === 0` almost never actually happens. Worse:
+    // if the system's DEFAULT printer happens to be one of these
+    // (very common when no physical printer has ever been set up),
+    // print({ silent: true }) still triggers a real, unsuppressable
+    // native "Save Print Output As" dialog -- that comes from
+    // Windows' own PDF/XPS driver needing a destination file path,
+    // not from Chromium, so Electron's `silent` flag has no power
+    // over it at all. Filtering these out, and only ever printing to
+    // a REAL device, is what actually keeps this silent end to end.
+    const VIRTUAL_PRINTER_NAME_PATTERN = /pdf|xps document writer|onenote|fax/i
+    const realPrinters = printers.filter(
+      (p) => !VIRTUAL_PRINTER_NAME_PATTERN.test(p.name) && !VIRTUAL_PRINTER_NAME_PATTERN.test(p.displayName ?? ''),
+    )
+    if (realPrinters.length === 0) {
       return { printed: false }
     }
+    // Prefer whichever real printer is the OS default; otherwise just
+    // take the first real one. Explicitly named via deviceName below
+    // -- never left to "whatever the system default is", since that
+    // default is exactly what might be the virtual PDF printer this
+    // filtering just excluded.
+    const targetPrinter = realPrinters.find((p) => p.isDefault) ?? realPrinters[0]
 
     await new Promise((resolve, reject) => {
       printWindow.webContents.print(
-        { silent: true, printBackground: true },
+        { silent: true, printBackground: true, deviceName: targetPrinter.name },
         (success, errorType) => {
           if (success) resolve()
           else reject(new Error(errorType))
@@ -366,7 +441,34 @@ ipcMain.handle('print-receipt-silently', async (_event, base64Pdf) => {
 })
 
 function stopBackend() {
-  if (backendProcess && !backendProcess.killed) {
+  if (!backendProcess || backendProcess.killed) {
+    backendProcess = null
+    return
+  }
+  // Plain .kill() only terminates the single process Node has a
+  // handle to. On Windows, a PyInstaller-frozen onefile exe commonly
+  // runs as a launcher that spawns its own inner process to actually
+  // do the work -- killing just the outer one can leave that inner
+  // process running, invisible to Electron, still bound to port 8000.
+  // The next launch then spawns a brand new backend that can't bind
+  // that port, while the orphan -- possibly from an older version, in
+  // whatever state it happened to be in when orphaned -- is what
+  // actually answers health checks and requests instead. That's the
+  // real mechanism behind "sometimes blank, sometimes can't reach the
+  // server" on relaunch: not randomness, an accumulating leftover
+  // process from an imperfect shutdown.
+  //
+  // taskkill /t kills the entire process tree rooted at this PID, not
+  // just the one process -- the actual fix, not a bigger hammer for
+  // its own sake. Windows-only, matching this deployment target.
+  if (process.platform === 'win32' && backendProcess.pid) {
+    try {
+      spawn('taskkill', ['/pid', String(backendProcess.pid), '/t', '/f'])
+    } catch (err) {
+      logDesktopDiagnostic(`taskkill-failed ${err instanceof Error ? err.message : err}`)
+      backendProcess.kill()
+    }
+  } else {
     backendProcess.kill()
   }
   backendProcess = null

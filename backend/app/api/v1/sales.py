@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from app.core.database import get_db
 from app.core.rbac import require_permission
@@ -70,7 +71,17 @@ async def get_sale_receipt(sale_id: int, db: Annotated[AsyncSession, Depends(get
 
     config = await BusinessConfigService(db).get()
 
-    content = generate_receipt_pdf(
+    # generate_receipt_pdf is genuinely CPU-bound (reportlab layout +
+    # PIL image decode for the logo) -- calling it directly here would
+    # block this process's single asyncio event loop for the entire
+    # duration, freezing every OTHER request the app is handling at
+    # that moment (other cashiers' sales, dashboard loads, everything)
+    # until this one receipt finishes rendering. run_in_threadpool
+    # moves the actual rendering work onto a separate OS thread so the
+    # event loop stays free to keep serving everyone else while this
+    # one receipt builds.
+    content = await run_in_threadpool(
+        generate_receipt_pdf,
         sale=sale,
         cashier_name=cashier_name,
         customer_name=customer_name,

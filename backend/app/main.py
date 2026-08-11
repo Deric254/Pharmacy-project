@@ -14,14 +14,16 @@ import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import __version__
 
@@ -49,6 +51,7 @@ from app.api.v1.suppliers import router as suppliers_router
 from app.api.v1.users import router as users_router
 from app.api.v1.websocket import router as websocket_router
 from app.core.config import get_settings
+from app.core.database import get_db
 from app.core.redis_client import aclose_for_current_loop
 from app.core.websocket_manager import manager as ws_manager
 from app.services.notification_dispatcher import start_dispatcher_task, stop_dispatcher_task
@@ -187,7 +190,24 @@ app.include_router(websocket_router, prefix=settings.api_v1_prefix)
 
 
 @app.get("/health", tags=["health"])
-async def health() -> dict[str, str]:
+async def health(db: Annotated[AsyncSession, Depends(get_db)]) -> dict[str, str]:
+    # Deliberately touches the real database, not just confirms the
+    # Python process is alive and FastAPI is routing requests. That
+    # distinction is the entire point: Electron's startup sequence
+    # (see electron/main.js's waitForBackendHealthy) trusts this
+    # response as its one signal that it's safe to show the window
+    # and let the renderer start making real calls. A health check
+    # that can say "ok" before the database connection is actually
+    # open, before SQLite's WAL files are ready, before anything a
+    # real request will need is truly available, isn't verifying
+    # readiness -- it's verifying the process merely started, which
+    # is a materially weaker claim. This was the actual root cause
+    # behind a real, confusing support case: the backend process was
+    # confirmed alive (this endpoint said "ok"), Electron showed the
+    # window, and the very next real request the renderer made still
+    # failed, because "alive" and "ready for real work" were never
+    # actually the same moment.
+    await db.execute(text("SELECT 1"))
     return {"status": "ok", "version": __version__}
 
 

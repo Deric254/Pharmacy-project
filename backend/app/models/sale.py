@@ -33,6 +33,16 @@ class Sale(Base):
     discount_amount: Mapped[float] = mapped_column(MoneyCents, default=0.0)
     total_amount: Mapped[float] = mapped_column(MoneyCents)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+    # One identifier per checkout attempt, sent by the client and
+    # reused across retries of that SAME attempt (not regenerated on
+    # every click). NULL for callers that don't send one -- entirely
+    # optional, replay protection only. See migration
+    # 0028_sales_idempotency_key for why this exists: a commit that
+    # genuinely succeeds but whose response never reaches the cashier
+    # must not become two real sales just because they retried.
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
 
     items: Mapped[list[SaleItem]] = relationship(lazy="selectin")
     payments: Mapped[list[Payment]] = relationship(lazy="selectin")

@@ -297,7 +297,158 @@ class TestConcurrentSales:
             assert batch.qty_remaining == 2  # 10 - 8, never negative, never double-sold
 
 
-class TestNoSaleAtALoss:
+class TestIdempotentCheckout:
+    """
+    The scenario this protects against: a checkout request commits
+    server-side (stock decremented, payment recorded) but its response
+    never reaches the cashier -- a dropped connection, the local
+    backend restarting mid-request. Without this, "Checkout failed,
+    nothing was charged" is displayed and re-enables the button, and a
+    retry creates a second, fully real sale.
+    """
+
+    async def test_retrying_the_same_key_returns_the_original_sale_not_a_second_one(
+        self, client, employee_user
+    ):
+        product_id = await _make_product_with_batch(price=10.0, qty=20)
+        token = await _login(client, "joe", "pass1234")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        payload = {
+            "items": [{"product_id": product_id, "quantity": 3}],
+            "payments": [{"method": "CASH", "amount": 30.0}],
+            "idempotency_key": "attempt-abc-123",
+        }
+
+        first = await client.post("/api/v1/sales", json=payload, headers=headers)
+        assert first.status_code == 201, first.text
+
+        # Simulates the cashier retrying after (from their point of
+        # view) a failed checkout -- same key, same request.
+        second = await client.post("/api/v1/sales", json=payload, headers=headers)
+        assert second.status_code == 201, second.text
+
+        # The critical assertion: both responses describe the SAME
+        # sale, not two different ones.
+        assert first.json()["id"] == second.json()["id"]
+
+        async with AsyncSessionLocal() as db:
+            all_sales = (
+                (await db.execute(select(Sale).where(Sale.idempotency_key == "attempt-abc-123")))
+                .scalars()
+                .all()
+            )
+            assert len(all_sales) == 1  # not two
+
+            batch_result = await db.execute(
+                select(MedicineBatch).where(MedicineBatch.product_id == product_id)
+            )
+            batch = batch_result.scalar_one()
+            # Stock decremented ONCE (20 - 3 = 17), not twice.
+            assert batch.qty_remaining == 17
+
+    async def test_concurrent_retries_with_the_same_new_key_still_produce_one_sale(
+        self, client, employee_user
+    ):
+        """
+        The race the top-of-method check alone can't close: two
+        requests with the SAME brand-new key, arriving close enough
+        together that both pass the "does this key already exist"
+        check before either commits. The UNIQUE constraint on
+        idempotency_key is what actually closes this -- the second
+        INSERT fails, and the service catches that and returns the
+        first sale instead of a raw 500.
+        """
+        product_id = await _make_product_with_batch(price=10.0, qty=20)
+        token = await _login(client, "joe", "pass1234")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        payload = {
+            "items": [{"product_id": product_id, "quantity": 2}],
+            "payments": [{"method": "CASH", "amount": 20.0}],
+            "idempotency_key": "attempt-race-1",
+        }
+
+        async def attempt():
+            return await client.post("/api/v1/sales", json=payload, headers=headers)
+
+        results = await asyncio.gather(attempt(), attempt(), return_exceptions=True)
+        exceptions = [r for r in results if isinstance(r, Exception)]
+        assert not exceptions, f"Unhandled exceptions under concurrency: {exceptions}"
+
+        status_codes = [r.status_code for r in results]
+        assert all(code == 201 for code in status_codes), status_codes
+
+        sale_ids = {r.json()["id"] for r in results}
+        assert len(sale_ids) == 1  # both responses describe the same sale
+
+        async with AsyncSessionLocal() as db:
+            all_sales = (
+                (await db.execute(select(Sale).where(Sale.idempotency_key == "attempt-race-1")))
+                .scalars()
+                .all()
+            )
+            assert len(all_sales) == 1
+
+    async def test_two_genuinely_separate_sales_with_different_keys_both_go_through(
+        self, client, employee_user
+    ):
+        """
+        The other side of the same feature: identical cart contents
+        (same product, quantity, payment method) but DIFFERENT keys
+        -- e.g. two separate customers buying the same thing back to
+        back -- must never be collapsed into one sale just because
+        their payloads look alike.
+        """
+        product_id = await _make_product_with_batch(price=10.0, qty=20)
+        token = await _login(client, "joe", "pass1234")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        first = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 10.0}],
+                "idempotency_key": "sale-one",
+            },
+            headers=headers,
+        )
+        second = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 10.0}],
+                "idempotency_key": "sale-two",
+            },
+            headers=headers,
+        )
+        assert first.status_code == 201
+        assert second.status_code == 201
+        assert first.json()["id"] != second.json()["id"]
+
+        async with AsyncSessionLocal() as db:
+            batch_result = await db.execute(
+                select(MedicineBatch).where(MedicineBatch.product_id == product_id)
+            )
+            batch = batch_result.scalar_one()
+            assert batch.qty_remaining == 18  # 20 - 1 - 1, both sales counted
+
+    async def test_no_key_sent_still_works_exactly_as_before(self, client, employee_user):
+        product_id = await _make_product_with_batch(price=10.0, qty=20)
+        token = await _login(client, "joe", "pass1234")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        r = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 10.0}],
+            },
+            headers=headers,
+        )
+        assert r.status_code == 201, r.text
+        assert r.json()["id"] is not None
+
     async def test_selling_below_cost_is_rejected(self, client, employee_user):
         # Selling price 10.0, but this batch cost 15.0 -- a real loss.
         product_id = await _make_product_with_batch(price=10.0, qty=20, cost=15.0)

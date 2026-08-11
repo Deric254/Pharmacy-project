@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from app.core.database import get_db
 from app.core.rbac import get_current_user, require_permission
@@ -49,22 +50,26 @@ def _require_export_permission_if_needed(export: ExportFormat, user: User) -> No
         raise HTTPException(status_code=403, detail="Missing required permission: reports.export")
 
 
-def _export_or_json(
+async def _export_or_json(
     export: ExportFormat,
     json_payload: object,
     title: str,
     headers: list[str],
     rows: list[list[object]],
 ) -> object:
+    # Same reasoning as the receipt PDF: export_to_excel/export_to_pdf
+    # are synchronous CPU-bound work (openpyxl/reportlab), and calling
+    # them directly here would stall the whole app for every other
+    # request while one owner exports one report.
     if export == "excel":
-        content = export_to_excel(headers, rows, sheet_title=title)
+        content = await run_in_threadpool(export_to_excel, headers, rows, sheet_title=title)
         return Response(
             content=content,
             media_type=_EXCEL_MEDIA_TYPE,
             headers={"Content-Disposition": f'attachment; filename="{title}.xlsx"'},
         )
     if export == "pdf":
-        content = export_to_pdf(title, headers, rows)
+        content = await run_in_threadpool(export_to_pdf, title, headers, rows)
         return Response(
             content=content,
             media_type=_PDF_MEDIA_TYPE,
@@ -99,7 +104,7 @@ async def sales_summary(
     result = await ReportService(db).sales_summary(start_date, end_date, group_by)
     headers = ["Period", "Sale Count", "Total Revenue", "Total Discount"]
     rows = [[e.period, e.sale_count, e.total_revenue, e.total_discount] for e in result.entries]
-    return _export_or_json(export, result, "Sales Summary", headers, rows)
+    return await _export_or_json(export, result, "Sales Summary", headers, rows)
 
 
 @router.get(
@@ -139,7 +144,8 @@ async def profit_loss_pdf(
     top_customers_result = await ReportService(db).top_customers(start_date, end_date, limit=8)
     config = await BusinessConfigService(db).get()
 
-    content = generate_profit_loss_pdf(
+    content = await run_in_threadpool(
+        generate_profit_loss_pdf,
         business_name=config.business_name,
         start_date=start_date.isoformat(),
         end_date=end_date.isoformat(),
@@ -246,7 +252,7 @@ async def expired_stock(
         ]
         for e in result.entries
     ]
-    return _export_or_json(export, result, "Expired Stock", headers, rows)
+    return await _export_or_json(export, result, "Expired Stock", headers, rows)
 
 
 @router.get(

@@ -25,6 +25,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from app.models.product import Product
 from app.schemas.product import BulkImportResult, ImportRowError, ProductCreate
@@ -128,7 +129,7 @@ async def _parse_and_validate(
     db: AsyncSession, file_bytes: bytes
 ) -> tuple[list[ProductCreate], list[ImportRowError]]:
     try:
-        wb = load_workbook(io.BytesIO(file_bytes), data_only=True)
+        wb = await run_in_threadpool(load_workbook, io.BytesIO(file_bytes), data_only=True)
         ws = wb.active
         if ws is None:
             raise HTTPException(status_code=400, detail="This file has no worksheet to read.")

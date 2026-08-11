@@ -15,11 +15,16 @@ sales have accumulated, rather than loading every row into Python.
 
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
-from typing import Literal
+from typing import Any, Literal
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.business_time import (
+    get_business_timezone,
+    local_day_bounds_utc,
+    local_offset_segments,
+)
 from app.models.customer import Customer
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
@@ -61,13 +66,22 @@ class ReportService:
         self, start_date: date, end_date: date, group_by: str = "day"
     ) -> SalesSummaryOut:
         sales = await self._sales_in_range(start_date, end_date)
+        tz = await get_business_timezone(self.db)
 
         buckets: dict[str, list[Sale]] = defaultdict(list)
         for sale in sales:
+            # created_at is stored UTC; convert to the business's own
+            # local time via astimezone(), which resolves DST using
+            # THIS row's own date -- not a single offset computed once
+            # for the whole request -- or a sale made early in the
+            # local day would still group under the UTC day before,
+            # even though _sales_in_range's own filter is now
+            # timezone-correct.
+            local_created_at = sale.created_at.replace(tzinfo=UTC).astimezone(tz)
             key = (
-                sale.created_at.strftime("%Y-%m-%d")
+                local_created_at.strftime("%Y-%m-%d")
                 if group_by == "day"
-                else sale.created_at.strftime("%Y-%m")
+                else local_created_at.strftime("%Y-%m")
             )
             buckets[key].append(sale)
 
@@ -89,14 +103,15 @@ class ReportService:
 
     async def profit_report(self, start_date: date, end_date: date) -> ProfitReportOut:
         total_revenue, _ = await self._revenue_and_count_in_range(start_date, end_date)
+        utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
 
         cost_result = await self.db.execute(
             select(func.coalesce(func.sum(SaleItem.quantity * MedicineBatch.cost_price), 0.0))
             .join(MedicineBatch, MedicineBatch.id == SaleItem.batch_id)
             .join(Sale, Sale.id == SaleItem.sale_id)
             .where(
-                func.date(Sale.created_at) >= start_date.isoformat(),
-                func.date(Sale.created_at) <= end_date.isoformat(),
+                Sale.created_at >= utc_start,
+                Sale.created_at < utc_end,
             )
         )
         total_cost = float(cost_result.scalar_one())
@@ -152,7 +167,12 @@ class ReportService:
         )
 
     async def fast_slow_movers(self, days: int = 30, limit: int = 10) -> FastSlowMoversOut:
-        cutoff = datetime.now() - timedelta(days=days)
+        # UTC, matching how Sale.created_at is stored -- datetime.now()
+        # (naive local time) would silently widen or narrow this
+        # rolling window by the business's UTC offset depending on the
+        # server OS's local clock, the same class of bug already fixed
+        # for the calendar-day report filters above.
+        cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=days)
 
         result = await self.db.execute(
             select(SaleItem.product_id, Product.name, SaleItem.quantity)
@@ -309,10 +329,11 @@ class ReportService:
     async def _revenue_and_count_in_range(
         self, start_date: date, end_date: date
     ) -> tuple[float, int]:
+        utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
         result = await self.db.execute(
             select(func.coalesce(func.sum(Sale.total_amount), 0.0), func.count(Sale.id)).where(
-                func.date(Sale.created_at) >= start_date.isoformat(),
-                func.date(Sale.created_at) <= end_date.isoformat(),
+                Sale.created_at >= utc_start,
+                Sale.created_at < utc_end,
             )
         )
         total_revenue, count = result.one()
@@ -321,6 +342,7 @@ class ReportService:
     async def top_products_by_revenue(
         self, start_date: date, end_date: date, limit: int
     ) -> list[TopProductEntry]:
+        utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
         result = await self.db.execute(
             select(
                 Product.id,
@@ -331,8 +353,8 @@ class ReportService:
             .join(SaleItem, SaleItem.product_id == Product.id)
             .join(Sale, Sale.id == SaleItem.sale_id)
             .where(
-                func.date(Sale.created_at) >= start_date.isoformat(),
-                func.date(Sale.created_at) <= end_date.isoformat(),
+                Sale.created_at >= utc_start,
+                Sale.created_at < utc_end,
             )
             .group_by(Product.id)
             .order_by(func.sum(SaleItem.quantity * SaleItem.unit_price).desc())
@@ -470,65 +492,97 @@ class ReportService:
         of sales have accumulated, not just at today's data volume.
         Granularity picks itself from the range length so a 4-year
         chart becomes ~48 monthly points, not 1,460 unreadable ones.
+
+        Queried per DST-offset segment (see
+        business_time.local_offset_segments) rather than as one pass
+        with one offset -- Africa/Nairobi never has more than one
+        segment here since it never observes DST, but a multi-month or
+        multi-year chart for a DST-observing client routinely spans a
+        transition, and revenue/transaction counts/cost are purely
+        additive, so summing each segment's own correctly-bucketed
+        results by period label is exact, not an approximation.
         """
         days = (end_date - start_date).days + 1
         granularity: Literal["day", "week", "month"]
         if days <= 31:
             granularity = "day"
-            bucket_expr = func.date(Sale.created_at)
         elif days <= 180:
             granularity = "week"
-            bucket_expr = func.strftime("%Y-W%W", Sale.created_at)
         else:
             granularity = "month"
-            bucket_expr = func.strftime("%Y-%m", Sale.created_at)
 
-        date_filter = (
-            func.date(Sale.created_at) >= start_date.isoformat(),
-            func.date(Sale.created_at) <= end_date.isoformat(),
-        )
+        def bucket_expr_for(shifted_column: Any) -> Any:
+            if granularity == "day":
+                return func.date(shifted_column)
+            if granularity == "week":
+                return func.strftime("%Y-W%W", shifted_column)
+            return func.strftime("%Y-%m", shifted_column)
 
-        revenue_result = await self.db.execute(
-            select(
-                bucket_expr.label("period"),
-                func.coalesce(func.sum(Sale.total_amount), 0.0).label("revenue"),
-                func.count(Sale.id).label("txn_count"),
-            )
-            .where(*date_filter)
-            .group_by("period")
-            .order_by("period")
-        )
-        revenue_rows = revenue_result.all()
-
+        revenue_by_period: dict[str, float] = {}
+        txn_count_by_period: dict[str, int] = {}
         cost_by_period: dict[str, float] = {}
-        if include_profit:
-            cost_result = await self.db.execute(
+        period_order: list[str] = []
+
+        segments = await local_offset_segments(self.db, start_date, end_date)
+        for segment_start, segment_end, offset_minutes in segments:
+            shifted_column = func.datetime(Sale.created_at, f"{offset_minutes:+d} minutes")
+            bucket_expr = bucket_expr_for(shifted_column)
+            utc_start, utc_end = await local_day_bounds_utc(self.db, segment_start, segment_end)
+            date_filter = (
+                Sale.created_at >= utc_start,
+                Sale.created_at < utc_end,
+            )
+
+            revenue_result = await self.db.execute(
                 select(
                     bucket_expr.label("period"),
-                    func.coalesce(
-                        func.sum(SaleItem.quantity * MedicineBatch.cost_price), 0.0
-                    ).label("cost"),
+                    func.coalesce(func.sum(Sale.total_amount), 0.0).label("revenue"),
+                    func.count(Sale.id).label("txn_count"),
                 )
-                .select_from(SaleItem)
-                .join(Sale, Sale.id == SaleItem.sale_id)
-                .join(MedicineBatch, MedicineBatch.id == SaleItem.batch_id)
                 .where(*date_filter)
                 .group_by("period")
+                .order_by("period")
             )
-            cost_by_period = {row.period: float(row.cost) for row in cost_result.all()}
+            for row in revenue_result.all():
+                if row.period not in revenue_by_period:
+                    period_order.append(row.period)
+                    revenue_by_period[row.period] = 0.0
+                    txn_count_by_period[row.period] = 0
+                revenue_by_period[row.period] += float(row.revenue)
+                txn_count_by_period[row.period] += int(row.txn_count)
 
+            if include_profit:
+                cost_result = await self.db.execute(
+                    select(
+                        bucket_expr.label("period"),
+                        func.coalesce(
+                            func.sum(SaleItem.quantity * MedicineBatch.cost_price), 0.0
+                        ).label("cost"),
+                    )
+                    .select_from(SaleItem)
+                    .join(Sale, Sale.id == SaleItem.sale_id)
+                    .join(MedicineBatch, MedicineBatch.id == SaleItem.batch_id)
+                    .where(*date_filter)
+                    .group_by("period")
+                )
+                for cost_row in cost_result.all():
+                    cost_by_period[cost_row.period] = cost_by_period.get(
+                        cost_row.period, 0.0
+                    ) + float(cost_row.cost)
+
+        period_order.sort()
         points = [
             RevenueTrendPoint(
-                period_label=row.period,
-                revenue=float(row.revenue),
+                period_label=period,
+                revenue=revenue_by_period[period],
                 profit=(
-                    round(float(row.revenue) - cost_by_period.get(row.period, 0.0), 2)
+                    round(revenue_by_period[period] - cost_by_period.get(period, 0.0), 2)
                     if include_profit
                     else None
                 ),
-                transaction_count=int(row.txn_count),
+                transaction_count=txn_count_by_period[period],
             )
-            for row in revenue_rows
+            for period in period_order
         ]
 
         return RevenueTrendOut(granularity=granularity, points=points)
@@ -602,10 +656,11 @@ class ReportService:
         )
 
     async def _sales_in_range(self, start_date: date, end_date: date) -> list[Sale]:
+        utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
         result = await self.db.execute(
             select(Sale).where(
-                func.date(Sale.created_at) >= start_date.isoformat(),
-                func.date(Sale.created_at) <= end_date.isoformat(),
+                Sale.created_at >= utc_start,
+                Sale.created_at < utc_end,
             )
         )
         return list(result.scalars().all())

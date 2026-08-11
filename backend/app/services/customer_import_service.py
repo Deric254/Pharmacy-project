@@ -14,6 +14,7 @@ from openpyxl.styles import Font, PatternFill
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from app.models.customer import Customer
 from app.schemas.customer import CustomerCreate
@@ -63,7 +64,13 @@ async def _parse_and_validate(
     db: AsyncSession, file_bytes: bytes
 ) -> tuple[list[CustomerCreate], list[ImportRowError]]:
     try:
-        wb = load_workbook(io.BytesIO(file_bytes), data_only=True)
+        # load_workbook is synchronous, CPU-bound XML parsing --
+        # calling it directly here would block this process's single
+        # event loop for the whole parse, freezing every other
+        # request the app is handling (any cashier's sale, any other
+        # page load) until a large import file finishes reading.
+        # run_in_threadpool moves that work to a separate OS thread.
+        wb = await run_in_threadpool(load_workbook, io.BytesIO(file_bytes), data_only=True)
         ws = wb.active
         if ws is None:
             raise HTTPException(status_code=400, detail="This file has no worksheet to read.")

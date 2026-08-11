@@ -7,6 +7,7 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from app.models.stock_take import StockTake, StockTakeItem, StockTakeStatus
 from app.models.user import User
@@ -94,7 +95,7 @@ async def import_counts(
     await _load_open_stock_take(db, stock_take_id)
 
     try:
-        wb = load_workbook(io.BytesIO(file_bytes), data_only=True)
+        wb = await run_in_threadpool(load_workbook, io.BytesIO(file_bytes), data_only=True)
         ws = wb.active
         if ws is None:
             raise HTTPException(status_code=400, detail="This file has no worksheet to read.")

@@ -1,0 +1,38 @@
+fastapi==0.115.*
+uvicorn[standard]==0.32.*
+sqlalchemy[asyncio]==2.0.*
+aiosqlite==0.22.*
+alembic==1.13.*
+pydantic==2.13.*
+pydantic-settings==2.14.*
+python-jose[cryptography]==3.3.*
+argon2-cffi==23.1.*
+redis[hiredis]==5.1.*
+cryptography==43.0.*
+reportlab==4.2.*
+openpyxl==3.1.*
+websockets==13.1.*
+python-multipart==0.0.12
+tzdata==2025.2
+# Runtime dependency, not dev/test-only -- app/services/ai/adapters.py
+# and app/services/backup/google_drive.py both import this directly,
+# and both are wired into app/main.py at import time (ai router, backup
+# router), so the whole app fails to even start without it. It used to
+# live only in requirements-dev.txt (pulled in there for httpx-ws /
+# test client usage), which masked this: any dev venv that installed
+# both files never noticed it was missing from the production-only
+# list. Caught by actually booting the app against requirements.txt
+# alone in a clean environment -- exactly the failure a PyInstaller
+# build machine with a similarly "impure" dev venv would never catch
+# either, and a customer's machine running the frozen exe would.
+httpx==0.27.*
+# Runtime dependency, not dev-only -- app/services/receipt_service.py
+# (logo decoding on every receipt) and app/services/business_config_
+# service.py (logo resizing on save) both import PIL directly, and
+# both are reachable from real request paths, not just tests. Same
+# bug shape as httpx above: living only in requirements-dev.txt let a
+# dev venv with both files installed mask it, right up until a clean
+# production install (or a PyInstaller build machine with a similarly
+# "impure" venv) tried to generate a receipt and had no PIL to do it
+# with.
+pillow==12.3.*

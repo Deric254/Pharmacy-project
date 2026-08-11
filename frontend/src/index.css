@@ -1,0 +1,138 @@
+@import "tailwindcss";
+
+@theme {
+  /* Ledger palette: aged paper, ink, and two "stamp" colors used the way
+     a bookkeeper's rubber stamp marks a page -- red for shortfall/expiry,
+     green for approved/settled. Kept desaturated so the stamp colors
+     read as accents, not decoration. */
+  --color-paper: #ede8db;
+  --color-paper-dim: #e3ddcb;
+  --color-ink: #211c14;
+  --color-ink-soft: #5a5546;
+  --color-rule: #c9c0a4;
+  --color-rule-strong: #a89c78;
+  --color-brass: #8a6d3b;
+  --color-brass-soft: #b79a5f;
+  --color-stamp-red: #a13d2e;
+  --color-stamp-red-soft: #e7c9c2;
+  --color-stamp-green: #3a6b4c;
+  --color-stamp-green-soft: #c9dcc9;
+  --color-panel: #f6f3e9;
+
+  --font-display: "Fraunces", "Iowan Old Style", ui-serif, Georgia, serif;
+  --font-body: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
+}
+
+@layer base {
+  html {
+    background: var(--color-paper);
+    color: var(--color-ink);
+  }
+  body {
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection {
+    background: var(--color-brass-soft);
+    color: var(--color-ink);
+  }
+  /* Every figure that represents money, quantity, or a date/time in a
+     ledger row uses tabular figures so columns of numbers actually
+     align -- the one non-negotiable rule of an accounting UI. */
+  .figure {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-brass);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+}
+
+@layer components {
+  .ruled-row {
+    border-bottom: 1px solid var(--color-rule);
+  }
+  .ledger-panel {
+    background: var(--color-panel);
+    border: 1px solid var(--color-rule);
+  }
+  .marquee-track {
+    animation: marquee-scroll 18s linear infinite;
+  }
+
+  /* Drop-in background images for the login and setup screens.
+     Nothing is required to exist for this to work: the ledger
+     gradient/hairline pattern is the base layer, always present.
+     login-bg.png / setup-bg.png are an OPTIONAL second layer on top.
+     If the file isn't there, the browser silently skips that layer --
+     background-image (unlike an <img> tag) never shows a broken-image
+     icon on a missing file, it just doesn't paint anything for that
+     layer. That's why this is safe to leave permanently wired up:
+     forgetting to add an image is indistinguishable from choosing not
+     to have one.
+
+     To use: drop a PNG or JPG at frontend/public/login-bg.png and/or
+     frontend/public/setup-bg.png, then rebuild. Vite copies anything
+     in public/ verbatim into the built app, unprocessed -- no code
+     change needed, no other page is touched, and nothing here reads
+     from or writes to the database, so there's no ACID/data-integrity
+     surface at all. */
+  .login-bg {
+    background-image:
+      url('/login-bg.png'),
+      radial-gradient(circle at 50% 0%, var(--color-paper) 0%, var(--color-paper-dim) 70%),
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cg fill='none' stroke='%23c9c0a4' stroke-width='1' opacity='0.35'%3E%3Cpath d='M0 60h120M60 0v120'/%3E%3C/g%3E%3C/svg%3E");
+    background-size: cover, cover, 120px 120px;
+    background-position: center, center, center;
+    background-blend-mode: normal, normal, multiply;
+  }
+  .setup-bg {
+    background-image:
+      url('/setup-bg.png'),
+      radial-gradient(circle at 50% 0%, var(--color-paper) 0%, var(--color-paper-dim) 70%),
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cg fill='none' stroke='%23c9c0a4' stroke-width='1' opacity='0.35'%3E%3Cpath d='M0 60h120M60 0v120'/%3E%3C/g%3E%3C/svg%3E");
+    background-size: cover, cover, 120px 120px;
+    background-position: center, center, center;
+    background-blend-mode: normal, normal, multiply;
+  }
+}
+
+@keyframes marquee-scroll {
+  from {
+    transform: translateX(-50%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The generic *, *::before, *::after rule above collapses this animation
+     to 0.001ms/1 iteration, which freezes it on the "to" keyframe
+     (translateX(0)) -- the un-scrolled resting position where both
+     duplicated copies sit side by side. Overflow-hidden then clips it
+     mid-second-copy (e.g. "...our prideYour h"). Force a clean static
+     single-copy state instead of relying on the frozen animation frame. */
+  .marquee-track {
+    animation: none !important;
+    transform: translateX(0) !important;
+  }
+  .marquee-track span:nth-child(n + 2) {
+    display: none;
+  }
+  .marquee-track span:first-child {
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}

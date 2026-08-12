@@ -103,11 +103,24 @@ if (!gotSingleInstanceLock) {
     // that should linger running in the background unexpectedly
     // (the macOS convention of staying open until Cmd+Q doesn't fit
     // that -- so it's not applied here, on any platform).
-    stopBackend()
-    app.quit()
+    //
+    // Awaited, not fire-and-forget -- app.quit() must not run until
+    // the backend's process tree is actually confirmed dead, or the
+    // very next launch inherits an orphan holding the port. This is
+    // the normal, everyday way this app closes, so this path matters
+    // more than the startup-failure one below.
+    stopBackend().then(() => app.quit())
   })
 
-  app.on('before-quit', stopBackend)
+  app.on('before-quit', (event) => {
+    if (backendProcess === null) return
+    // Delay Electron's own shutdown until the kill is confirmed, same
+    // reasoning as window-all-closed above -- before-quit can fire
+    // from paths that don't go through that handler (e.g. the OS
+    // asking every app to close during a shutdown/logoff).
+    event.preventDefault()
+    stopBackend().then(() => app.quit())
+  })
 }
 
 /**
@@ -304,6 +317,38 @@ function forceClearPort(port) {
   })
 }
 
+/**
+ * A second, independent layer alongside forceClearPort above -- not
+ * redundant with it. forceClearPort only finds a leftover process if
+ * it's actually LISTENING on the port right now; it does nothing for
+ * a backend that crashed or hung before ever finishing that bind, or
+ * one stuck on a different port than expected. Killing unconditionally
+ * by exact image name closes that gap regardless of what state the
+ * leftover process is in or whether it ever touched a socket at all.
+ *
+ * Exact name match only, never a wildcard -- 'Pharmacy-ERP.exe' (the
+ * backend, hyphenated) is a different string from 'Pharmacy ERP.exe'
+ * (the Electron shell itself, space-separated, from productName in
+ * package.json), so this can never target the very process running
+ * this code. Confirmed by direct comparison, not assumption, since
+ * killing the wrong process here would be far worse than the orphan
+ * this exists to prevent.
+ */
+function forceKillOrphanedBackendByName() {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') {
+      resolve()
+      return
+    }
+    const kill = spawn('taskkill', ['/F', '/IM', 'Pharmacy-ERP.exe', '/T'])
+    kill.on('error', (err) => {
+      logDesktopDiagnostic(`force-kill-by-name-failed ${err.message}`)
+      resolve() // same principle as forceClearPort -- never block startup over this
+    })
+    kill.on('exit', () => resolve())
+  })
+}
+
 async function startApp() {
   try {
     // Without this, Electron's default behavior for the blob-URL
@@ -336,7 +381,17 @@ async function startApp() {
     })
 
     ensureDevFrontendBuilt()
+    // Two independent cleanup layers, deliberately both run every
+    // single launch, not one-or-the-other -- forceClearPort catches a
+    // leftover process by whatever's bound to the port right now;
+    // forceKillOrphanedBackendByName catches one that never got that
+    // far (crashed mid-init, hung before binding) or ended up
+    // somewhere unexpected. Order doesn't matter since neither
+    // depends on the other's result, but they're awaited in sequence
+    // to keep the startup log simple to read if this ever needs
+    // debugging from a real failure report.
     await forceClearPort(BACKEND_PORT)
+    await forceKillOrphanedBackendByName()
     // A killed process's port isn't always instantly free at the OS
     // level -- Stop-Process returning doesn't guarantee the socket
     // has been released yet. This is cheap insurance against the new
@@ -359,8 +414,7 @@ async function startApp() {
       `${message}\n\nTry restarting your computer. If this keeps happening, ` +
         'contact whoever set this up for you with this exact message.',
     )
-    stopBackend()
-    app.quit()
+    stopBackend().then(() => app.quit())
   }
 }
 
@@ -443,8 +497,10 @@ ipcMain.handle('print-receipt-silently', async (_event, base64Pdf) => {
 function stopBackend() {
   if (!backendProcess || backendProcess.killed) {
     backendProcess = null
-    return
+    return Promise.resolve()
   }
+  const processToKill = backendProcess
+  backendProcess = null
   // Plain .kill() only terminates the single process Node has a
   // handle to. On Windows, a PyInstaller-frozen onefile exe commonly
   // runs as a launcher that spawns its own inner process to actually
@@ -461,15 +517,27 @@ function stopBackend() {
   // taskkill /t kills the entire process tree rooted at this PID, not
   // just the one process -- the actual fix, not a bigger hammer for
   // its own sake. Windows-only, matching this deployment target.
-  if (process.platform === 'win32' && backendProcess.pid) {
-    try {
-      spawn('taskkill', ['/pid', String(backendProcess.pid), '/t', '/f'])
-    } catch (err) {
-      logDesktopDiagnostic(`taskkill-failed ${err instanceof Error ? err.message : err}`)
-      backendProcess.kill()
-    }
-  } else {
-    backendProcess.kill()
+  //
+  // Returning a Promise that only resolves once taskkill has actually
+  // finished is not optional here -- every caller of this function
+  // calls app.quit() immediately afterward, and a fire-and-forget
+  // spawn() used to let that quit race ahead of the kill actually
+  // completing. On a PyInstaller-frozen exe under any load (antivirus
+  // scanning taskkill.exe itself, a slow shutdown), that race can be
+  // lost, which is exactly how an orphan survives a normal app close,
+  // not just a crash -- and normal closes happen every single day,
+  // far more often than startup failures do.
+  if (process.platform === 'win32' && processToKill.pid) {
+    return new Promise((resolve) => {
+      const kill = spawn('taskkill', ['/pid', String(processToKill.pid), '/t', '/f'])
+      kill.on('exit', () => resolve())
+      kill.on('error', (err) => {
+        logDesktopDiagnostic(`taskkill-failed ${err.message}`)
+        processToKill.kill()
+        resolve()
+      })
+    })
   }
-  backendProcess = null
+  processToKill.kill()
+  return Promise.resolve()
 }

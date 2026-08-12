@@ -1,13 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { customersApi, productsApi, salesApi } from '../api/domain'
 import { useCurrencyFormatter } from '../lib/currency'
+import { calculateTotal, cartSignature, type CartLine } from '../lib/cartMath'
 import type { CustomerOut, PaymentMethod, ProductOut, SaleOut } from '../types/api'
 import { ApiError } from '../api/client'
-
-interface CartLine {
-  product: ProductOut
-  quantity: number
-}
 
 export function PosPage() {
   const formatCurrency = useCurrencyFormatter()
@@ -29,11 +25,7 @@ export function PosPage() {
   const [nameMatches, setNameMatches] = useState<CustomerOut[] | null>(null)
   const [registeringCustomer, setRegisteringCustomer] = useState(false)
 
-  const estimatedSubtotal = cart.reduce(
-    (sum, line) => sum + line.product.default_selling_price * line.quantity,
-    0,
-  )
-  const estimatedTotal = Math.max(0, estimatedSubtotal - discount)
+  const estimatedTotal = calculateTotal(cart, discount)
 
   // Live search: results update automatically as the cashier types, no
   // button press or Enter required. Debounced by 300ms so a fast typist
@@ -187,12 +179,8 @@ export function PosPage() {
   const idempotencySignatureRef = useRef<string>('')
 
   function currentSaleSignature(): string {
-    const items = cart
-      .map((l) => `${l.product.id}:${l.quantity}`)
-      .sort()
-      .join(',')
     const customerKey = attachedCustomer?.id ?? `${customerName.trim()}|${customerPhone.trim()}`
-    return `${items}|${discount}|${paymentMethod}|${customerKey}`
+    return cartSignature(cart, discount, paymentMethod, String(customerKey))
   }
 
   function getIdempotencyKeyForThisAttempt(): string {

@@ -13,6 +13,7 @@ import {
 } from 'recharts'
 import type { RevenueTrendOut } from '../../types/api'
 import { useCurrencyFormatter } from '../../lib/currency'
+import { computePlottedRange, isNearBottomOfRange } from './chartLabelPlacement'
 import { ChartScrollArea } from './ChartScrollArea'
 
 // Pixels each point gets along the x-axis. Wide enough that period
@@ -45,17 +46,13 @@ export function RevenueTrendChart({ data }: { data: RevenueTrendOut }) {
   // relative to the actual plotted value range across both series
   // (including 0, since the y-axis baseline is always visible).
   // Below that threshold, the label renders above its point instead.
-  const allPlottedValues = data.points.flatMap((p) => [p.revenue, p.profit ?? 0, 0])
-  const minPlottedValue = Math.min(...allPlottedValues)
-  const maxPlottedValue = Math.max(...allPlottedValues)
-  const plottedRange = maxPlottedValue - minPlottedValue || 1
-  const NEAR_BOTTOM_FRACTION = 0.15
+  const plottedRange = computePlottedRange(data.points.flatMap((p) => [p.revenue, p.profit ?? 0]))
 
   function renderProfitLabel(props: RechartsLabelProps): ReactElement {
     const x = Number(props.x ?? 0)
     const y = Number(props.y ?? 0)
     const numericValue = Number(props.value)
-    const isNearBottom = (numericValue - minPlottedValue) / plottedRange < NEAR_BOTTOM_FRACTION
+    const isNearBottom = isNearBottomOfRange(numericValue, plottedRange)
     return (
       <text
         x={x}

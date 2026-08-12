@@ -520,6 +520,65 @@ class TestIdempotentCheckout:
         assert r.status_code == 201
 
 
+class TestListSalesQueryPlan:
+    """
+    Regression guard for a real bug found under load testing at
+    100,000 sales: item_count used to be computed via a JOIN to
+    sale_items + GROUP BY, which forced SQLite to materialize and sort
+    EVERY matching sale (a full table scan, confirmed with
+    EXPLAIN QUERY PLAN) before LIMIT could apply -- fetching just the
+    first page of 50 sales took 104ms at that volume because the
+    database had to touch all 100,000 rows first. Rewritten as a
+    correlated scalar subquery so item_count is only computed for the
+    rows actually returned, letting the main query stay index-driven
+    off Sale.created_at -- proven at the same volume to drop to 8.5ms.
+
+    This test doesn't re-run the full load test (too slow for the
+    regular suite) -- it checks the actual SQL Core query object list_sales
+    builds contains no GROUP BY, which is the specific construct that
+    forced the full scan. A future change that reintroduces a
+    JOIN+GROUP BY for item_count would fail this immediately, instead
+    of silently reappearing only under real production data volume.
+    """
+
+    async def test_list_sales_query_has_no_group_by(self, client, owner_user):
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        from app.core.database import AsyncSessionLocal
+        from app.services.sale_service import SaleService
+
+        async with AsyncSessionLocal() as db:
+            assert isinstance(db, AsyncSession)
+            service = SaleService(db)
+            # list_sales builds the query internally; the only way to
+            # inspect it without duplicating its logic here is to
+            # patch db.execute and capture what it was called with.
+            captured_queries: list[object] = []
+            real_execute = db.execute
+
+            async def capturing_execute(stmt, *args, **kwargs):
+                captured_queries.append(stmt)
+                return await real_execute(stmt, *args, **kwargs)
+
+            db.execute = capturing_execute  # type: ignore[method-assign]
+            await service.list_sales(limit=10, offset=0)
+
+        # The count query and the main listing query both get
+        # captured; the main one is identifiable by selecting more
+        # than one column.
+        main_queries = [q for q in captured_queries if len(q.selected_columns) > 1]
+        assert main_queries, "list_sales did not execute its main query as expected"
+        main_query = main_queries[0]
+        assert not main_query._group_by_clauses, (
+            "list_sales' query has a GROUP BY again -- this is exactly the pattern "
+            "that caused a full table scan at 100k sales (confirmed via "
+            "EXPLAIN QUERY PLAN: 'SCAN sales' instead of using the created_at index). "
+            "item_count must be a correlated scalar subquery instead, not a JOIN + "
+            "GROUP BY, or the first page of sales history will get slower as the "
+            "business's total sale count grows, regardless of the date range asked for."
+        )
+
+
 class TestListSales:
     """
     The actual gap this closes: there was no way to browse past sales

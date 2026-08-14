@@ -386,12 +386,13 @@ async function startApp() {
     // leftover process by whatever's bound to the port right now;
     // forceKillOrphanedBackendByName catches one that never got that
     // far (crashed mid-init, hung before binding) or ended up
-    // somewhere unexpected. Order doesn't matter since neither
-    // depends on the other's result, but they're awaited in sequence
-    // to keep the startup log simple to read if this ever needs
-    // debugging from a real failure report.
-    await forceClearPort(BACKEND_PORT)
-    await forceKillOrphanedBackendByName()
+    // somewhere unexpected. Run concurrently, not sequentially --
+    // neither depends on the other's result, and spinning up
+    // powershell.exe has real, measurable overhead on Windows on its
+    // own; paying that twice in a row on every single launch for no
+    // reason would make this fix itself a (small, but real and
+    // avoidable) contributor to slow startup.
+    await Promise.all([forceClearPort(BACKEND_PORT), forceKillOrphanedBackendByName()])
     // A killed process's port isn't always instantly free at the OS
     // level -- Stop-Process returning doesn't guarantee the socket
     // has been released yet. This is cheap insurance against the new

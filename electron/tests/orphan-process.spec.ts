@@ -1,12 +1,13 @@
 /**
  * Bug-hunting tests for the orphaned-backend-process fix.
  *
- * Honest scope: the two Windows-specific cleanup mechanisms in
- * main.js (forceClearPort, forceKillOrphanedBackendByName) both
- * no-op immediately on any non-Windows platform -- there is no way
- * to exercise the actual `taskkill` / PowerShell commands from this
- * environment, full stop. Nothing here proves those specific Windows
- * commands work; only a real Windows machine can prove that.
+ * Honest scope: the Windows-specific cleanup mechanism in main.js
+ * (clearAnyLeftoverBackendProcess -- one PowerShell invocation that
+ * checks both by port and by exact process name) no-ops immediately
+ * on any non-Windows platform -- there is no way to exercise the
+ * actual PowerShell/Stop-Process commands from this environment, full
+ * stop. Nothing here proves those specific Windows commands work;
+ * only a real Windows machine can prove that.
  *
  * What CAN be genuinely tested here, and is: the platform-independent
  * parts of the same fix -- does the app correctly avoid running two

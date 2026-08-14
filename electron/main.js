@@ -296,8 +296,28 @@ function createWindow() {
  * shutdown or an unrelated program, never something worth preserving.
  * A user should never have to open Task Manager to make this app
  * work; this exists so they never have to.
+ *
+ * Both the port-based check and the name-based check run inside this
+ * ONE PowerShell invocation, not two separate process spawns. They
+ * used to be two separate functions (forceClearPort, spawning
+ * powershell.exe; forceKillOrphanedBackendByName, spawning
+ * taskkill.exe), each paying its own real process-startup cost on
+ * literally every launch, whether or not anything actually needed
+ * cleaning up -- for the common case where no orphan exists at all,
+ * that was pure overhead paid twice, unconditionally, every single
+ * time. Combining them into one script cuts that cost in half without
+ * losing any of the actual protection: this still catches a leftover
+ * process whether it's found by the port it's bound to or by its
+ * exact image name.
+ *
+ * Exact name match only, never a wildcard -- 'Pharmacy-ERP' (the
+ * backend) is a different string from 'Pharmacy ERP' (the Electron
+ * shell itself, from productName in package.json), so this can never
+ * target the very process running this code. Confirmed by direct
+ * comparison, not assumption, since killing the wrong process here
+ * would be far worse than the orphan this exists to prevent.
  */
-function forceClearPort(port) {
+function clearAnyLeftoverBackendProcess(port) {
   return new Promise((resolve) => {
     if (process.platform !== 'win32') {
       resolve()
@@ -307,45 +327,15 @@ function forceClearPort(port) {
       '-NoProfile',
       '-Command',
       `Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | ` +
-        `ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }`,
+        `ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; ` +
+        `Get-Process -Name 'Pharmacy-ERP' -ErrorAction SilentlyContinue | ` +
+        `Stop-Process -Force -ErrorAction SilentlyContinue`,
     ])
     ps.on('error', (err) => {
-      logDesktopDiagnostic(`force-clear-port-failed ${err.message}`)
+      logDesktopDiagnostic(`clear-leftover-backend-failed ${err.message}`)
       resolve() // never let this block startup -- worst case, the existing health-check path still applies
     })
     ps.on('exit', () => resolve())
-  })
-}
-
-/**
- * A second, independent layer alongside forceClearPort above -- not
- * redundant with it. forceClearPort only finds a leftover process if
- * it's actually LISTENING on the port right now; it does nothing for
- * a backend that crashed or hung before ever finishing that bind, or
- * one stuck on a different port than expected. Killing unconditionally
- * by exact image name closes that gap regardless of what state the
- * leftover process is in or whether it ever touched a socket at all.
- *
- * Exact name match only, never a wildcard -- 'Pharmacy-ERP.exe' (the
- * backend, hyphenated) is a different string from 'Pharmacy ERP.exe'
- * (the Electron shell itself, space-separated, from productName in
- * package.json), so this can never target the very process running
- * this code. Confirmed by direct comparison, not assumption, since
- * killing the wrong process here would be far worse than the orphan
- * this exists to prevent.
- */
-function forceKillOrphanedBackendByName() {
-  return new Promise((resolve) => {
-    if (process.platform !== 'win32') {
-      resolve()
-      return
-    }
-    const kill = spawn('taskkill', ['/F', '/IM', 'Pharmacy-ERP.exe', '/T'])
-    kill.on('error', (err) => {
-      logDesktopDiagnostic(`force-kill-by-name-failed ${err.message}`)
-      resolve() // same principle as forceClearPort -- never block startup over this
-    })
-    kill.on('exit', () => resolve())
   })
 }
 
@@ -381,18 +371,14 @@ async function startApp() {
     })
 
     ensureDevFrontendBuilt()
-    // Two independent cleanup layers, deliberately both run every
-    // single launch, not one-or-the-other -- forceClearPort catches a
-    // leftover process by whatever's bound to the port right now;
-    // forceKillOrphanedBackendByName catches one that never got that
-    // far (crashed mid-init, hung before binding) or ended up
-    // somewhere unexpected. Run concurrently, not sequentially --
-    // neither depends on the other's result, and spinning up
-    // powershell.exe has real, measurable overhead on Windows on its
-    // own; paying that twice in a row on every single launch for no
-    // reason would make this fix itself a (small, but real and
-    // avoidable) contributor to slow startup.
-    await Promise.all([forceClearPort(BACKEND_PORT), forceKillOrphanedBackendByName()])
+    // Catches both a leftover process still bound to the port AND one
+    // found only by exact image name (crashed or hung before ever
+    // binding), in a SINGLE process spawn -- see the function's own
+    // comment for why this used to be two separate spawns (one
+    // powershell.exe, one taskkill.exe) on every single launch, paying
+    // real process-startup overhead twice, unconditionally, even on
+    // the common case where nothing needed cleaning up at all.
+    await clearAnyLeftoverBackendProcess(BACKEND_PORT)
     // A killed process's port isn't always instantly free at the OS
     // level -- Stop-Process returning doesn't guarantee the socket
     // has been released yet. This is cheap insurance against the new

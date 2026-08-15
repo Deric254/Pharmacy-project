@@ -266,15 +266,34 @@ function UpdateSection() {
         )}
       </div>
       <div className="flex gap-2">
-        {info && (
-          <a
-            href={info.downloadUrl ?? info.releaseUrl}
-            target="_blank"
-            rel="noreferrer"
+        {info && info.downloadUrl && window.electronAPI?.downloadUpdateInstaller ? (
+          // Routed through Electron's own download manager rather than
+          // a plain link -- this is what lets main.js's will-download
+          // handler offer to install it automatically once the
+          // download finishes, instead of leaving the person to find
+          // the installer in their Downloads folder and run it
+          // themselves. Falls through to the plain link below whenever
+          // this isn't available (a plain browser during development,
+          // or no direct installer asset on the release), which is
+          // exactly the same fallback pattern already used for silent
+          // receipt printing.
+          <button
+            onClick={() => void window.electronAPI?.downloadUpdateInstaller(info.downloadUrl!)}
             className="border border-ink bg-ink px-3 py-1.5 text-paper"
           >
-            {info.downloadUrl ? 'Download update' : 'View release'}
-          </a>
+            Download &amp; install update
+          </button>
+        ) : (
+          info && (
+            <a
+              href={info.downloadUrl ?? info.releaseUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="border border-ink bg-ink px-3 py-1.5 text-paper"
+            >
+              {info.downloadUrl ? 'Download update' : 'View release'}
+            </a>
+          )
         )}
         <button
           onClick={() => void checkNow()}

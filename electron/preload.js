@@ -17,4 +17,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // available, nothing happened" (by design: no dialog either way),
   // never an error the caller needs to handle specially.
   printReceiptSilently: (base64Pdf) => ipcRenderer.invoke('print-receipt-silently', base64Pdf),
+  // url: a GitHub release asset URL from useUpdateCheck(), never
+  // arbitrary input. Starts a real Electron-managed download; the
+  // save dialog, "install now?" confirmation, and launching the
+  // installer all happen in main.js once it completes -- this call
+  // itself resolves as soon as the download starts, not when it
+  // finishes, so it has nothing meaningful to return.
+  downloadUpdateInstaller: (url) => ipcRenderer.invoke('download-update-installer', url),
 })

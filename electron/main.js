@@ -24,7 +24,7 @@
  * from the machine it happened on, not a guess.
  */
 
-const { app, BrowserWindow, dialog, session, ipcMain } = require('electron')
+const { app, BrowserWindow, dialog, session, ipcMain, shell } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const http = require('node:http')
@@ -211,7 +211,17 @@ function waitForBackendHealthy() {
       if (Date.now() > deadline) {
         reject(new Error('The backend did not become ready within 30 seconds.'))
       } else {
-        setTimeout(attempt, 500)
+        // 150ms, not 500ms -- this only controls how quickly a
+        // ready backend gets NOTICED, not how long we're willing to
+        // wait overall (the 30s deadline above is unchanged). Polling
+        // more often costs nothing but a few extra fast, local,
+        // connection-refused attempts while the backend is still
+        // starting; polling less often means genuinely waiting
+        // longer, on every single launch, for no reliability benefit
+        // -- if the backend becomes ready partway between polls, the
+        // old 500ms interval meant sitting on a real answer for up to
+        // half a second before checking again.
+        setTimeout(attempt, 150)
       }
     }
 
@@ -347,7 +357,17 @@ async function startApp() {
     // all -- indistinguishable from the button doing nothing. This
     // makes every download show a real Save dialog and a completion
     // message, the same as any normal desktop app.
+    //
+    // The one exception is the update installer, detected below by
+    // its exact filename pattern -- every other download in this app
+    // (receipts, report exports) comes from a blob: URL created in
+    // the page itself; only the update installer is ever a real
+    // http(s) download routed through webContents.downloadURL(), so
+    // this can never misfire on an unrelated file a person happens to
+    // save with a similar name.
     session.defaultSession.on('will-download', (event, item) => {
+      const isUpdateInstaller = /^Pharmacy-ERP-Setup-.*\.exe$/i.test(item.getFilename())
+
       const savePath = dialog.showSaveDialogSync(mainWindow, {
         title: 'Save file',
         defaultPath: item.getFilename(),
@@ -358,7 +378,47 @@ async function startApp() {
       }
       item.setSavePath(savePath)
       item.once('done', (_event, state) => {
-        if (state === 'completed') {
+        if (state === 'completed' && isUpdateInstaller) {
+          const choice = dialog.showMessageBoxSync(mainWindow, {
+            type: 'info',
+            buttons: ['Install now', 'Later'],
+            defaultId: 0,
+            message: 'Update downloaded',
+            detail:
+              'The installer has been saved. Install now? ' +
+              'Pharmacy ERP will close so the update can complete.',
+          })
+          if (choice === 0) {
+            // Same shutdown discipline as every other quit path in
+            // this file -- the backend's process tree must be
+            // confirmed dead before anything else, or the installer
+            // could fail to replace files still locked by a running
+            // backend, and the very next launch could inherit an
+            // orphan exactly like the one this session's other fix
+            // exists to prevent.
+            stopBackend().then(() => {
+              shell.openPath(savePath).then((openError) => {
+                if (openError) {
+                  logDesktopDiagnostic(`update-install-launch-failed ${openError}`)
+                  dialog.showErrorBox(
+                    'Could not start the installer',
+                    `The update was downloaded to:\n${savePath}\n\n` +
+                      'Please run it manually to complete the update.',
+                  )
+                } else {
+                  // Symmetric with the failure branch above -- a real
+                  // support case for "update didn't seem to apply"
+                  // needs to distinguish "the installer never
+                  // launched" from "it launched but something in the
+                  // installer itself went wrong", and only this log
+                  // line can tell those apart.
+                  logDesktopDiagnostic(`update-install-launched ${savePath}`)
+                }
+                app.quit()
+              })
+            })
+          }
+        } else if (state === 'completed') {
           dialog.showMessageBox(mainWindow, {
             type: 'info',
             message: 'Saved',
@@ -387,10 +447,21 @@ async function startApp() {
     // whole fix exists to close off.
     await new Promise((resolve) => setTimeout(resolve, 400))
     await startBackend()
-    await waitForBackendHealthy()
-    await session.defaultSession.clearStorageData({
-      storages: ['serviceworkers', 'cachestorage'],
-    })
+    // These two are independent of each other -- clearing session
+    // storage never depends on the backend being up, it only needs
+    // Electron's own session API, which is available immediately.
+    // Running them concurrently instead of one after the other saves
+    // real time on every launch without changing what happens before
+    // createWindow() runs: both still fully complete first, so the
+    // window still never shows stale cached content, exactly as
+    // before -- only the ORDER of independent work changed, not what
+    // work happens or when relative to the window appearing.
+    await Promise.all([
+      waitForBackendHealthy(),
+      session.defaultSession.clearStorageData({
+        storages: ['serviceworkers', 'cachestorage'],
+      }),
+    ])
     createWindow()
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -479,6 +550,20 @@ ipcMain.handle('print-receipt-silently', async (_event, base64Pdf) => {
   } finally {
     if (printWindow && !printWindow.isDestroyed()) printWindow.destroy()
   }
+})
+
+// Triggered from the Settings page's "Download update" button. Only
+// ever called with a URL the renderer got from useUpdateCheck(),
+// which only ever returns a GitHub release asset URL -- never
+// arbitrary renderer-controlled input reaching a filesystem or shell
+// operation, which is what makes routing it through
+// webContents.downloadURL() (rather than, say, exec-ing curl on a
+// raw string) the safe way to do this. The actual save dialog, the
+// "install now?" confirmation, and launching the installer all happen
+// in the will-download handler above once this download completes --
+// this handler's only job is to start it.
+ipcMain.handle('download-update-installer', (_event, url) => {
+  mainWindow.webContents.downloadURL(url)
 })
 
 function stopBackend() {

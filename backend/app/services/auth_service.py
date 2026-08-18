@@ -34,11 +34,18 @@ class AuthService:
 
     async def authenticate(self, username: str, password: str, ip_address: str | None) -> User:
         rate_limit_key = f"login_attempts:{ip_address or 'unknown'}:{username}"
+        ip_rate_limit_key = f"login_attempts_ip:{ip_address or 'unknown'}"
         attempt_count = await redis_client.get(rate_limit_key)
+        ip_attempt_count = await redis_client.get(ip_rate_limit_key)
         if attempt_count is not None and int(attempt_count) >= MAX_LOGIN_ATTEMPTS:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Too many failed login attempts. Try again in a few minutes.",
+            )
+        if ip_attempt_count is not None and int(ip_attempt_count) >= MAX_LOGIN_ATTEMPTS * 3:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many failed login attempts from this address. Try again in a few minutes.",
             )
 
         result = await self.db.execute(
@@ -48,6 +55,7 @@ class AuthService:
 
         if user is None or not verify_password(password, user.hashed_password):
             await self._record_failed_attempt(rate_limit_key)
+            await self._record_failed_attempt(ip_rate_limit_key)
             # Log failed attempts too — repeated failures are a security signal.
             self.db.add(
                 AuditLog(
@@ -65,6 +73,7 @@ class AuthService:
             )
 
         await redis_client.delete(rate_limit_key)  # legitimate login clears any prior strikes
+        await redis_client.delete(ip_rate_limit_key)
         self.db.add(
             AuditLog(
                 user_id=user.id,

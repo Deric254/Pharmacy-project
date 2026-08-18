@@ -71,7 +71,7 @@ async def download_count_template(
 )
 async def upload_counts(
     stock_take_id: int,
-    file: UploadFile,
+    file: UploadFile(max_size=10 * 1024 * 1024),
     user: Annotated[User, Depends(require_permission("stocktake.perform"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> StockTakeOut:

@@ -39,7 +39,7 @@ async def download_import_template() -> Response:
     dependencies=[Depends(require_permission("products.manage"))],
 )
 async def import_products(
-    file: UploadFile, db: Annotated[AsyncSession, Depends(get_db)]
+    file: UploadFile(max_size=10 * 1024 * 1024), db: Annotated[AsyncSession, Depends(get_db)]
 ) -> BulkImportResult:
     file_bytes = await file.read()
     return await bulk_import(db, file_bytes)
@@ -51,7 +51,7 @@ async def import_products(
 )
 async def list_products(
     db: Annotated[AsyncSession, Depends(get_db)],
-    search: str | None = Query(default=None),
+    search: str | None = Query(default=None, max_length=120),
     export: ExportFormat = "json",
 ) -> object:
     products = await ProductService(db).list_all(search=search)

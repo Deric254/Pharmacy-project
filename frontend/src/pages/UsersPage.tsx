@@ -286,6 +286,12 @@ function ResetPasswordModal({ user, onClose }: { user: UserListItemOut; onClose:
     setCopied(true)
   }
 
+  useEffect(() => {
+    if (!tempPassword) return
+    const timer = setTimeout(() => setTempPassword(null), 60000)
+    return () => clearTimeout(timer)
+  }, [tempPassword])
+
   if (tempPassword) {
     return (
       <Modal title="Password reset" onClose={onClose}>

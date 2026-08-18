@@ -86,6 +86,8 @@ async def kpi_dashboard(
     start_date: date,
     end_date: date,
 ) -> KpiDashboardOut:
+    if start_date > end_date:
+        raise HTTPException(status_code=400, detail="start_date must be before end_date")
     user_permission_codes = {p.code for p in current_user.role.permissions}
     include_profit = "reports.view_profit" in user_permission_codes
     return await ReportService(db).kpi_dashboard(start_date, end_date, include_profit)
@@ -100,6 +102,8 @@ async def sales_summary(
     group_by: Literal["day", "month"] = "day",
     export: ExportFormat = "json",
 ) -> object:
+    if start_date > end_date:
+        raise HTTPException(status_code=400, detail="start_date must be before end_date")
     _require_export_permission_if_needed(export, user)
     result = await ReportService(db).sales_summary(start_date, end_date, group_by)
     headers = ["Period", "Sale Count", "Total Revenue", "Total Discount"]
@@ -115,6 +119,8 @@ async def sales_summary(
 async def profit_report(
     db: Annotated[AsyncSession, Depends(get_db)], start_date: date, end_date: date
 ) -> ProfitReportOut:
+    if start_date > end_date:
+        raise HTTPException(status_code=400, detail="start_date must be before end_date")
     # Export intentionally not offered here at all, regardless of
     # permission -- profit is the most sensitive number in the system
     # (matches the ChemistOwner-only "sees profit" requirement from the
@@ -133,6 +139,8 @@ async def profit_loss_pdf(
     start_date: date,
     end_date: date,
 ) -> Response:
+    if start_date > end_date:
+        raise HTTPException(status_code=400, detail="start_date must be before end_date")
     from app.models.audit_log import AuditLog
     from app.services.business_config_service import BusinessConfigService
 
@@ -227,6 +235,8 @@ async def revenue_trend(
     start_date: date,
     end_date: date,
 ) -> RevenueTrendOut:
+    if start_date > end_date:
+        raise HTTPException(status_code=400, detail="start_date must be before end_date")
     user_permission_codes = {p.code for p in current_user.role.permissions}
     include_profit = "reports.view_profit" in user_permission_codes
     return await ReportService(db).revenue_trend(start_date, end_date, include_profit)

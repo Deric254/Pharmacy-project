@@ -117,7 +117,10 @@ interface RequestOptions {
 }
 
 function buildUrl(path: string, query?: RequestOptions['query']): string {
-  const url = new URL(`/api/v1${path}`, window.location.origin)
+  const origin = window.location.origin === 'null' || window.location.origin.startsWith('file://')
+    ? 'http://127.0.0.1:8000'
+    : window.location.origin
+  const url = new URL(`/api/v1${path}`, origin)
   if (query) {
     for (const [key, value] of Object.entries(query)) {
       if (value !== undefined) url.searchParams.set(key, String(value))

@@ -22,7 +22,7 @@ router = APIRouter()
 
 
 @router.websocket("/ws/notifications")
-async def notifications_websocket(websocket: WebSocket, token: str = Query(...)) -> None:
+async def notifications_websocket(websocket: WebSocket(max_message_size=8192), token: str = Query(...)) -> None:
     user = await _authenticate(token)
     if user is None:
         await websocket.close(code=4001)

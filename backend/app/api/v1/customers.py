@@ -50,7 +50,7 @@ async def download_customer_import_template() -> Response:
     dependencies=[Depends(require_permission("sales.create"))],
 )
 async def import_customers(
-    file: UploadFile, db: Annotated[AsyncSession, Depends(get_db)]
+    file: UploadFile(max_size=10 * 1024 * 1024), db: Annotated[AsyncSession, Depends(get_db)]
 ) -> BulkImportResult:
     file_bytes = await file.read()
     return await bulk_import_customers(db, file_bytes)
@@ -59,7 +59,7 @@ async def import_customers(
 @router.get("", dependencies=[Depends(require_permission("sales.create"))])
 async def list_customers(
     db: Annotated[AsyncSession, Depends(get_db)],
-    search: str | None = Query(default=None),
+    search: str | None = Query(default=None, max_length=120),
     export: ExportFormat = "json",
 ) -> object:
     customers = await CustomerService(db).list_all(search=search)

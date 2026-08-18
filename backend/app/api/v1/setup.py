@@ -1,14 +1,18 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Form, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.redis_client import redis_client
 from app.schemas.backup import RestoreResult
 from app.schemas.setup import FirstUserCreate, SetupStatusOut
 from app.services.setup_service import SetupService
 
 router = APIRouter(prefix="/setup", tags=["setup"])
+
+_RESTORE_RATE_LIMIT = 3
+_RESTORE_RATE_WINDOW = 60 * 60
 
 
 @router.get("/status", response_model=SetupStatusOut)
@@ -25,8 +29,9 @@ async def create_first_user(
 
 @router.post("/restore-from-file", response_model=RestoreResult)
 async def restore_from_migration_file(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-    file: UploadFile,
+    file: UploadFile(max_size=50 * 1024 * 1024),
     passphrase: Annotated[str, Form()],
 ) -> RestoreResult:
     """
@@ -36,5 +41,17 @@ async def restore_from_migration_file(
     afterward with their actual original credentials, not a
     fresh-install placeholder.
     """
+    client_ip = request.client.host if request.client else None
+    rate_limit_key = f"restore_attempts:{client_ip or 'unknown'}"
+    attempt_count = await redis_client.get(rate_limit_key)
+    if attempt_count is not None and int(attempt_count) >= _RESTORE_RATE_LIMIT:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many restore attempts. Try again later.",
+        )
+
     content = await file.read()
-    return await SetupService(db).restore_from_migration_file(content, passphrase)
+    result = await SetupService(db).restore_from_migration_file(content, passphrase)
+    await redis_client.incr(rate_limit_key)
+    await redis_client.expire(rate_limit_key, _RESTORE_RATE_WINDOW)
+    return result

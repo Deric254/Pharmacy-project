@@ -167,6 +167,7 @@ function SaleDetailModal({
       const blob = await salesApi.receiptBlob(id)
       const url = URL.createObjectURL(blob)
       window.open(url, '_blank')
+      setTimeout(() => URL.revokeObjectURL(url), 30000)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not load the receipt.')
     }
@@ -385,7 +386,7 @@ function RefundModal({
           >
             <option value="CASH">Cash</option>
             <option value="CARD">Card</option>
-            <option value="MOBILE_MONEY">Mobile money</option>
+            <option value="MPESA">Mobile money</option>
           </select>
         </label>
 

@@ -356,7 +356,12 @@ function ReconciliationPanel() {
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Reconciliation failed.'))
   }, [])
 
-  if (error) return null // reconciliation is a bonus panel, not worth blocking the page on
+  if (error) return (
+    <div className="mb-6 ledger-panel p-4">
+      <h2 className="mb-2 text-xs uppercase tracking-wide text-ink-soft">Ledger reconciliation</h2>
+      <p className="text-sm text-stamp-red">Reconciliation failed: {error}</p>
+    </div>
+  )
 
   return (
     <div className="mb-6 ledger-panel p-4">
@@ -651,7 +656,7 @@ function ProductFormModal({
               type="number"
               min={0}
               value={reorderPoint}
-              onChange={(e) => setReorderPoint(Number(e.target.value))}
+              onChange={(e) => setReorderPoint(Math.max(0, Number(e.target.value) || 0))}
               className="figure mt-1 w-full border border-rule bg-paper px-3 py-2"
             />
           </label>
@@ -665,7 +670,7 @@ function ProductFormModal({
             min={0}
             step={0.01}
             value={price}
-            onChange={(e) => setPrice(Number(e.target.value))}
+              onChange={(e) => setPrice(Math.max(0, Number(e.target.value) || 0))}
             className="figure mt-1 w-full border border-rule bg-paper px-3 py-2"
           />
         </label>

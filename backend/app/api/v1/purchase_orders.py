@@ -41,7 +41,7 @@ async def download_po_import_template() -> Response:
     dependencies=[Depends(require_permission("purchasing.create_po"))],
 )
 async def import_purchase_order(
-    file: UploadFile,
+    file: UploadFile(max_size=10 * 1024 * 1024),
     user: Annotated[User, Depends(require_permission("purchasing.create_po"))],
     db: Annotated[AsyncSession, Depends(get_db)],
     supplier_id: Annotated[int, Form()],

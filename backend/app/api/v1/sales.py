@@ -1,14 +1,14 @@
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from app.core.database import get_db
-from app.core.rbac import require_permission
+from app.core.rbac import get_current_user, require_permission
 from app.models.customer import Customer
 from app.models.sale import Sale
 from app.models.user import User
@@ -24,6 +24,16 @@ router = APIRouter(prefix="/sales", tags=["sales"])
 _PDF_MEDIA_TYPE = "application/pdf"
 
 
+def _require_sales_create_or_refund(current_user: Annotated[User, Depends(get_current_user)]) -> User:
+    user_permission_codes = {p.code for p in current_user.role.permissions}
+    if "sales.create" not in user_permission_codes and "sales.refund" not in user_permission_codes:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Missing required permission: sales.create or sales.refund",
+        )
+    return current_user
+
+
 @router.post("", response_model=SaleOut, status_code=201)
 async def create_sale(
     payload: SaleCreate,
@@ -33,7 +43,7 @@ async def create_sale(
     return await SaleService(db).create_sale(payload, cashier)
 
 
-@router.get("", response_model=SalePage, dependencies=[Depends(require_permission("sales.create"))])
+@router.get("", response_model=SalePage, dependencies=[Depends(_require_sales_create_or_refund)])
 async def list_sales(
     db: Annotated[AsyncSession, Depends(get_db)],
     start_date: date | None = None,
@@ -45,7 +55,7 @@ async def list_sales(
 
 
 @router.get(
-    "/{sale_id}", response_model=SaleOut, dependencies=[Depends(require_permission("sales.create"))]
+    "/{sale_id}", response_model=SaleOut, dependencies=[Depends(_require_sales_create_or_refund)]
 )
 async def get_sale(sale_id: int, db: Annotated[AsyncSession, Depends(get_db)]) -> SaleOut:
     return await SaleService(db).get_sale(sale_id)
@@ -53,7 +63,7 @@ async def get_sale(sale_id: int, db: Annotated[AsyncSession, Depends(get_db)]) -
 
 @router.get(
     "/{sale_id}/receipt",
-    dependencies=[Depends(require_permission("sales.create"))],
+    dependencies=[Depends(_require_sales_create_or_refund)],
 )
 async def get_sale_receipt(sale_id: int, db: Annotated[AsyncSession, Depends(get_db)]) -> Response:
     result = await db.execute(select(Sale).where(Sale.id == sale_id))

@@ -587,7 +587,7 @@ export function PosPage() {
               min={0}
               step={0.01}
               value={discount}
-              onChange={(e) => setDiscount(Math.max(0, Number(e.target.value)))}
+              onChange={(e) => setDiscount(Math.max(0, Number(e.target.value) || 0))}
               className="mt-1 w-full border border-rule bg-paper px-2 py-1 figure"
             />
           </label>
@@ -740,6 +740,7 @@ function Receipt({ sale, onNewSale }: { sale: SaleOut; onNewSale: () => void }) 
       const blob = await fetchReceiptBlob()
       const url = URL.createObjectURL(blob)
       window.open(url, '_blank')
+      setTimeout(() => URL.revokeObjectURL(url), 30000)
     } finally {
       setBusy(false)
     }

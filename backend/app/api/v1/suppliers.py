@@ -15,7 +15,10 @@ router = APIRouter(prefix="/suppliers", tags=["suppliers"])
 
 def _require_purchasing_access(current_user: Annotated[User, Depends(get_current_user)]) -> User:
     user_permission_codes = {p.code for p in current_user.role.permissions}
-    if "purchasing.create_po" not in user_permission_codes and "purchasing.approve_po" not in user_permission_codes:
+    if (
+        "purchasing.create_po" not in user_permission_codes
+        and "purchasing.approve_po" not in user_permission_codes
+    ):
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN,
             detail="Missing required permission: purchasing.create_po or purchasing.approve_po",

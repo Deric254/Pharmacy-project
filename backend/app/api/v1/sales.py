@@ -24,7 +24,9 @@ router = APIRouter(prefix="/sales", tags=["sales"])
 _PDF_MEDIA_TYPE = "application/pdf"
 
 
-def _require_sales_create_or_refund(current_user: Annotated[User, Depends(get_current_user)]) -> User:
+def _require_sales_create_or_refund(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> User:
     user_permission_codes = {p.code for p in current_user.role.permissions}
     if "sales.create" not in user_permission_codes and "sales.refund" not in user_permission_codes:
         raise HTTPException(

@@ -5,8 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.database import get_db
-from app.core.redis_client import redis_client
 from app.core.rbac import get_current_user, require_permission
+from app.core.redis_client import redis_client
 from app.core.security import decode_token
 from app.models.user import User
 from app.schemas.auth import (
@@ -19,7 +19,7 @@ from app.schemas.auth import (
     TokenResponse,
     UserOut,
 )
-from app.services.auth_service import AuthService, MAX_LOGIN_ATTEMPTS
+from app.services.auth_service import MAX_LOGIN_ATTEMPTS, AuthService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -54,7 +54,10 @@ async def login(
         user, device_label=request.headers.get("user-agent"), ip_address=client_ip
     )
     _set_refresh_cookie(response, tokens["refresh_token"])
-    return TokenResponse(access_token=tokens["access_token"], must_change_password=user.must_change_password)
+    return TokenResponse(
+        access_token=tokens["access_token"],
+        must_change_password=user.must_change_password,
+    )
 
 
 @router.post("/refresh", response_model=TokenResponse)

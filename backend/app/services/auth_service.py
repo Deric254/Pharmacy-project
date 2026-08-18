@@ -45,7 +45,10 @@ class AuthService:
         if ip_attempt_count is not None and int(ip_attempt_count) >= MAX_LOGIN_ATTEMPTS * 3:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Too many failed login attempts from this address. Try again in a few minutes.",
+                detail=(
+                    "Too many failed login attempts from this address. "
+                    "Try again in a few minutes."
+                ),
             )
 
         result = await self.db.execute(

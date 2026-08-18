@@ -57,8 +57,22 @@ class ConnectionManager:
         certain roles.
         """
         dead: list[tuple[int, SendableConnection]] = []
-        for user_id, connections in self._connections.items():
-            for connection in connections:
+        # Snapshotted with list(...) before iterating, not iterated
+        # directly off self._connections -- a real, confirmed bug:
+        # `await connection.send_json(...)` below is a genuine yield
+        # point, and if a DIFFERENT user connects or disconnects
+        # while this broadcast is paused there (entirely plausible in
+        # a real multi-user pharmacy -- someone's screen mid-refresh
+        # while a cashier logs in elsewhere), mutating the dict or a
+        # user's connection set while this loop is actively iterating
+        # over the live objects raises "dictionary changed size during
+        # iteration" / the equivalent for sets -- uncaught here, and
+        # fatal to the entire background dispatcher task for the rest
+        # of the app's uptime once it propagates up, not just this one
+        # broadcast. Proven directly with a synchronized concurrency
+        # test before this fix existed, not assumed.
+        for user_id, connections in list(self._connections.items()):
+            for connection in list(connections):
                 permissions = self._permissions_by_connection.get(connection, set())
                 if required_permission is not None and required_permission not in permissions:
                     continue

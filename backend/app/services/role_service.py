@@ -14,6 +14,7 @@ an admin assembles" (AWS IAM policies vs. roles is the same split).
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit_log import AuditLog
@@ -53,7 +54,21 @@ class RoleService:
             permissions=permissions,
         )
         self.db.add(role)
-        await self.db.flush()
+        # The real INSERT -- and so the real point the UNIQUE
+        # constraint gets checked -- happens right here at flush(), not
+        # at the later commit() below. An earlier version of this fix
+        # only wrapped commit() in the try/except further down, which
+        # looked complete but left this exact line unprotected;
+        # confirmed by the race test itself intermittently failing
+        # against that version with this identical IntegrityError,
+        # uncaught, before this fix moved the try/except up to here.
+        try:
+            await self.db.flush()
+        except IntegrityError as exc:
+            await self.db.rollback()
+            raise HTTPException(
+                status_code=409, detail="A role with this name already exists"
+            ) from exc
 
         self.db.add(
             AuditLog(
@@ -65,7 +80,18 @@ class RoleService:
                 new_value=f"name={role.name} permissions={sorted(payload.permission_codes)}",
             )
         )
-        await self.db.commit()
+        # This commit is the AuditLog's own write -- the role row
+        # itself is already durably inserted above (flush alone does
+        # not commit, but it's what surfaces the constraint violation;
+        # the actual persistence still depends on this commit
+        # succeeding, same as everywhere else in this codebase).
+        try:
+            await self.db.commit()
+        except IntegrityError as exc:
+            await self.db.rollback()
+            raise HTTPException(
+                status_code=409, detail="A role with this name already exists"
+            ) from exc
         return await self._to_detail(role)
 
     async def update_role(
@@ -101,7 +127,23 @@ class RoleService:
                 new_value=f"permissions={sorted(p.code for p in role.permissions)}",
             )
         )
-        await self.db.commit()
+        # Same reasoning as create_role's own commit above -- the
+        # duplicate-name SELECT a few lines up is a check-THEN-write,
+        # not atomic, and Role.name's real database-level UNIQUE
+        # constraint is what actually stops two concurrent renames to
+        # the same name from both landing, not that earlier SELECT.
+        # Without catching the IntegrityError here, the race's loser
+        # got an unhandled 500 instead of the same clean 409 a
+        # sequential duplicate-name attempt gets -- confirmed directly
+        # with a real concurrent-rename test, not assumed safe just
+        # because the SELECT check exists.
+        try:
+            await self.db.commit()
+        except IntegrityError as exc:
+            await self.db.rollback()
+            raise HTTPException(
+                status_code=409, detail="A role with this name already exists"
+            ) from exc
         await self.db.refresh(role, attribute_names=["permissions"])
         return await self._to_detail(role)
 

@@ -7,7 +7,14 @@ from app.models.ai_provider_key import AIProviderName
 
 class AIProviderKeyCreate(BaseModel):
     provider: AIProviderName
-    api_key: str = Field(min_length=1)
+    # 16 is well below every real provider's actual key length (OpenAI,
+    # Anthropic, and Google keys are all 20+ characters) -- this exists
+    # specifically to catch an accidental paste/truncation error before
+    # it reaches the masking logic below. Without a real floor here, a
+    # key shorter than 4 characters has its ENTIRE value stored as
+    # key_hint and shown in the "masked" display (••••{key_hint}) --
+    # for a genuinely short string, that's not masked at all.
+    api_key: str = Field(min_length=16)
     priority: int = Field(default=1, ge=1)
 
 

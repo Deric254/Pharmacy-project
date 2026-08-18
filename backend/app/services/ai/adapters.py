@@ -57,7 +57,32 @@ actually display is **bold** (double asterisks) and simple lists \
 using "-" or "1." at the start of a line. Never use headers (#, ##), \
 tables, or any other markdown syntax -- anything else shows up as \
 literal stray characters on screen, not real formatting. Keep answers \
-focused and skip unnecessary preamble.
+focused and skip unnecessary preamble. Every monetary figure below \
+already carries the business's real currency code inline (e.g. \
+"KES 1553.68") -- always use that same currency when discussing money \
+in your answer, including any new figures you compute yourself (like \
+a percentage of a given amount); never default to $ or USD unless \
+that genuinely is the currency shown.
+"""
+
+_BUSINESS_INSIGHT_CLOSING = """\
+End every single reply, no matter what was asked -- including a \
+plain greeting like "good morning" with no business question in it \
+at all -- with a short closing section, separated from the rest of \
+your answer by a blank line and starting with **How the business is \
+doing**. In 2-4 sentences, using only the real figures given above, \
+cover: (1) current performance in plain terms, (2) the trajectory -- \
+state the actual percent change vs the prior period if it was given, \
+or say plainly that there isn't enough history yet to show a trend if \
+it wasn't, never invent a direction either way, and (3) exactly one \
+concrete, specific next action grounded in the real numbers given \
+(e.g. a real low-stock or expiring-batch count, a real top product, a \
+real revenue trend) -- not generic advice like "focus on marketing" \
+that isn't actually tied to anything in the data. If no business \
+figures were given at all this turn, say briefly that you don't have \
+today's numbers to hand rather than inventing any -- never state a \
+performance figure, a trend, or a recommendation that isn't directly \
+backed by a real number that appeared above.
 """
 
 
@@ -72,7 +97,10 @@ def _build_prompt_with_context(prompt: str, context: dict[str, object]) -> str:
     other_context = {k: v for k, v in context.items() if k != "person_asking_name"}
     context_lines = "\n".join(f"- {k}: {v}" for k, v in other_context.items())
     context_block = f"Current real business data:\n{context_lines}\n\n" if other_context else ""
-    preamble = f"{_APP_KNOWLEDGE}\n{_FORMATTING_RULES}\n{greeting_note}{context_block}"
+    preamble = (
+        f"{_APP_KNOWLEDGE}\n{_FORMATTING_RULES}\n{_BUSINESS_INSIGHT_CLOSING}\n"
+        f"{greeting_note}{context_block}"
+    )
     return f"{preamble}Question: {prompt}"
 
 

@@ -78,6 +78,53 @@ class TestCreateUser:
         )
         assert r.status_code == 409
 
+    async def test_two_concurrent_creates_with_the_same_username_never_both_succeed(
+        self, client, owner_user, seeded_roles
+    ):
+        """
+        Real gap this closes: the identical bug already found and
+        fixed in role_service.py's create_role this same session --
+        the duplicate-username SELECT is a check-THEN-write, and the
+        real INSERT (where username's database-level UNIQUE constraint
+        actually gets checked) happens at an earlier flush(), not the
+        later commit(). A version of this fix that only wrapped the
+        commit() would still let a genuine race surface as an
+        unhandled 500 for the loser, instead of the same clean 409 a
+        sequential duplicate-username attempt gets.
+        """
+        import asyncio
+
+        login = await client.post(
+            "/api/v1/auth/login", json={"username": "lucy", "password": "S3curePass!"}
+        )
+        token = login.json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        async def create():
+            return await client.post(
+                "/api/v1/users",
+                json={
+                    "full_name": "Race Condition User",
+                    "username": "raceuser",
+                    "password": "SafePass123",
+                    "role_id": seeded_roles["Employee"],
+                    "security_question": "Test question?",
+                    "security_answer": "Test answer",
+                },
+                headers=headers,
+            )
+
+        results = await asyncio.gather(create(), create(), return_exceptions=True)
+        exceptions = [r for r in results if isinstance(r, Exception)]
+        assert not exceptions, f"Unhandled exceptions under concurrency: {exceptions}"
+
+        status_codes = sorted(r.status_code for r in results)
+        assert status_codes == [201, 409], (
+            f"Expected exactly one winner (201) and one clean rejection (409), "
+            f"got {status_codes} -- a 500 here means a real IntegrityError from "
+            f"the race is not being caught and translated into a clean error."
+        )
+
     async def test_unknown_role_id_rejected(self, client, owner_user):
         login = await client.post(
             "/api/v1/auth/login", json={"username": "lucy", "password": "S3curePass!"}

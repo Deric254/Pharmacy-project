@@ -51,6 +51,45 @@ class TestKeyManagement:
         assert r.json()["masked_key"] == "••••1234"
         assert "sk-supersecretlongkeyvalue1234" not in r.text
 
+    async def test_a_key_shorter_than_16_characters_is_rejected(self, client, owner_user):
+        """
+        Real gap this closes: without a real minimum here, a key
+        shorter than 4 characters had its ENTIRE value stored as
+        key_hint and shown in the "masked" display (••••{key_hint}) --
+        for a short string, that's not masked at all. Every genuine
+        provider key (OpenAI, Anthropic, Google) is 20+ characters, so
+        16 rejects an accidental paste/truncation error without risk
+        of ever rejecting a real key.
+        """
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        r = await client.post(
+            "/api/v1/ai/keys",
+            json={"provider": "OPENAI", "api_key": "short-key-123"},  # 13 chars
+            headers=headers,
+        )
+        assert r.status_code == 422
+
+    async def test_a_key_exactly_16_characters_is_accepted(self, client, owner_user):
+        """The boundary itself, not just comfortably above/below it."""
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        sixteen_char_key = "exactly-sixteen1"
+        assert len(sixteen_char_key) == 16
+
+        r = await client.post(
+            "/api/v1/ai/keys",
+            json={"provider": "OPENAI", "api_key": sixteen_char_key},
+            headers=headers,
+        )
+        assert r.status_code == 201
+        # Never the full value, even at the boundary -- only the real
+        # last-4-characters masking, proving this isn't accidentally
+        # falling into the "whole key stored as hint" branch anymore.
+        assert r.json()["masked_key"] == "••••een1"
+
     async def test_key_is_actually_encrypted_in_the_database(self, client, owner_user):
         token = await _login(client, "lucy", "S3curePass!")
         raw_key = "sk-a-very-real-looking-secret-key-98765"
@@ -165,7 +204,7 @@ class TestKeyManagement:
 
         create_resp = await client.post(
             "/api/v1/ai/keys",
-            json={"provider": "NVIDIA", "api_key": "nvidia-key-3333"},
+            json={"provider": "NVIDIA", "api_key": "nvidia-key-33333"},
             headers=headers,
         )
         key_id = create_resp.json()["id"]
@@ -418,6 +457,39 @@ class TestRealAdapterRequestShape:
         assert b"What's low on stock?" in captured["body"]
         assert b"screen" in captured["body"]  # context was included
 
+    async def test_every_prompt_carries_the_mandatory_business_insight_instruction(self):
+        """
+        The actual new requirement: every single reply, even a plain
+        greeting with no business question in it, must close with a
+        short, data-grounded performance/trajectory/next-action
+        summary. That instruction has to reach the model on every
+        call, not just ones that look like business questions --
+        proven here through a REAL adapter (OpenAIAdapter, real
+        request-building code, only the HTTP transport mocked), with
+        a prompt that is deliberately just a greeting and nothing
+        else, to rule out any chance this only fires for
+        business-sounding questions.
+        """
+        captured_body = b""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal captured_body
+            captured_body = request.read()
+            return httpx.Response(200, json={"choices": [{"message": {"content": "hi!"}}]})
+
+        http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        adapter = OpenAIAdapter(api_key="test-key-123", client=http_client)
+
+        await adapter.ask("good morning", {"person_asking_name": "Deric"})
+
+        assert b"How the business is doing" in captured_body
+        assert b"good morning" in captured_body
+        # Never invents a figure when none was actually provided --
+        # the instruction text itself says so explicitly; this checks
+        # that instruction is really present, word for word, not just
+        # a similar-sounding phrase.
+        assert b"never invent" in captured_body.lower() or b"never state" in captured_body.lower()
+
     async def test_claude_adapter_builds_correct_request(self):
         captured = {}
 
@@ -510,6 +582,183 @@ class TestBusinessContext:
         assert "today_revenue" in captured_context
         assert "today_transaction_count" in captured_context
         assert "low_stock_product_count" in captured_context
+
+    async def test_revenue_trend_included_when_a_prior_period_exists(self, client, owner_user):
+        """
+        The real data the mandatory closing summary (see
+        _BUSINESS_INSIGHT_CLOSING) depends on for an accurate
+        trajectory statement, rather than a guess. A sale yesterday
+        and a sale today gives kpi_dashboard a real day-over-day
+        comparison to compute -- this checks that number actually
+        reaches the assistant's context, not just the dashboard.
+        """
+        from datetime import datetime, timedelta
+
+        from app.models.medicine_batch import MedicineBatch
+        from app.models.product import Product
+        from app.models.sale import Sale, SaleItem
+
+        async with AsyncSessionLocal() as db:
+            db.add(
+                AIProviderKey(
+                    user_id=owner_user.id,
+                    provider=AIProviderName.OPENAI,
+                    encrypted_key=encrypt_secret("key"),
+                    key_hint="key1",
+                    priority=1,
+                )
+            )
+            product = Product(name="Trend Test Product", default_selling_price=100.0)
+            db.add(product)
+            await db.flush()
+            batch = MedicineBatch(
+                product_id=product.id,
+                batch_number="TR1",
+                expiry_date=datetime(2027, 1, 1).date(),
+                qty_received=10,
+                qty_remaining=10,
+                cost_price=40.0,
+            )
+            db.add(batch)
+            await db.flush()
+
+            for offset_days, price in [(1, 50.0), (0, 100.0)]:  # yesterday, then today
+                sale = Sale(
+                    cashier_user_id=owner_user.id,
+                    subtotal=price,
+                    discount_amount=0.0,
+                    total_amount=price,
+                )
+                db.add(sale)
+                await db.flush()
+                sale.created_at = datetime.now() - timedelta(days=offset_days)
+                db.add(
+                    SaleItem(
+                        sale_id=sale.id,
+                        product_id=product.id,
+                        batch_id=batch.id,
+                        quantity=1,
+                        unit_price=price,
+                        line_total=price,
+                    )
+                )
+            await db.commit()
+
+        captured_context: dict[str, object] = {}
+
+        class ContextCapturingAdapter:
+            async def ask(self, prompt, context):
+                captured_context.update(context)
+                return AIResponse(text="ok")
+
+        def factory(provider, api_key):
+            return ContextCapturingAdapter()
+
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=factory)
+            await service.ask(owner_user, AIAskRequest(prompt="how are we doing?"))
+
+        # Today (100) vs yesterday (50) is a real +100% swing --
+        # present, and not fabricated as some other number.
+        assert captured_context.get("today_revenue_change_vs_prior_period_percent") == 100.0
+
+    async def test_monetary_figures_carry_the_businesss_real_currency_not_dollars(
+        self, client, owner_user
+    ):
+        """
+        The actual bug this closes: context values were bare numbers
+        (e.g. 1553.68) with no unit attached anywhere, and a model
+        given a bare figure in a business-data context defaults to
+        assuming USD far more often than not -- regardless of what
+        currency the business actually operates in. Proven with a
+        currency deliberately set to neither the schema default (KES)
+        nor USD, so this can't pass by coincidence either way.
+        """
+        from datetime import date as date_type
+
+        from app.models.medicine_batch import MedicineBatch
+        from app.models.product import Product
+        from app.models.sale import Sale, SaleItem
+
+        token = None
+        async with AsyncSessionLocal() as db:
+            db.add(
+                AIProviderKey(
+                    user_id=owner_user.id,
+                    provider=AIProviderName.OPENAI,
+                    encrypted_key=encrypt_secret("key"),
+                    key_hint="key1",
+                    priority=1,
+                )
+            )
+            product = Product(name="Currency Test Product", default_selling_price=50.0)
+            db.add(product)
+            await db.flush()
+            batch = MedicineBatch(
+                product_id=product.id,
+                batch_number="CUR1",
+                expiry_date=date_type(2027, 1, 1),
+                qty_received=10,
+                qty_remaining=10,
+                cost_price=20.0,
+            )
+            db.add(batch)
+            await db.flush()
+            sale = Sale(
+                cashier_user_id=owner_user.id, subtotal=50.0, discount_amount=0.0, total_amount=50.0
+            )
+            db.add(sale)
+            await db.flush()
+            db.add(
+                SaleItem(
+                    sale_id=sale.id,
+                    product_id=product.id,
+                    batch_id=batch.id,
+                    quantity=1,
+                    unit_price=50.0,
+                    line_total=50.0,
+                )
+            )
+            await db.commit()
+
+        # Deliberately neither the schema default (KES) nor USD --
+        # a currency change actually taking effect here, rather than a
+        # hardcoded string surviving anywhere, is exactly what this
+        # test needs to rule out.
+        r = await client.post(
+            "/api/v1/auth/login", json={"username": "lucy", "password": "S3curePass!"}
+        )
+        assert r.status_code == 200
+        token = r.json()["access_token"]
+        cfg = await client.patch(
+            "/api/v1/config",
+            json={"currency": "EUR"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert cfg.status_code == 200, cfg.text
+        assert cfg.json()["currency"] == "EUR"
+
+        captured_context: dict[str, object] = {}
+
+        class ContextCapturingAdapter:
+            async def ask(self, prompt, context):
+                captured_context.update(context)
+                return AIResponse(text="ok")
+
+        def factory(provider, api_key):
+            return ContextCapturingAdapter()
+
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=factory)
+            await service.ask(owner_user, AIAskRequest(prompt="how much did I make today?"))
+
+        # The monetary figure carries the real, just-changed currency
+        # -- not USD, not the schema default, not a bare number.
+        assert captured_context["today_revenue"] == "EUR 50.00"
+        # Non-monetary figures must NOT gain a currency prefix -- this
+        # fix is surgical, not a blanket string-wrap over every value
+        # in the context.
+        assert captured_context["today_transaction_count"] == 1
 
     async def test_client_sent_context_cannot_override_the_real_business_numbers(
         self, client, owner_user
@@ -741,8 +990,11 @@ class TestBusinessContext:
 
         # The viewed-period revenue must include yesterday's real sale
         # -- proving the range was actually used, not just accepted
-        # and ignored.
-        assert captured_context.get("viewed_period_revenue") == 99.0
+        # and ignored. Formatted with the business's real currency
+        # (KES, the default) rather than a bare number -- see
+        # _build_business_context's own reasoning for why a bare
+        # figure with no unit isn't safe to hand to a model.
+        assert captured_context.get("viewed_period_revenue") == "KES 99.00"
 
     async def test_viewed_date_range_is_respected_not_always_today(self, client, owner_user):
         """
@@ -827,7 +1079,9 @@ class TestBusinessContext:
 
         # The viewed-period revenue must reflect yesterday's real
         # sale, not an empty "today" -- proving the range was honored.
-        assert captured_context["viewed_period_revenue"] == 40.0
+        # Formatted with the business's real currency (KES, the
+        # default), same reasoning as the sibling test above.
+        assert captured_context["viewed_period_revenue"] == "KES 40.00"
 
     async def test_malformed_viewing_dates_fall_back_to_today_silently(self, client, owner_user):
         async with AsyncSessionLocal() as db:

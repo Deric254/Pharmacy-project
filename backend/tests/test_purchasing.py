@@ -13,6 +13,8 @@ Purchasing tests. The properties that matter:
      merges with an unrelated one.
 """
 
+import asyncio
+
 from app.core.database import AsyncSessionLocal
 from app.models.product import Product
 from app.models.supplier import Supplier
@@ -64,6 +66,117 @@ class TestSupplierCRUD:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert r.status_code == 403
+
+
+class TestRecordPayment:
+    """
+    Real gap this closes: record_payment had zero dedicated test
+    coverage anywhere in the suite before this -- its only exercise
+    was incidental, inside an audit-consistency test focused on a
+    different concern. Nothing had ever verified its permission
+    boundary, its 404 handling, or a payment against a supplier
+    nobody owes anything to.
+    """
+
+    async def test_requires_purchasing_approve_po_not_just_create_po(
+        self, client, owner_user, employee_user
+    ):
+        """
+        A deliberately stricter permission than the other supplier
+        endpoints (purchasing.approve_po, not purchasing.create_po) --
+        recording a payment is a more sensitive financial action than
+        just creating or viewing a supplier. This is the first test to
+        ever confirm that distinction is actually enforced, not just
+        declared in the route decorator.
+        """
+        owner_token = await _login(client, "lucy", "S3curePass!")
+        supplier = await client.post(
+            "/api/v1/suppliers",
+            json={"name": "Permission Test Supplier"},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        supplier_id = supplier.json()["id"]
+
+        employee_token = await _login(client, "joe", "pass1234")
+        r = await client.post(
+            f"/api/v1/suppliers/{supplier_id}/payments",
+            json={"amount": 10.0},
+            headers={"Authorization": f"Bearer {employee_token}"},
+        )
+        assert r.status_code == 403
+
+    async def test_payment_against_a_nonexistent_supplier_is_a_clean_404(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        r = await client.post(
+            "/api/v1/suppliers/999999/payments",
+            json={"amount": 10.0},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 404
+
+    async def test_payment_correctly_reduces_the_real_balance_owed(self, client, owner_user):
+        product_id = await _make_product("Payment Balance Product")
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        supplier = await client.post(
+            "/api/v1/suppliers", json={"name": "Balance Test Supplier"}, headers=headers
+        )
+        supplier_id = supplier.json()["id"]
+
+        await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": supplier_id,
+                "lines": [
+                    {
+                        "product_id": product_id,
+                        "quantity": 10,
+                        "batch_number": "PAY-BAL-1",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 20.0,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        supplier_check = await client.get(f"/api/v1/suppliers/{supplier_id}", headers=headers)
+        assert supplier_check.json()["balance_owed"] == 200.0  # 10 * 20.0
+
+        r = await client.post(
+            f"/api/v1/suppliers/{supplier_id}/payments",
+            json={"amount": 75.0},
+            headers=headers,
+        )
+        assert r.status_code == 200
+        assert r.json()["balance_owed"] == 125.0  # 200 - 75
+
+    async def test_zero_or_negative_payment_amount_is_rejected(self, client, owner_user):
+        """
+        PositiveMoney is the schema-layer guard -- this proves it
+        actually applies here, end to end through the real endpoint,
+        not just that the type exists somewhere in the codebase.
+        """
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        supplier = await client.post(
+            "/api/v1/suppliers", json={"name": "Zero Payment Supplier"}, headers=headers
+        )
+        supplier_id = supplier.json()["id"]
+
+        r_zero = await client.post(
+            f"/api/v1/suppliers/{supplier_id}/payments",
+            json={"amount": 0.0},
+            headers=headers,
+        )
+        assert r_zero.status_code == 422
+
+        r_negative = await client.post(
+            f"/api/v1/suppliers/{supplier_id}/payments",
+            json={"amount": -50.0},
+            headers=headers,
+        )
+        assert r_negative.status_code == 422
 
 
 class TestQuickPurchase:
@@ -323,3 +436,112 @@ class TestQuickPurchase:
 
         batches = await client.get(f"/api/v1/products/{product_id}/batches", headers=headers)
         assert len(batches.json()) == 2
+
+
+class TestQuickPurchaseConcurrency:
+    """
+    quick_purchase merges a repeat delivery of the same physical batch
+    (same product, batch number, expiry) into the existing row via
+    `existing_batch.qty_remaining = combined_qty` -- a Python-side
+    read-then-write, not an atomic UPDATE ... WHERE like the guard
+    already used for stock decrement, loyalty points, and stock-take
+    close elsewhere in this codebase. Two deliveries of the same batch
+    landing at the same moment (a real possibility: someone importing
+    a purchase-order spreadsheet while someone else quick-purchases
+    the same item that just physically arrived) could, in principle,
+    both read the same starting quantity and the second write could
+    silently overwrite the first's addition instead of compounding.
+    This proves whether that's actually exploitable or not, rather
+    than assuming either way.
+    """
+
+    async def test_two_concurrent_receipts_of_the_same_batch_both_count(self, client, owner_user):
+        product_id = await _make_product("Concurrent Batch Product")
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        supplier = await client.post(
+            "/api/v1/suppliers", json={"name": "Concurrency Supplier"}, headers=headers
+        )
+        supplier_id = supplier.json()["id"]
+
+        def make_payload(qty: int) -> dict:
+            return {
+                "supplier_id": supplier_id,
+                "lines": [
+                    {
+                        "product_id": product_id,
+                        "quantity": qty,
+                        "batch_number": "CONC-BATCH-1",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 10.0,
+                    }
+                ],
+            }
+
+        async def receive(qty: int):
+            return await client.post(
+                "/api/v1/purchase-orders/quick-purchase",
+                json=make_payload(qty),
+                headers=headers,
+            )
+
+        results = await asyncio.gather(receive(20), receive(30), return_exceptions=True)
+        exceptions = [r for r in results if isinstance(r, Exception)]
+        assert not exceptions, f"Unhandled exceptions under concurrency: {exceptions}"
+        status_codes = [r.status_code for r in results]
+        assert all(code == 201 for code in status_codes), status_codes
+
+        product = await client.get(f"/api/v1/products/{product_id}", headers=headers)
+        # If this is a genuine lost-update race, this lands at 20 or
+        # 30 (whichever write happened last) instead of the correct
+        # 50 -- real inventory silently vanishing.
+        assert product.json()["total_qty_available"] == 50, (
+            f"LOST UPDATE: expected 50 (20 + 30 concurrent receipts of the same batch), "
+            f"got {product.json()['total_qty_available']}"
+        )
+
+    async def test_five_concurrent_receipts_of_the_same_batch_all_count(self, client, owner_user):
+        """
+        Higher fan-out than the 2-way case above -- 5 simultaneous
+        receipts of 10 units each into the same batch. Same reasoning
+        as the refund-concurrency probe elsewhere in this suite: a
+        2-way race that happens to pass doesn't rule out a real gap
+        that only shows up under more contention."""
+        product_id = await _make_product("Five Way Concurrent Product")
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        supplier = await client.post(
+            "/api/v1/suppliers", json={"name": "Five Way Supplier"}, headers=headers
+        )
+        supplier_id = supplier.json()["id"]
+
+        async def receive():
+            return await client.post(
+                "/api/v1/purchase-orders/quick-purchase",
+                json={
+                    "supplier_id": supplier_id,
+                    "lines": [
+                        {
+                            "product_id": product_id,
+                            "quantity": 10,
+                            "batch_number": "CONC-BATCH-5X",
+                            "expiry_date": "2027-06-30",
+                            "unit_cost": 10.0,
+                        }
+                    ],
+                },
+                headers=headers,
+            )
+
+        results = await asyncio.gather(*[receive() for _ in range(5)], return_exceptions=True)
+        exceptions = [r for r in results if isinstance(r, Exception)]
+        assert not exceptions, f"Unhandled exceptions under concurrency: {exceptions}"
+        assert all(r.status_code == 201 for r in results), [r.status_code for r in results]
+
+        product = await client.get(f"/api/v1/products/{product_id}", headers=headers)
+        assert product.json()["total_qty_available"] == 50, (
+            f"LOST UPDATE under 5-way concurrency: expected 50 (5 x 10), "
+            f"got {product.json()['total_qty_available']}"
+        )

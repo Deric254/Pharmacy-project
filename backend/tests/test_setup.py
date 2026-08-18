@@ -231,6 +231,54 @@ class TestMigrationExportAndRestore:
         )
         assert r.status_code == 400
 
+    async def test_genuinely_corrupted_file_rejected_cleanly_not_a_500(self, client, seeded_roles):
+        """
+        Different failure mode from wrong-passphrase above: that test
+        used validly-encrypted bytes with the wrong key, which Fernet
+        rejects via its HMAC check. This is a file that was never
+        valid Fernet output at all -- e.g. a backup genuinely
+        truncated mid-write by a crash or a full disk. Both must
+        produce the same clean 400 with a real message, never a raw
+        500 that leaks a stack trace to someone trying to recover
+        from exactly this kind of failure.
+        """
+        r = await client.post(
+            "/api/v1/setup/restore-from-file",
+            files={
+                "file": (
+                    "backup.enc",
+                    b"this is not encrypted data at all, just garbage bytes \x00\x01\xff",
+                    "application/octet-stream",
+                )
+            },
+            data={"passphrase": "AnyPassphraseAtAll"},
+        )
+        assert r.status_code == 400
+        detail = r.json()["detail"].lower()
+        assert "corrupted" in detail or "passphrase" in detail
+
+    async def test_truncated_valid_backup_rejected_cleanly_not_a_500(self, client, seeded_roles):
+        """
+        A backup that WAS being written correctly but got cut off
+        partway -- the more realistic version of "corrupted", since a
+        real disk-full or power-loss event truncates a file rather
+        than replacing it with pure noise. Takes a real, validly
+        encrypted backup and chops it in half.
+        """
+        from app.core.security import encrypt_bytes_with_passphrase
+
+        real_backup = encrypt_bytes_with_passphrase(b'{"users": [], "sales": []}', "RealPass123")
+        truncated = real_backup[: len(real_backup) // 2]
+
+        r = await client.post(
+            "/api/v1/setup/restore-from-file",
+            files={"file": ("backup.enc", truncated, "application/octet-stream")},
+            data={"passphrase": "RealPass123"},
+        )
+        assert r.status_code == 400
+        detail = r.json()["detail"].lower()
+        assert "corrupted" in detail or "passphrase" in detail
+
     async def test_export_produces_real_encrypted_content(self, client, owner_user):
         token = await _login(client, "lucy", "S3curePass!")
         r = await client.post(

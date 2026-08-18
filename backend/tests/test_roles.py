@@ -108,6 +108,34 @@ class TestCreateRole:
         )
         assert r.status_code == 409
 
+    async def test_two_concurrent_creates_with_the_same_name_never_both_succeed(
+        self, client, owner_user
+    ):
+        """Same real race as update_role's own version -- proven
+        separately since create_role has its own independent
+        check-then-write and its own commit to guard."""
+        import asyncio
+
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        async def create():
+            return await client.post(
+                "/api/v1/roles",
+                json={"name": "Concurrent New Role", "permission_codes": []},
+                headers=headers,
+            )
+
+        results = await asyncio.gather(create(), create(), return_exceptions=True)
+        exceptions = [r for r in results if isinstance(r, Exception)]
+        assert not exceptions, f"Unhandled exceptions under concurrency: {exceptions}"
+
+        status_codes = sorted(r.status_code for r in results)
+        assert status_codes == [201, 409], (
+            f"Expected exactly one winner (201) and one clean rejection (409), "
+            f"got {status_codes}"
+        )
+
     async def test_unknown_permission_code_rejected(self, client, owner_user):
         token = await _login(client, "lucy", "S3curePass!")
         r = await client.post(
@@ -203,6 +231,63 @@ class TestUpdateRole:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert r.status_code == 409
+
+    async def test_two_concurrent_renames_to_the_same_new_name_never_both_succeed(
+        self, client, owner_user, seeded_roles
+    ):
+        """
+        Real gap this closes: the duplicate-name check is a plain
+        SELECT then a later write, not one atomic operation -- Role.name
+        does carry a real database-level UNIQUE constraint (confirmed
+        directly in the model), so two concurrent renames racing past
+        that check can never both actually land in the database. But
+        nothing in update_role catches the resulting IntegrityError on
+        the loser, which means the actual failure mode under a genuine
+        race was an unhandled 500, not the clean 409 a sequential
+        duplicate-name attempt gets. This proves it either way instead
+        of assuming the plain-SELECT check is "probably fine".
+        """
+        import asyncio
+
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # A brand new role to race against Administrator -- both being
+        # renamed to the exact same target name at the same moment.
+        create_resp = await client.post(
+            "/api/v1/roles",
+            json={"name": "Race Target Role", "permission_codes": []},
+            headers=headers,
+        )
+        assert create_resp.status_code == 201
+        new_role_id = create_resp.json()["id"]
+        admin_role_id = seeded_roles["Administrator"]
+
+        async def rename(role_id: int):
+            return await client.patch(
+                f"/api/v1/roles/{role_id}",
+                json={"name": "Collided Name"},
+                headers=headers,
+            )
+
+        results = await asyncio.gather(
+            rename(admin_role_id), rename(new_role_id), return_exceptions=True
+        )
+        exceptions = [r for r in results if isinstance(r, Exception)]
+        assert not exceptions, f"Unhandled exceptions under concurrency: {exceptions}"
+
+        status_codes = sorted(r.status_code for r in results)
+        # Exactly one must win (200) and the other must be rejected
+        # cleanly (409, the same response a sequential duplicate-name
+        # attempt gets) -- never two winners (would mean the unique
+        # constraint silently failed) and never a raw 500 (would mean
+        # the constraint caught it but nothing translated that into a
+        # clean response).
+        assert status_codes == [200, 409], (
+            f"Expected exactly one winner (200) and one clean rejection (409), "
+            f"got {status_codes} -- a 500 here means the real IntegrityError from "
+            f"the race is not being caught and translated into a clean error."
+        )
 
 
 class TestDeleteRole:

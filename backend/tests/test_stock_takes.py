@@ -783,6 +783,79 @@ class TestStockTakeExcelRoundTrip:
         product_check = await client.get(f"/api/v1/products/{product_id}", headers=headers)
         assert product_check.json()["total_qty_available"] == 99
 
+    async def test_template_with_no_quantities_filled_in_is_rejected_cleanly(
+        self, client, owner_user
+    ):
+        """
+        Real gap this closes: uploading the template back completely
+        unfilled (every physical-quantity cell still blank) was never
+        actually tested. The row-skip logic exists specifically to let
+        someone count items gradually across several partial uploads
+        without failing the whole import over items nobody's reached
+        yet -- but that same logic means a fully-blank file has zero
+        rows to apply, which needs its OWN explicit rejection so the
+        person gets a clear "nothing was filled in" message instead of
+        either a silent no-op success or a confusing empty-body 200.
+        """
+        import io
+
+        import openpyxl
+
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        product = await client.post(
+            "/api/v1/products",
+            json={"name": "Blank Template Product", "default_selling_price": 15.0},
+            headers=headers,
+        )
+        product_id = product.json()["id"]
+        await client.post(
+            f"/api/v1/products/{product_id}/batches",
+            json={
+                "batch_number": "BLANK1",
+                "expiry_date": "2027-06-30",
+                "qty_received": 40,
+                "cost_price": 5.0,
+            },
+            headers=headers,
+        )
+        st = await client.post(
+            "/api/v1/stock-takes", json={"product_ids": [product_id]}, headers=headers
+        )
+        stock_take_id = st.json()["id"]
+
+        # The real, unmodified template -- physical quantity column
+        # left completely blank, exactly as a fresh download looks
+        # before anyone has counted anything.
+        template_resp = await client.get(
+            f"/api/v1/stock-takes/{stock_take_id}/count-template", headers=headers
+        )
+        wb = openpyxl.load_workbook(io.BytesIO(template_resp.content))
+        buffer = io.BytesIO()
+        wb.save(buffer)
+
+        r = await client.post(
+            f"/api/v1/stock-takes/{stock_take_id}/import-counts",
+            headers=headers,
+            files={
+                "file": (
+                    "blank.xlsx",
+                    buffer.getvalue(),
+                    "application/octet-stream",
+                )
+            },
+        )
+        assert r.status_code == 422
+        assert "no physical quantities" in r.json()["detail"].lower()
+
+        # Confirms this really was a clean rejection, not a partial or
+        # silent success -- the stock take must still be exactly as
+        # open and uncounted as before the upload.
+        check = await client.get(f"/api/v1/stock-takes/{stock_take_id}", headers=headers)
+        assert check.json()["status"] == "OPEN"
+        assert check.json()["items"][0]["physical_qty"] is None
+
     async def test_edited_hidden_id_column_is_rejected_cleanly(self, client, owner_user):
         """
         The hidden Item ID column is what makes re-upload safe --

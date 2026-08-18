@@ -37,6 +37,7 @@ from app.services.ai.adapters import (
 )
 from app.services.ai.base import AIProvider, AIProviderError
 from app.services.ai_conversation_service import AIConversationService, ConversationNotFound
+from app.services.business_config_service import BusinessConfigService
 from app.services.report_service import ReportService
 
 AdapterFactory = Callable[[AIProviderName, str], AIProvider]
@@ -130,17 +131,51 @@ class AIAssistantService:
         except Exception:  # noqa: BLE001 - business context is enrichment, never load-bearing
             return {"person_asking_name": user.full_name}
 
+        # The business's own configured currency, not an assumption --
+        # this context becomes plain "- key: value" lines in the
+        # prompt (see ai/adapters.py's _build_prompt_with_context),
+        # and a bare number like "1553.68" with no unit gives a model
+        # nothing to go on except its own default assumption, which is
+        # USD far more often than not. Every genuinely monetary value
+        # below carries the real currency code inline, right next to
+        # the figure itself -- not as a separate "currency: KES" line
+        # the model would also have to correctly associate with only
+        # SOME of the other lines (transaction counts and percentages
+        # below are never money and must never get this prefix).
+        try:
+            business_config = await BusinessConfigService(self.db).get()
+            currency = business_config.currency
+        except Exception:  # noqa: BLE001 - same enrichment-only principle as above
+            currency = ""
+
+        def money(value: float) -> str:
+            return f"{currency} {value:.2f}".strip()
+
         period_label = "today" if range_start == range_end == today else "viewed_period"
         context: dict[str, object] = {
             "person_asking_name": user.full_name,
-            f"{period_label}_revenue": kpi.revenue,
+            f"{period_label}_revenue": money(kpi.revenue),
             f"{period_label}_transaction_count": kpi.transaction_count,
-            f"{period_label}_average_basket": kpi.average_basket,
+            f"{period_label}_average_basket": money(kpi.average_basket),
             "low_stock_product_count": kpi.low_stock_count,
             "expiring_soon_batch_count": kpi.expiring_soon_count,
         }
+        # Real, already-computed comparison against the immediately
+        # preceding period of equal length (same figure the dashboard
+        # itself shows) -- this is what lets the assistant's mandatory
+        # closing summary (see _FORMATTING_RULES) state an actual
+        # trajectory instead of guessing "things seem to be going
+        # well" with nothing behind it. None when there's no prior
+        # period to compare against yet (a brand new business) --
+        # passed through as None rather than omitted, so the prompt
+        # can tell the model there's genuinely no trend data yet
+        # instead of silently having a gap it might paper over.
+        if kpi.revenue_change_percent is not None:
+            context[f"{period_label}_revenue_change_vs_prior_period_percent"] = round(
+                kpi.revenue_change_percent, 1
+            )
         if kpi.profit is not None:
-            context[f"{period_label}_profit"] = kpi.profit
+            context[f"{period_label}_profit"] = money(kpi.profit)
             context[f"{period_label}_profit_margin_percent"] = kpi.profit_margin_percent
         if kpi.top_products:
             context[f"top_selling_products_{period_label}"] = ", ".join(

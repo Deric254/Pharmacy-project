@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -35,7 +36,21 @@ class UserService:
             security_answer_hash=hash_password(payload.security_answer),
         )
         self.db.add(user)
-        await self.db.flush()
+        # The real INSERT -- and so the real point the username's
+        # database-level UNIQUE constraint gets checked -- happens
+        # right here at flush(), not at the later commit() below. The
+        # SELECT above is only a check-THEN-write, not one atomic
+        # operation: two concurrent creates with the same username can
+        # both pass that check before either flushes. Confirmed by the
+        # identical bug already found and fixed in role_service.py's
+        # create_role this same session -- wrapping only the later
+        # commit() and missing this earlier flush() looked complete but
+        # left the actual insertion point unprotected.
+        try:
+            await self.db.flush()
+        except IntegrityError as exc:
+            await self.db.rollback()
+            raise HTTPException(status_code=409, detail="Username already taken") from exc
 
         self.db.add(
             AuditLog(
@@ -47,7 +62,11 @@ class UserService:
                 new_value=f"username={user.username} role={role.name}",
             )
         )
-        await self.db.commit()
+        try:
+            await self.db.commit()
+        except IntegrityError as exc:
+            await self.db.rollback()
+            raise HTTPException(status_code=409, detail="Username already taken") from exc
         await self.db.refresh(user)
         return UserListItemOut(
             id=user.id,

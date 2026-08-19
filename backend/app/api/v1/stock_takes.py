@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +12,7 @@ from app.services.stock_take_import_service import generate_count_template, impo
 from app.services.stock_take_service import StockTakeService
 
 router = APIRouter(prefix="/stock-takes", tags=["stock-takes"])
+_MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024
 
 _EXCEL_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -71,11 +72,13 @@ async def download_count_template(
 )
 async def upload_counts(
     stock_take_id: int,
-    file: Annotated[UploadFile, File(max_length=10 * 1024 * 1024)],
+    file: Annotated[UploadFile, File()],
     user: Annotated[User, Depends(require_permission("stocktake.perform"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> StockTakeOut:
     file_bytes = await file.read()
+    if len(file_bytes) > _MAX_IMPORT_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="Import file is too large")
     return await import_counts(db, stock_take_id, file_bytes, user)
 
 

@@ -214,6 +214,35 @@ class TestRefreshTokenRotation:
 
 
 class TestForgotPassword:
+    async def test_password_reset_revokes_existing_refresh_session(self, client, seeded_roles):
+        async with AsyncSessionLocal() as db:
+            u = User(
+                full_name="Has A Question",
+                username="hasq",
+                hashed_password=hash_password("pass12345"),
+                role_id=seeded_roles["Employee"],
+                security_question="What was your first pet's name?",
+                security_answer_hash=hash_password("Rex"),
+            )
+            db.add(u)
+            await db.commit()
+
+        login = await client.post(
+            "/api/v1/auth/login", json={"username": "hasq", "password": "pass12345"}
+        )
+        old_refresh_token = login.cookies["refresh_token"]
+
+        reset = await client.post(
+            "/api/v1/auth/forgot-password",
+            json={"username": "hasq", "security_answer": "Rex", "new_password": "newpass123"},
+        )
+        assert reset.status_code == 204
+
+        refresh = await client.post(
+            "/api/v1/auth/refresh", cookies={"refresh_token": old_refresh_token}
+        )
+        assert refresh.status_code == 401
+
     async def test_forgot_password_without_security_answer_fails_generically(
         self, client, owner_user
     ):

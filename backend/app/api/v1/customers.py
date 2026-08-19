@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,6 +26,7 @@ from app.services.report_export_service import ExportFormat, build_export_respon
 # module commit message for the reasoning against adding a separate
 # customers.manage permission for this scope.
 router = APIRouter(prefix="/customers", tags=["customers"])
+_MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024
 
 _EXCEL_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -50,10 +51,12 @@ async def download_customer_import_template() -> Response:
     dependencies=[Depends(require_permission("sales.create"))],
 )
 async def import_customers(
-    file: Annotated[UploadFile, File(max_length=10 * 1024 * 1024)],
+    file: Annotated[UploadFile, File()],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> BulkImportResult:
     file_bytes = await file.read()
+    if len(file_bytes) > _MAX_IMPORT_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="Import file is too large")
     return await bulk_import_customers(db, file_bytes)
 
 

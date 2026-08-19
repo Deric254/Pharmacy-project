@@ -255,6 +255,7 @@ class AuthService:
 
         user.hashed_password = hash_password(new_password)
         user.must_change_password = False
+        await self._revoke_active_sessions(user.id)
         self.db.add(
             AuditLog(
                 user_id=user.id,
@@ -290,6 +291,7 @@ class AuthService:
         temp_password = self.generate_temp_password()
         user.hashed_password = hash_password(temp_password)
         user.must_change_password = True
+        await self._revoke_active_sessions(user.id)
         self.db.add(
             AuditLog(
                 user_id=admin.id,
@@ -336,6 +338,7 @@ class AuthService:
 
         user.hashed_password = hash_password(new_password)
         user.must_change_password = False
+        await self._revoke_active_sessions(user.id)
         self.db.add(
             AuditLog(
                 user_id=user.id,
@@ -346,6 +349,16 @@ class AuthService:
             )
         )
         await self.db.commit()
+
+    async def _revoke_active_sessions(self, user_id: int) -> None:
+        result = await self.db.execute(
+            select(UserSession).where(
+                UserSession.user_id == user_id, UserSession.revoked_at.is_(None)
+            )
+        )
+        for session in result.scalars().all():
+            session.revoked_at = func.now()
+            self.db.add(session)
 
     async def accept_terms(self, user: User) -> None:
         user.terms_accepted_at = datetime.now(UTC)

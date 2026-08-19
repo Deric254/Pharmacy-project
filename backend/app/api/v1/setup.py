@@ -13,6 +13,7 @@ router = APIRouter(prefix="/setup", tags=["setup"])
 
 _RESTORE_RATE_LIMIT = 3
 _RESTORE_RATE_WINDOW = 60 * 60
+_MAX_MIGRATION_FILE_BYTES = 50 * 1024 * 1024
 
 
 @router.get("/status", response_model=SetupStatusOut)
@@ -31,7 +32,7 @@ async def create_first_user(
 async def restore_from_migration_file(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-    file: Annotated[UploadFile, File(max_length=50 * 1024 * 1024)],
+    file: Annotated[UploadFile, File()],
     passphrase: Annotated[str, Form()],
 ) -> RestoreResult:
     """
@@ -50,8 +51,12 @@ async def restore_from_migration_file(
             detail="Too many restore attempts. Try again later.",
         )
 
-    content = await file.read()
-    result = await SetupService(db).restore_from_migration_file(content, passphrase)
     await redis_client.incr(rate_limit_key)
     await redis_client.expire(rate_limit_key, _RESTORE_RATE_WINDOW)
+    if file.size is not None and file.size > _MAX_MIGRATION_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="Backup file is too large")
+    content = await file.read()
+    if len(content) > _MAX_MIGRATION_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="Backup file is too large")
+    result = await SetupService(db).restore_from_migration_file(content, passphrase)
     return result

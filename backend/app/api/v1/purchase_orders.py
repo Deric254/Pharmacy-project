@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +15,7 @@ from app.services.purchase_order_import_service import (
 from app.services.purchasing_service import PurchasingService
 
 router = APIRouter(prefix="/purchase-orders", tags=["purchasing"])
+_MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024
 
 _EXCEL_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -41,12 +42,14 @@ async def download_po_import_template() -> Response:
     dependencies=[Depends(require_permission("purchasing.create_po"))],
 )
 async def import_purchase_order(
-    file: Annotated[UploadFile, File(max_length=10 * 1024 * 1024)],
+    file: Annotated[UploadFile, File()],
     user: Annotated[User, Depends(require_permission("purchasing.create_po"))],
     db: Annotated[AsyncSession, Depends(get_db)],
     supplier_id: Annotated[int, Form()],
 ) -> PurchaseOrderOut:
     file_bytes = await file.read()
+    if len(file_bytes) > _MAX_IMPORT_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="Import file is too large")
     return await bulk_import_purchase_order(db, file_bytes, supplier_id, user)
 
 

@@ -1,9 +1,6 @@
-import type { ReactElement } from 'react'
-import type { Props as RechartsLabelProps } from 'recharts/types/component/Label'
 import {
   Line,
   LineChart,
-  LabelList,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -13,7 +10,6 @@ import {
 } from 'recharts'
 import type { RevenueTrendOut } from '../../types/api'
 import { useCurrencyFormatter } from '../../lib/currency'
-import { computePlottedRange, isNearBottomOfRange } from './chartLabelPlacement'
 import { ChartScrollArea } from './ChartScrollArea'
 
 // Pixels each point gets along the x-axis. Wide enough that period
@@ -22,48 +18,12 @@ import { ChartScrollArea } from './ChartScrollArea'
 // past its panel and ChartScrollArea takes over instead of Recharts
 // silently thinning out which ticks it draws.
 const PX_PER_POINT = 56
-// Labels on every point are only readable up to a point; past this,
-// even with a scrollable axis, the labels crowd each other value against
-// value. Same cap as before, kept explicit rather than tied to px math
-// so it stays predictable as the layout changes.
-const MAX_LABELED_POINTS = 15
-
 export function RevenueTrendChart({ data }: { data: RevenueTrendOut }) {
   const formatCurrency = useCurrencyFormatter()
   const hasProfit = data.points.some((p) => p.profit !== null)
-  const showLabels = data.points.length <= MAX_LABELED_POINTS
 
   if (data.points.length === 0) {
     return <p className="text-sm text-ink-soft">No sales in this range yet.</p>
-  }
-
-  // A profit label fixed at "bottom" collides with the x-axis date
-  // text whenever profit sits close to the bottom of the chart's own
-  // value range -- which, for a pharmacy, is routine: thin or
-  // negative margins are common, not an edge case. Rather than a
-  // fixed pixel guess (fragile against font/margin changes), this
-  // measures "close to bottom" the same way the chart itself does:
-  // relative to the actual plotted value range across both series
-  // (including 0, since the y-axis baseline is always visible).
-  // Below that threshold, the label renders above its point instead.
-  const plottedRange = computePlottedRange(data.points.flatMap((p) => [p.revenue, p.profit ?? 0]))
-
-  function renderProfitLabel(props: RechartsLabelProps): ReactElement {
-    const x = Number(props.x ?? 0)
-    const y = Number(props.y ?? 0)
-    const numericValue = Number(props.value)
-    const isNearBottom = isNearBottomOfRange(numericValue, plottedRange)
-    return (
-      <text
-        x={x}
-        y={isNearBottom ? y - 8 : y + 16}
-        textAnchor="middle"
-        fontSize={10}
-        fill="var(--color-stamp-green)"
-      >
-        {formatCurrency(numericValue)}
-      </text>
-    )
   }
 
   return (
@@ -80,7 +40,7 @@ export function RevenueTrendChart({ data }: { data: RevenueTrendOut }) {
             colliding. */}
         <LineChart
           data={data.points}
-          margin={{ top: 20, right: 16, left: 8, bottom: hasProfit && showLabels ? 20 : 8 }}
+          margin={{ top: 20, right: 16, left: 8, bottom: hasProfit ? 20 : 8 }}
         >
           <CartesianGrid stroke="var(--color-rule)" strokeDasharray="3 3" />
           <XAxis
@@ -125,14 +85,6 @@ export function RevenueTrendChart({ data }: { data: RevenueTrendOut }) {
             strokeWidth={2}
             dot={data.points.length <= 31}
           >
-            {showLabels && (
-              <LabelList
-                dataKey="revenue"
-                position="top"
-                formatter={(value) => formatCurrency(Number(value))}
-                style={{ fill: 'var(--color-brass)', fontSize: 10 }}
-              />
-            )}
           </Line>
           {hasProfit && (
             <Line
@@ -143,7 +95,6 @@ export function RevenueTrendChart({ data }: { data: RevenueTrendOut }) {
               strokeWidth={2}
               dot={data.points.length <= 31}
             >
-              {showLabels && <LabelList dataKey="profit" content={renderProfitLabel} />}
             </Line>
           )}
         </LineChart>

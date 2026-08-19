@@ -2,7 +2,6 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  LabelList,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -70,12 +69,6 @@ export function ProductRevenueChart({ data }: { data: TopProductEntry[] }) {
           }}
         />
         <Bar dataKey="revenue" name="Revenue" fill="var(--color-brass)" radius={[0, 3, 3, 0]}>
-          <LabelList
-            dataKey="revenue"
-            position="right"
-            formatter={(value) => formatCurrency(Number(value))}
-            style={{ fill: 'var(--color-ink)', fontSize: 11 }}
-          />
         </Bar>
       </BarChart>
     </ResponsiveContainer>

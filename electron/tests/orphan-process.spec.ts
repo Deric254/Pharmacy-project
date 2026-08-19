@@ -21,12 +21,16 @@
  * themselves aren't running here).
  */
 import { test, expect, _electron as electron } from '@playwright/test'
-import { execSync } from 'node:child_process'
+import { execFileSync, execSync } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 let appDataDir: string
+
+function testEnvironment() {
+  return { ...process.env, HOME: appDataDir, APPDATA: appDataDir, LOCALAPPDATA: appDataDir }
+}
 
 test.beforeEach(() => {
   appDataDir = mkdtempSync(path.join(tmpdir(), 'pharmacy-erp-bughunt-'))
@@ -38,6 +42,17 @@ test.afterEach(() => {
 
 function countBackendProcesses(): number {
   try {
+    if (process.platform === 'win32') {
+      const command =
+        "$items=@(Get-CimInstance Win32_Process | " +
+        "Where-Object { $_.Name -in @('python.exe','pythonw.exe') -and " +
+        "$_.CommandLine -match 'desktop_main\\.py' }); $items.Count"
+      const output = execFileSync('powershell.exe', ['-NoProfile', '-Command', command])
+        .toString()
+        .trim()
+      return output ? parseInt(output, 10) : 0
+    }
+
     // pgrep -f matches against the full command line, so this counts
     // real running `python desktop_main.py` processes specifically --
     // not the Electron shell, not this test runner itself.
@@ -60,7 +75,7 @@ test('closing the app normally leaves zero backend processes behind', async () =
 
   const electronApp = await electron.launch({
     args: [path.join(__dirname, '..', 'main.js')],
-    env: { ...process.env, HOME: appDataDir },
+    env: testEnvironment(),
     timeout: 60_000,
   })
   await electronApp.firstWindow({ timeout: 30_000 })
@@ -88,6 +103,16 @@ function killAllBackendProcesses(): void {
   // countBackendProcesses above), so this lists PIDs the same way and
   // kills each directly via Node instead of shelling out to pkill.
   try {
+    if (process.platform === 'win32') {
+      const command =
+        "Get-CimInstance Win32_Process | " +
+        "Where-Object { $_.Name -in @('python.exe','pythonw.exe') -and " +
+        " $_.CommandLine -match 'desktop_main\\.py' } | " +
+        'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }'
+      execFileSync('powershell.exe', ['-NoProfile', '-Command', command])
+      return
+    }
+
     const output = execSync('pgrep -f "desktop_main.py" || true').toString().trim()
     if (!output) return
     for (const line of output.split('\n')) {
@@ -112,7 +137,7 @@ test('a second launch while the first is still running does not spawn a second b
   // for it.
   const firstApp = await electron.launch({
     args: [path.join(__dirname, '..', 'main.js')],
-    env: { ...process.env, HOME: appDataDir },
+    env: testEnvironment(),
     timeout: 60_000,
   })
   await firstApp.firstWindow({ timeout: 30_000 })
@@ -132,7 +157,7 @@ test('a second launch while the first is still running does not spawn a second b
   try {
     const secondApp = await electron.launch({
       args: [path.join(__dirname, '..', 'main.js')],
-      env: { ...process.env, HOME: appDataDir },
+      env: testEnvironment(),
       timeout: 15_000,
     })
     await secondApp.close().catch(() => {})
@@ -157,7 +182,7 @@ test('the app recovers cleanly after a previous session was killed ungracefully'
   // crash would.
   const firstApp = await electron.launch({
     args: [path.join(__dirname, '..', 'main.js')],
-    env: { ...process.env, HOME: appDataDir },
+    env: testEnvironment(),
     timeout: 60_000,
   })
   await firstApp.firstWindow({ timeout: 30_000 })
@@ -186,7 +211,7 @@ test('the app recovers cleanly after a previous session was killed ungracefully'
   // orphan, and it should not silently fail.
   const secondApp = await electron.launch({
     args: [path.join(__dirname, '..', 'main.js')],
-    env: { ...process.env, HOME: appDataDir },
+    env: testEnvironment(),
     timeout: 60_000,
   })
   try {

@@ -55,6 +55,10 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
 // a convenience; app.setName alone already solves the actual problem
 // (logs being unfindable).
 app.setName('PharmacyERP')
+// setName() does not retroactively change Electron's default userData path
+// on Windows. Set it explicitly so diagnostics are stored in the documented
+// %APPDATA%\\PharmacyERP location instead of the package name directory.
+app.setPath('userData', path.join(app.getPath('appData'), 'PharmacyERP'))
 
 let backendProcess = null
 let mainWindow = null
@@ -133,6 +137,13 @@ function packagedBackendPath() {
   return path.join(process.resourcesPath, 'backend', exeName)
 }
 
+function developmentPythonPath() {
+  const venvPython = process.platform === 'win32'
+    ? path.join(__dirname, '..', 'backend', '.venv', 'Scripts', 'python.exe')
+    : path.join(__dirname, '..', 'backend', '.venv', 'bin', 'python')
+  return fs.existsSync(venvPython) ? venvPython : 'python'
+}
+
 function devFrontendDistPath() {
   return path.join(__dirname, '..', 'frontend', 'dist', 'index.html')
 }
@@ -166,11 +177,12 @@ function startBackend() {
       // Development: run the real Python entrypoint the exe is built
       // from, so `npm start` here behaves the same as the packaged
       // app without needing a fresh PyInstaller build every time.
-      backendProcess = spawn('python', ['desktop_main.py'], {
-        cwd: path.join(__dirname, '..', 'backend'),
-        stdio: 'inherit',
-        env: backendEnv,
-      })
+        backendProcess = spawn(developmentPythonPath(), ['desktop_main.py'], {
+          cwd: path.join(__dirname, '..', 'backend'),
+          windowsHide: process.platform === 'win32',
+          stdio: process.platform === 'win32' ? 'ignore' : 'inherit',
+          env: backendEnv,
+        })
     }
 
     backendProcess.on('error', (err) => {

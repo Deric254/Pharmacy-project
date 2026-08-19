@@ -19,6 +19,10 @@ import path from 'node:path'
 
 let appDataDir: string
 
+function testEnvironment() {
+  return { ...process.env, HOME: appDataDir, APPDATA: appDataDir, LOCALAPPDATA: appDataDir }
+}
+
 test.beforeEach(() => {
   // A fresh, isolated app-data directory per test run -- never reuses
   // a real installation's data, and never lets one test's state leak
@@ -33,7 +37,7 @@ test.afterEach(() => {
 test('the real app window appears and is never left blank', async () => {
   const electronApp = await electron.launch({
     args: [path.join(__dirname, '..', 'main.js')],
-    env: { ...process.env, HOME: appDataDir },
+    env: testEnvironment(),
     timeout: 60_000, // real Python startup + real migrations, not instant
   })
 
@@ -65,7 +69,7 @@ test('the real app window appears and is never left blank', async () => {
 test('the window title matches the product name', async () => {
   const electronApp = await electron.launch({
     args: [path.join(__dirname, '..', 'main.js')],
-    env: { ...process.env, HOME: appDataDir },
+    env: testEnvironment(),
     timeout: 60_000,
   })
 

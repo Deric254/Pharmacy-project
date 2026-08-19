@@ -27,6 +27,10 @@ let appDataDir: string
 let fakeReleaseServer: Server
 let fakeReleaseServerUrl: string
 
+function testEnvironment() {
+  return { ...process.env, HOME: appDataDir, APPDATA: appDataDir, LOCALAPPDATA: appDataDir }
+}
+
 test.beforeEach(async () => {
   appDataDir = mkdtempSync(path.join(tmpdir(), 'pharmacy-erp-update-test-'))
 
@@ -51,7 +55,7 @@ test.afterEach(() => {
 test('choosing "Install now" saves the update and launches the installer', async () => {
   const electronApp = await electron.launch({
     args: [path.join(__dirname, '..', 'main.js')],
-    env: { ...process.env, HOME: appDataDir },
+    env: testEnvironment(),
     timeout: 60_000,
   })
 
@@ -116,7 +120,7 @@ test('choosing "Install now" saves the update and launches the installer', async
 test('choosing "Later" saves the update but does not launch the installer', async () => {
   const electronApp = await electron.launch({
     args: [path.join(__dirname, '..', 'main.js')],
-    env: { ...process.env, HOME: appDataDir },
+    env: testEnvironment(),
     timeout: 60_000,
   })
 
@@ -166,7 +170,7 @@ test('a regular (non-update) download is completely unaffected by the new logic'
 
   const electronApp = await electron.launch({
     args: [path.join(__dirname, '..', 'main.js')],
-    env: { ...process.env, HOME: appDataDir },
+    env: testEnvironment(),
     timeout: 60_000,
   })
 

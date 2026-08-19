@@ -2,7 +2,6 @@ import {
   Bar,
   ComposedChart,
   CartesianGrid,
-  LabelList,
   Line,
   ResponsiveContainer,
   Tooltip,
@@ -18,14 +17,8 @@ import { ChartScrollArea } from './ChartScrollArea'
 // adjacent angled labels don't run into each other as the customer
 // count grows.
 const PX_PER_CUSTOMER = 68
-// Past this many customers, labelling every bar and every point on
-// the cumulative line turns into unreadable noise even with a
-// scrollable axis -- same reasoning as the revenue trend chart.
-const MAX_LABELED_CUSTOMERS = 15
-
 export function CustomerParetoChart({ data }: { data: TopCustomerEntry[] }) {
   const formatCurrency = useCurrencyFormatter()
-  const showLabels = data.length <= MAX_LABELED_CUSTOMERS
 
   if (data.length === 0) {
     return <p className="text-sm text-ink-soft">No customer-attached sales in this range yet.</p>
@@ -81,16 +74,7 @@ export function CustomerParetoChart({ data }: { data: TopCustomerEntry[] }) {
           name="Revenue"
           fill="var(--color-brass)"
           radius={[3, 3, 0, 0]}
-        >
-          {showLabels && (
-            <LabelList
-              dataKey="revenue"
-              position="top"
-              formatter={(value) => formatCurrency(Number(value))}
-              style={{ fill: 'var(--color-ink)', fontSize: 10 }}
-            />
-          )}
-        </Bar>
+        />
         <Line
           yAxisId="cumulative"
           type="monotone"
@@ -99,21 +83,7 @@ export function CustomerParetoChart({ data }: { data: TopCustomerEntry[] }) {
           stroke="var(--color-stamp-red)"
           strokeWidth={2}
           dot={{ r: 3 }}
-        >
-          {showLabels && (
-            <LabelList
-              dataKey="cumulative_percent"
-              // "top" rather than the line's usual "bottom" -- bottom
-              // placement put this label right where the angled
-              // customer-name ticks live, so the two constantly
-              // overlapped. Above the point keeps it clear of both
-              // the axis text and the revenue bars underneath.
-              position="top"
-              formatter={(value) => `${Number(value).toFixed(0)}%`}
-              style={{ fill: 'var(--color-stamp-red)', fontSize: 10 }}
-            />
-          )}
-        </Line>
+        />
       </ComposedChart>
     </ResponsiveContainer>
     </ChartScrollArea>

@@ -185,13 +185,18 @@ function startBackend() {
         })
     }
 
+    let spawned = false
+    backendProcess.once('spawn', () => {
+      spawned = true
+      resolve()
+    })
     backendProcess.on('error', (err) => {
       reject(new Error(`Could not start the backend: ${err.message}`))
     })
 
     backendProcess.on('exit', (code) => {
       backendProcess = null
-      if (mainWindow === null) {
+      if (!spawned || mainWindow === null) {
         // Died before the window ever opened -- nothing on screen to
         // explain why, so this becomes the startup failure message
         // instead of a silent blank window forever.
@@ -199,19 +204,41 @@ function startBackend() {
       }
     })
 
-    resolve()
   })
 }
 
-function waitForBackendHealthy() {
+function waitForBackendHealthy(processToWatch = backendProcess) {
   const deadline = Date.now() + BACKEND_STARTUP_TIMEOUT_MS
 
   return new Promise((resolve, reject) => {
+    let settled = false
+    const onBackendExit = (code) => {
+      if (settled) return
+      settled = true
+      reject(new Error(`The backend exited before becoming ready (code ${code}).`))
+    }
+    processToWatch?.once('exit', onBackendExit)
+
+    function finishResolve() {
+      if (settled) return
+      settled = true
+      processToWatch?.removeListener('exit', onBackendExit)
+      resolve()
+    }
+
+    function finishReject(error) {
+      if (settled) return
+      settled = true
+      processToWatch?.removeListener('exit', onBackendExit)
+      reject(error)
+    }
+
     function attempt() {
+      if (settled) return
       const req = http.get(`${BACKEND_URL}/health`, (res) => {
         res.resume() // drain, don't leak the socket
         if (res.statusCode === 200) {
-          resolve()
+          finishResolve()
         } else {
           retryOrGiveUp()
         }
@@ -221,7 +248,7 @@ function waitForBackendHealthy() {
 
     function retryOrGiveUp() {
       if (Date.now() > deadline) {
-        reject(new Error('The backend did not become ready within 30 seconds.'))
+        finishReject(new Error('The backend did not become ready within 30 seconds.'))
       } else {
         // 150ms, not 500ms -- this only controls how quickly a
         // ready backend gets NOTICED, not how long we're willing to
@@ -348,10 +375,12 @@ function clearAnyLeftoverBackendProcess(port) {
     const ps = spawn('powershell.exe', [
       '-NoProfile',
       '-Command',
-      `Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | ` +
-        `ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; ` +
-        `Get-Process -Name 'Pharmacy-ERP' -ErrorAction SilentlyContinue | ` +
-        `Stop-Process -Force -ErrorAction SilentlyContinue`,
+      `$ids = @(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | ` +
+        `Select-Object -ExpandProperty OwningProcess); ` +
+        `Get-CimInstance Win32_Process | Where-Object { ` +
+        `($_.Name -eq 'Pharmacy-ERP.exe' -or $_.ProcessId -in $ids -and ` +
+        `$_.CommandLine -match 'desktop_main\\.py') } | ` +
+        `ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`,
     ])
     ps.on('error', (err) => {
       logDesktopDiagnostic(`clear-leftover-backend-failed ${err.message}`)

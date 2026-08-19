@@ -158,7 +158,7 @@ export function DashboardPage() {
     return () => {
       cancelled = true
     }
-  }, [canSeeInventory])
+  }, [canSeeInventory, salesVersion])
 
   return (
     <div className="p-6">

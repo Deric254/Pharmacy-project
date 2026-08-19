@@ -24,6 +24,7 @@ export function PosPage() {
   const [lookingUpCustomer, setLookingUpCustomer] = useState(false)
   const [nameMatches, setNameMatches] = useState<CustomerOut[] | null>(null)
   const [registeringCustomer, setRegisteringCustomer] = useState(false)
+  const searchRequestRef = useRef(0)
 
   const estimatedTotal = calculateTotal(cart, discount)
 
@@ -58,12 +59,19 @@ export function PosPage() {
     setError(null)
     const trimmed = query.trim()
     const timer = setTimeout(() => {
+      const requestId = ++searchRequestRef.current
       searchProducts(trimmed)
-        .then(setResults)
-        .catch((err: unknown) => {
-          setError(err instanceof ApiError ? err.message : 'Search failed.')
+        .then((nextResults) => {
+          if (requestId === searchRequestRef.current) setResults(nextResults)
         })
-        .finally(() => setSearching(false))
+        .catch((err: unknown) => {
+          if (requestId === searchRequestRef.current) {
+            setError(err instanceof ApiError ? err.message : 'Search failed.')
+          }
+        })
+        .finally(() => {
+          if (requestId === searchRequestRef.current) setSearching(false)
+        })
     }, 300)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps

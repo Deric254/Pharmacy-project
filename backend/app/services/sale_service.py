@@ -13,6 +13,7 @@ publishes `sale.completed`; everything else subscribes to that event
 and reacts independently, so checkout itself stays fast.
 """
 
+import logging
 from datetime import date
 
 from fastapi import HTTPException
@@ -36,6 +37,8 @@ from app.services.stock_selection_service import (
     apply_allocations,
     select_batches_fefo,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class SaleService:
@@ -169,16 +172,26 @@ class SaleService:
 
         await self.db.refresh(sale, attribute_names=["items", "payments", "created_at"])
 
-        await publish(
-            SaleCompletedEvent(
-                sale_id=sale.id, customer_id=sale.customer_id, total_amount=f"{total_amount:.2f}"
+        try:
+            await publish(
+                SaleCompletedEvent(
+                    sale_id=sale.id, customer_id=sale.customer_id, total_amount=f"{total_amount:.2f}"
+                )
             )
-        )
-        # Checked after commit, per product actually sold -- not the
-        # whole catalog -- so this stays cheap and never blocks or
-        # risks rolling back a completed sale if it fails for any reason.
-        await check_and_publish_low_stock(self.db, list(products_by_id.keys()))
-        await award_loyalty_points(self.db, sale.customer_id, total_amount)
+        except Exception:
+            logger.exception("Could not publish sale.completed for sale %s", sale.id)
+
+        try:
+            await check_and_publish_low_stock(self.db, list(products_by_id.keys()))
+        except Exception:
+            logger.exception("Could not publish low-stock alerts for sale %s", sale.id)
+            await self.db.rollback()
+
+        try:
+            await award_loyalty_points(self.db, sale.customer_id, total_amount)
+        except Exception:
+            logger.exception("Could not award loyalty points for sale %s", sale.id)
+            await self.db.rollback()
 
         return SaleOut.model_validate(sale)
 

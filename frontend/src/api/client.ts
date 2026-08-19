@@ -263,12 +263,26 @@ export async function uploadFile<T>(
  * export-capable list (Reports, Products, Customers, Audit Trail),
  * not reports-specific despite where it was originally written.
  */
+async function fetchBinaryWithRefresh(
+  input: string,
+  init: RequestInit,
+  retry = true,
+): Promise<Response> {
+  const response = await fetchWithTimeout(input, init, 60_000)
+  if (response.status === 401 && retry && (await doRefresh())) {
+    const headers = new Headers(init.headers)
+    if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
+    return fetchBinaryWithRefresh(input, { ...init, headers }, false)
+  }
+  return response
+}
+
 async function fetchAndDownload(path: string, fallbackFilename: string): Promise<void> {
   const headers: Record<string, string> = {}
   const token = getAccessToken()
   if (token) headers.Authorization = `Bearer ${token}`
 
-  const res = await fetchWithTimeout(path, { headers, credentials: 'include' }, 60_000)
+  const res = await fetchBinaryWithRefresh(path, { headers, credentials: 'include' })
   if (!res.ok) {
     let message = res.statusText
     try {
@@ -304,7 +318,7 @@ export async function postAndDownload(
   const token = getAccessToken()
   if (token) headers.Authorization = `Bearer ${token}`
 
-  const res = await fetchWithTimeout(
+  const res = await fetchBinaryWithRefresh(
     `/api/v1${path}`,
     {
       method: 'POST',
@@ -312,7 +326,6 @@ export async function postAndDownload(
       credentials: 'include',
       body: JSON.stringify(body),
     },
-    60_000,
   )
   if (!res.ok) {
     let message = res.statusText
@@ -362,7 +375,7 @@ export async function fetchBlob(path: string): Promise<Blob> {
   const token = getAccessToken()
   if (token) headers.Authorization = `Bearer ${token}`
 
-  const res = await fetchWithTimeout(`/api/v1${path}`, { headers, credentials: 'include' }, 60_000)
+  const res = await fetchBinaryWithRefresh(`/api/v1${path}`, { headers, credentials: 'include' })
   if (!res.ok) {
     let message = res.statusText
     try {

@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, UploadFile
+from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -71,7 +71,7 @@ async def download_count_template(
 )
 async def upload_counts(
     stock_take_id: int,
-    file: UploadFile(max_size=10 * 1024 * 1024),
+    file: Annotated[UploadFile, File(max_length=10 * 1024 * 1024)],
     user: Annotated[User, Depends(require_permission("stocktake.perform"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> StockTakeOut:

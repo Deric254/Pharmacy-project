@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,7 +41,7 @@ async def download_po_import_template() -> Response:
     dependencies=[Depends(require_permission("purchasing.create_po"))],
 )
 async def import_purchase_order(
-    file: UploadFile(max_size=10 * 1024 * 1024),
+    file: Annotated[UploadFile, File(max_length=10 * 1024 * 1024)],
     user: Annotated[User, Depends(require_permission("purchasing.create_po"))],
     db: Annotated[AsyncSession, Depends(get_db)],
     supplier_id: Annotated[int, Form()],

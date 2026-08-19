@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,7 +50,8 @@ async def download_customer_import_template() -> Response:
     dependencies=[Depends(require_permission("sales.create"))],
 )
 async def import_customers(
-    file: UploadFile(max_size=10 * 1024 * 1024), db: Annotated[AsyncSession, Depends(get_db)]
+    file: Annotated[UploadFile, File(max_length=10 * 1024 * 1024)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> BulkImportResult:
     file_bytes = await file.read()
     return await bulk_import_customers(db, file_bytes)

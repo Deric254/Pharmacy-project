@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -31,7 +31,7 @@ async def create_first_user(
 async def restore_from_migration_file(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-    file: UploadFile(max_size=50 * 1024 * 1024),
+    file: Annotated[UploadFile, File(max_length=50 * 1024 * 1024)],
     passphrase: Annotated[str, Form()],
 ) -> RestoreResult:
     """

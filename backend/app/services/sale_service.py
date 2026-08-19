@@ -175,7 +175,9 @@ class SaleService:
         try:
             await publish(
                 SaleCompletedEvent(
-                    sale_id=sale.id, customer_id=sale.customer_id, total_amount=f"{total_amount:.2f}"
+                    sale_id=sale.id,
+                    customer_id=sale.customer_id,
+                    total_amount=f"{total_amount:.2f}",
                 )
             )
         except Exception:

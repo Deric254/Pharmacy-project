@@ -5,6 +5,7 @@ import { reportsApi } from '../api/reports'
 import { useAuthStore } from '../auth/store'
 import { useCurrencyFormatter } from '../lib/currency'
 import { useViewedRangeStore } from '../lib/viewedRangeStore'
+import { useSaleCompletedRefresh } from '../lib/useSaleCompletedRefresh'
 import type {
   ExpiringBatchOut,
   KpiDashboardOut,
@@ -79,6 +80,7 @@ export function DashboardPage() {
   const [revenueTrend, setRevenueTrend] = useState<RevenueTrendOut | null>(null)
   const [topCustomers, setTopCustomers] = useState<TopCustomerEntry[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const salesVersion = useSaleCompletedRefresh(canSeeReports)
 
   function applyPreset(next: Preset) {
     setPreset(next)
@@ -99,7 +101,7 @@ export function DashboardPage() {
     return () => {
       cancelled = true
     }
-  }, [canSeeReports, range])
+  }, [canSeeReports, range, salesVersion])
 
   useEffect(() => {
     if (!canSeeReports) return
@@ -120,7 +122,7 @@ export function DashboardPage() {
     return () => {
       cancelled = true
     }
-  }, [canSeeReports, range])
+  }, [canSeeReports, range, salesVersion])
 
   useEffect(() => {
     if (!canSeeProfit) return

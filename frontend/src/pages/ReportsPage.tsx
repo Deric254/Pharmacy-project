@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { reportsApi, downloadReportExport } from '../api/reports'
 import { useAuthStore } from '../auth/store'
 import { useCurrencyFormatter } from '../lib/currency'
+import { useSaleCompletedRefresh } from '../lib/useSaleCompletedRefresh'
 import { ApiError } from '../api/client'
 import type {
   ExpiredStockReportOut,
@@ -23,11 +24,18 @@ const TABS: { id: Tab; label: string; permission: string }[] = [
   { id: 'stocktakes', label: 'Stock Take History', permission: 'reports.view' },
 ]
 
+function localIsoDate(value: Date): string {
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 function defaultDateRange() {
   const end = new Date()
   const start = new Date()
   start.setDate(start.getDate() - 30)
-  return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) }
+  return { start: localIsoDate(start), end: localIsoDate(end) }
 }
 
 export function ReportsPage() {
@@ -147,13 +155,14 @@ function SalesReport() {
   const [groupBy, setGroupBy] = useState<'day' | 'month'>('day')
   const [data, setData] = useState<SalesSummaryOut | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const salesVersion = useSaleCompletedRefresh(true)
 
   useEffect(() => {
     reportsApi
       .salesSummary(start, end, groupBy)
       .then(setData)
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load report.'))
-  }, [start, end, groupBy])
+  }, [start, end, groupBy, salesVersion])
 
   return (
     <div>
@@ -209,13 +218,14 @@ function ProfitReport() {
   const [{ start, end }, setRange] = useState(defaultDateRange())
   const [data, setData] = useState<ProfitReportOut | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const salesVersion = useSaleCompletedRefresh(true)
 
   useEffect(() => {
     reportsApi
       .profit(start, end)
       .then(setData)
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load report.'))
-  }, [start, end])
+  }, [start, end, salesVersion])
 
   return (
     <div>
@@ -301,13 +311,14 @@ function MoversReport() {
   const [days, setDays] = useState(30)
   const [data, setData] = useState<FastSlowMoversOut | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const salesVersion = useSaleCompletedRefresh(true)
 
   useEffect(() => {
     reportsApi
       .fastSlowMovers(days, 10)
       .then(setData)
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load report.'))
-  }, [days])
+  }, [days, salesVersion])
 
   return (
     <div>

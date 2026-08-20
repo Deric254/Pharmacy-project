@@ -205,10 +205,11 @@ class StockTakeService:
         shrinkage_value = 0.0
         expected_value = 0.0
         for item in stock_take.items:
-            batch_result = await self.db.execute(
-                select(MedicineBatch).where(MedicineBatch.id == item.batch_id)
-            )
-            batch = batch_result.scalar_one()
+            # item.batch is lazy="selectin" on StockTakeItem, so it was
+            # already fetched in one batched query when stock_take.items
+            # loaded above -- mutating it here is the same identity-mapped
+            # object, so the unlock still gets picked up by the commit below.
+            batch = item.batch
             batch.locked_by_stock_take_id = None
 
             variance = (item.physical_qty or 0) - item.expected_qty

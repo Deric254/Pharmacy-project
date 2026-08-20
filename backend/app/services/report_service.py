@@ -254,10 +254,10 @@ class ReportService:
             shrinkage_value = 0.0
             expected_value = 0.0
             for item in stock_take.items:
-                batch_result = await self.db.execute(
-                    select(MedicineBatch).where(MedicineBatch.id == item.batch_id)
-                )
-                batch = batch_result.scalar_one_or_none()
+                # item.batch is lazy="selectin" on StockTakeItem, so it was
+                # already fetched in one batched query when stock_take.items
+                # loaded above -- no per-item round-trip needed here.
+                batch = item.batch
                 cost = batch.cost_price if batch else 0.0
                 expected_value += item.expected_qty * cost
                 if item.physical_qty is not None:

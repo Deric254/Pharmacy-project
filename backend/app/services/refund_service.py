@@ -46,6 +46,20 @@ class RefundService:
         sale = await self._get_sale_or_404(sale_id)
         sale_items_by_id = {item.id: item for item in sale.items}
 
+        # sale_item.unit_price is always the FULL, undiscounted price
+        # sold at (a sale's discount lives only once, on Sale.discount_
+        # amount, never split across its line items -- see
+        # sale_service.py and report_service.py's top_products_by_
+        # revenue for the same fact). Refunding straight off unit_price
+        # would hand back MORE money than the customer actually paid on
+        # any discounted sale -- a real loss to the till, not just a
+        # reporting quirk. This ratio prorates the sale's discount the
+        # same way top_products_by_revenue does, so a refund's total_
+        # amount matches real money collected. A zero-subtotal sale (
+        # every line free) has nothing to prorate a discount against --
+        # ratio of 1.0 is a safe no-op there.
+        discount_ratio = (sale.total_amount / sale.subtotal) if sale.subtotal else 1.0
+
         refund = Refund(
             sale_id=sale.id,
             processed_by_user_id=processed_by.id,
@@ -78,7 +92,13 @@ class RefundService:
                     ),
                 )
 
-            line_total = sale_item.unit_price * line.quantity
+            # unit_price stays the original, undiscounted sale price --
+            # same historical-traceability rule as SaleItem itself (see
+            # Refund's own docstring). line_total is what actually goes
+            # back to the customer, so it -- not a plain unit_price *
+            # quantity -- is what real money (refund.total_amount) is
+            # summed from.
+            line_total = sale_item.unit_price * line.quantity * discount_ratio
             total_amount += line_total
 
             if line.restock:

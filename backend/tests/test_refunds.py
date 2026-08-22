@@ -97,6 +97,47 @@ class TestCreateRefund:
         )
         assert r.status_code == 403
 
+    async def test_refund_on_discounted_sale_pays_back_what_was_actually_paid(
+        self, client, owner_user
+    ):
+        """
+        SaleItem.unit_price is always the full, undiscounted price --
+        a sale's discount lives only once, on the Sale header, never
+        split across its lines. A full refund must therefore return
+        what the customer actually paid (list price minus their share
+        of the discount), not the undiscounted list price -- refunding
+        straight off unit_price would hand back more cash than the
+        till ever took in. 250 sold, 50 discount, 200 paid: refunding
+        it in full must pay back 200, not 250.
+        """
+        token = await _login(client, "lucy", "S3curePass!")
+        product_id = await _make_product_with_batch(price=250.0, qty=5)
+        sale_resp = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 200.0}],
+                "discount_amount": 50.0,
+                "customer_id": None,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert sale_resp.status_code == 201, sale_resp.text
+        sale = sale_resp.json()
+        sale_item = sale["items"][0]
+
+        r = await client.post(
+            f"/api/v1/sales/{sale['id']}/refunds",
+            json={
+                "reason": "CUSTOMER_RETURN",
+                "method": "CASH",
+                "items": [{"sale_item_id": sale_item["id"], "quantity": 1, "restock": True}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 201, r.text
+        assert r.json()["total_amount"] == 200.0
+
     async def test_full_refund_with_restock_reverses_stock_and_pays_back_full_amount(
         self, client, owner_user
     ):

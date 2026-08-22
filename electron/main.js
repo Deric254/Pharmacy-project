@@ -188,7 +188,17 @@ function startBackend() {
     let spawned = false
     backendProcess.once('spawn', () => {
       spawned = true
-      resolve()
+      // Resolve WITH the process reference itself, not void -- the
+      // caller must be able to watch this exact process for its exit
+      // event directly, rather than re-reading the module-level
+      // `backendProcess` variable later. That variable gets nulled
+      // out by the 'exit' handler below, and on a backend that exits
+      // within milliseconds of spawning (e.g. it detects a leftover
+      // instance still on the port and exits immediately -- see
+      // desktop_main.py's _already_running_instance check), the read
+      // can lose the race and see null, silently skipping the exit
+      // watch in waitForBackendHealthy() entirely.
+      resolve(backendProcess)
     })
     backendProcess.on('error', (err) => {
       reject(new Error(`Could not start the backend: ${err.message}`))
@@ -204,6 +214,36 @@ function startBackend() {
       }
     })
 
+  })
+}
+
+/**
+ * Polls the backend port until nothing answers on it, instead of
+ * trusting a fixed delay after clearAnyLeftoverBackendProcess. A
+ * connection error (ECONNREFUSED) is the actual, verifiable signal
+ * that the port is free -- an empty socket is not the same as "the OS
+ * has definitely released this by now", which a fixed sleep can only
+ * ever guess at.
+ */
+function waitForPortFree(port, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  return new Promise((resolve) => {
+    function attempt() {
+      const req = http.get(`http://127.0.0.1:${port}/health`, (res) => {
+        res.resume()
+        if (Date.now() > deadline) {
+          // Still answering after the timeout -- give up waiting and
+          // let startBackend()/desktop_main.py's own already-running
+          // check be the next, louder line of defense instead of
+          // hanging startup indefinitely on a port that never clears.
+          resolve()
+          return
+        }
+        setTimeout(attempt, 100)
+      })
+      req.on('error', () => resolve()) // connection refused == port is free
+    }
+    attempt()
   })
 }
 
@@ -482,12 +522,16 @@ async function startApp() {
     await clearAnyLeftoverBackendProcess(BACKEND_PORT)
     // A killed process's port isn't always instantly free at the OS
     // level -- Stop-Process returning doesn't guarantee the socket
-    // has been released yet. This is cheap insurance against the new
-    // backend trying to bind a fraction of a second too early and
-    // failing for a completely different reason than the one this
-    // whole fix exists to close off.
-    await new Promise((resolve) => setTimeout(resolve, 400))
-    await startBackend()
+    // has been released yet. Actively confirming the port has gone
+    // quiet (instead of trusting a fixed sleep) is what actually
+    // closes that gap: a fixed delay is either too short on a slow
+    // machine (the exact failure this exists to prevent) or wasted
+    // time on a fast one. Capped at 5s so a port that's stuck for an
+    // unrelated reason can't hang startup forever -- startBackend()
+    // and desktop_main.py's own _already_running_instance check are
+    // still there as the next line of defense either way.
+    await waitForPortFree(BACKEND_PORT, 5000)
+    const spawnedBackend = await startBackend()
     // These two are independent of each other -- clearing session
     // storage never depends on the backend being up, it only needs
     // Electron's own session API, which is available immediately.
@@ -498,7 +542,7 @@ async function startApp() {
     // before -- only the ORDER of independent work changed, not what
     // work happens or when relative to the window appearing.
     await Promise.all([
-      waitForBackendHealthy(),
+      waitForBackendHealthy(spawnedBackend),
       session.defaultSession.clearStorageData({
         storages: ['serviceworkers', 'cachestorage'],
       }),

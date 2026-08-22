@@ -41,6 +41,26 @@ from typing import cast
 sys.stdout.reconfigure(line_buffering=True)  # type: ignore[union-attr]
 
 
+def _log_stage(data_dir: Path, message: str) -> None:
+    """
+    Timestamped stage log, separate from the print() statements above.
+    Those go to stdout, which Electron spawns this process with
+    stdio: 'ignore' on Windows -- none of them are ever seen when
+    running under Electron. This writes to a real file instead, so a
+    startup that goes silent for 30+ seconds (alive, never answering
+    /health) can be traced to the exact stage it stalled in, rather
+    than guessed at. Wrapped in its own try/except -- a logging
+    failure must never be the reason startup itself fails.
+    """
+    try:
+        log_dir = data_dir / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with (log_dir / "backend.log").open("a", encoding="utf-8") as f:
+            f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {message}\n")
+    except OSError:
+        pass
+
+
 def _app_data_dir() -> Path:
     local_appdata = os.environ.get("LOCALAPPDATA")
     base = Path(local_appdata) if local_appdata else Path.home() / ".pharmacy-erp"
@@ -160,6 +180,14 @@ def main() -> None:
     print()
 
     port = 8000
+    # Computed up front, before the already-running check below, so
+    # every stage of startup -- including the already-running branch
+    # itself -- can be logged to the same file. _app_data_dir() only
+    # resolves a path and mkdir's it; it has no dependency on anything
+    # later in this function, so moving it earlier changes nothing
+    # about what it returns.
+    data_dir = _app_data_dir()
+    _log_stage(data_dir, "process-start")
 
     # The exact scenario a real bug report showed: a leftover backend
     # window from earlier testing still running on this port, then the
@@ -167,31 +195,43 @@ def main() -> None:
     # wrong response -- if it's genuinely already us and already
     # healthy, there's nothing to set up, just open the browser to it.
     if _already_running_instance(port):
+        _log_stage(data_dir, "already-running-instance-detected")
+        if _running_under_electron():
+            # Electron already killed anything on this port before
+            # spawning this process (see clearAnyLeftoverBackendProcess
+            # in main.js) -- so if something is still answering here,
+            # it is NOT a legitimate "already running" instance, it's
+            # exactly the leftover that cleanup failed to remove.
+            # Deferring peacefully to it (the old behavior) made
+            # Electron's health check pass against an unaccounted-for
+            # zombie process -- possibly an old/broken build -- which
+            # is how a real startup failure turned into a silent blank
+            # window instead of the "could not start" dialog it should
+            # have been. Fail loudly here so Electron's own error
+            # handling in startApp() actually sees it.
+            print(f"[ERROR] Port {port} is still in use by a process Electron's cleanup did not remove.")
+            raise SystemExit(1)
+        # Reaching here means _running_under_electron() is False --
+        # the Electron path above already exited via SystemExit(1).
+        # This remaining branch is only the raw-exe-double-clicked-
+        # twice case, where deferring peacefully to the already-
+        # healthy instance is genuinely the right, friendly behavior.
         print(f"Pharmacy ERP is already running at http://127.0.0.1:{port}")
-        if not _running_under_electron():
-            print("Opening your browser...")
-            webbrowser.open(f"http://127.0.0.1:{port}")
+        print("Opening your browser...")
+        webbrowser.open(f"http://127.0.0.1:{port}")
         print()
         print("This window can be closed -- it isn't the one running the app.")
-        if _running_under_electron():
-            # input() would block here forever: Electron spawns this
-            # process with stdio ignored entirely (no console window,
-            # by design -- see main.js), so there is no keyboard for a
-            # human to press Enter on. Confirmed as a real zombie
-            # process this way, not a hypothetical one: a real bug
-            # report showed a second backend process sitting alive in
-            # this exact state, stuck mid-shutdown, indefinitely.
-            # Nothing to wait for here -- just exit.
-            return
         with contextlib.suppress(EOFError):
             input("Press Enter to close this window...")
         return
 
-    data_dir = _app_data_dir()
     print(f"Data directory: {data_dir}")
     _configure_environment(data_dir)
+    _log_stage(data_dir, "environment-configured")
 
+    _log_stage(data_dir, "migrations-starting")
     _run_migrations()
+    _log_stage(data_dir, "migrations-complete")
 
     import uvicorn
 
@@ -212,6 +252,7 @@ def main() -> None:
     # matches.
     from app.main import app
 
+    _log_stage(data_dir, "uvicorn-starting")
     try:
         uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
     except OSError as exc:
@@ -241,6 +282,8 @@ if __name__ == "__main__":
         # window on Windows, exactly the "blinks and closes" failure
         # already found and fixed in the .bat scripts -- an exe
         # deserves the same guarantee that a failure is readable.
+        with contextlib.suppress(Exception):
+            _log_stage(_app_data_dir(), f"fatal-error {exc}")
         print()
         print("=" * 50)
         print(f" Something went wrong: {exc}")

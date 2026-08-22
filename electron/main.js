@@ -326,6 +326,45 @@ function createWindow() {
     }
   })
 
+  // Receipt preview (Sales history's "Receipt" button, POS's
+  // Print/Preview button -- see PosPage.tsx / SalesPage.tsx) fetches
+  // the PDF blob from the backend and calls window.open() on a blob:
+  // URL to show it. With no handler registered here, Electron's
+  // default window-open behavior creates a bare BrowserWindow with no
+  // backgroundColor and, critically, no PDF viewer: plugins are off
+  // by default, same as mainWindow's own webPreferences above. A
+  // window that can't render PDFs and has nothing set to paint over
+  // its default black canvas is exactly the "black screen while the
+  // receipt loads" symptom -- the PDF itself generates quickly (see
+  // receipt_service.py's threadpool offload), it just never had
+  // anywhere capable of displaying it. Explicitly allowing this one
+  // case with `plugins: true` turns on Chromium's built-in PDF viewer
+  // for just this window, the same way print-receipt-silently's own
+  // printWindow already does below for the identical reason. Anything
+  // that isn't one of our own receipt blobs is handled the safe way:
+  // sent to the person's actual default browser, never opened as an
+  // unstyled Electron window.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('blob:')) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          title: 'Receipt',
+          width: 420,
+          height: 720,
+          backgroundColor: '#f7f3ec',
+          autoHideMenuBar: true,
+          webPreferences: {
+            sandbox: true,
+            plugins: true,
+          },
+        },
+      }
+    }
+    shell.openExternal(url)
+    return { action: 'deny' }
+  })
+
   mainWindow.loadURL(BACKEND_URL)
 
   mainWindow.on('closed', () => {

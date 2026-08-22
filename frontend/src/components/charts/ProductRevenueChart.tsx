@@ -8,7 +8,6 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import type { RenderableText } from 'recharts'
 import type { TopProductEntry } from '../../types/api'
 import { useCurrencyFormatter } from '../../lib/currency'
 
@@ -77,16 +76,7 @@ export function ProductRevenueChart({ data }: { data: TopProductEntry[] }) {
           <LabelList
             dataKey="revenue"
             position="right"
-            // Recharts' LabelFormatter type is
-            // `(label: RenderableText) => RenderableText`, where
-            // RenderableText = string | number | boolean | null |
-            // undefined -- broader than a plain number because a
-            // LabelList can label all sorts of things, not just this
-            // dataKey. Typing the param as plain `number` is what tsc
-            // rejected. Matching the real type and coercing explicitly
-            // keeps this honest about what it can actually receive
-            // while still handing formatCurrency a real number.
-            formatter={(value: RenderableText) => formatCurrency(Number(value ?? 0))}
+            formatter={(value: number) => formatCurrency(value)}
             fill="var(--color-ink)"
             fontSize={11}
           />

@@ -113,9 +113,8 @@ def _configure_environment(data_dir: Path, port: int) -> None:
 
 
 def _run_migrations() -> None:
-    from alembic.config import Config
-
     from alembic import command
+    from alembic.config import Config
 
     if getattr(sys, "frozen", False):
         base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))

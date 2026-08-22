@@ -567,6 +567,38 @@ class TestKpiDashboard:
         assert top_products[0]["product_id"] == expensive_id
         assert top_products[0]["revenue"] == 100.0
 
+    async def test_top_products_revenue_is_net_of_discount(self, client, owner_user):
+        """
+        A sale's discount is a header-level concession (Sale.discount_
+        amount), never split across its line items -- SaleItem.unit_
+        price always stays the full price. Top products revenue must
+        still add up to real money collected, not list price: a 250
+        sale discounted by 50 should attribute 200, not 250, to the
+        product(s) actually sold.
+        """
+        product_id, _ = await _make_product_with_batch(price=250.0, cost=10.0, qty=5)
+        token = await _login(client, "lucy", "S3curePass!")
+
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 200.0}],
+                "discount_amount": 50.0,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/kpi-dashboard",
+            params={"start_date": today, "end_date": today},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        top_products = r.json()["top_products"]
+        assert top_products[0]["product_id"] == product_id
+        assert top_products[0]["revenue"] == 200.0
+
     async def test_low_stock_and_expiring_counts_reflect_real_inventory(self, client, owner_user):
         # Reorder point 10, stock only 3 -- genuinely low.
         async with AsyncSessionLocal() as db:

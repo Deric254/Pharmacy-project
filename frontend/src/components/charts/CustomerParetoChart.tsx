@@ -2,6 +2,7 @@ import {
   Bar,
   ComposedChart,
   CartesianGrid,
+  LabelList,
   Line,
   ResponsiveContainer,
   Tooltip,
@@ -74,7 +75,15 @@ export function CustomerParetoChart({ data }: { data: TopCustomerEntry[] }) {
           name="Revenue"
           fill="var(--color-brass)"
           radius={[3, 3, 0, 0]}
-        />
+        >
+          <LabelList
+            dataKey="revenue"
+            position="top"
+            formatter={(value) => (typeof value === 'number' ? formatCurrency(value) : '')}
+            fill="var(--color-ink)"
+            fontSize={10}
+          />
+        </Bar>
         <Line
           yAxisId="cumulative"
           type="monotone"

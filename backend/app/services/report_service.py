@@ -342,27 +342,69 @@ class ReportService:
     async def top_products_by_revenue(
         self, start_date: date, end_date: date, limit: int
     ) -> list[TopProductEntry]:
+        # SaleItem.unit_price is always the FULL, undiscounted price --
+        # a sale's discount lives only once, on the Sale header
+        # (Sale.discount_amount), and is never split across its line
+        # items at write time (see sale_service.py). Ranking directly
+        # by SUM(quantity * unit_price), as this used to, therefore
+        # overstated every discounted sale's contribution -- product
+        # revenue here didn't add up to the real money the business
+        # actually took in, while top_customers() and the KPI/PDF
+        # revenue totals (both keyed off Sale.total_amount) did. This
+        # prorates each sale's discount across its own line items in
+        # proportion to their share of that sale's subtotal, so a
+        # product's revenue here is its real, after-discount share --
+        # consistent with every other report reading from this file.
+        #
+        # That proration is inherently a per-line computation (the
+        # ratio differs sale by sale), so it can't be pushed into a
+        # single SQL GROUP BY the way a plain SUM() can. Sale.subtotal
+        # and Sale.total_amount are read here as plain typed columns
+        # (not divided in SQL), which is what keeps MoneyCents'
+        # cents<->dollars conversion exact -- dividing two MoneyCents
+        # columns directly in SQLite would divide their raw stored
+        # integer cents, not their dollar values, and (being integer
+        # division) would silently truncate every ratio below 1 to 0.
         utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
+        sale_totals = (
+            select(Sale.id, Sale.subtotal, Sale.total_amount)
+            .where(Sale.created_at >= utc_start, Sale.created_at < utc_end)
+            .subquery()
+        )
         result = await self.db.execute(
             select(
                 Product.id,
                 Product.name,
-                func.sum(SaleItem.quantity).label("qty"),
-                func.sum(SaleItem.quantity * SaleItem.unit_price).label("revenue"),
+                SaleItem.quantity,
+                SaleItem.unit_price,
+                sale_totals.c.subtotal,
+                sale_totals.c.total_amount,
             )
             .join(SaleItem, SaleItem.product_id == Product.id)
-            .join(Sale, Sale.id == SaleItem.sale_id)
-            .where(
-                Sale.created_at >= utc_start,
-                Sale.created_at < utc_end,
-            )
-            .group_by(Product.id)
-            .order_by(func.sum(SaleItem.quantity * SaleItem.unit_price).desc())
-            .limit(limit)
+            .join(sale_totals, sale_totals.c.id == SaleItem.sale_id)
         )
+
+        name_by_product: dict[int, str] = {}
+        qty_by_product: dict[int, int] = defaultdict(int)
+        revenue_by_product: dict[int, float] = defaultdict(float)
+        for product_id, name, quantity, unit_price, subtotal, total_amount in result.all():
+            name_by_product[product_id] = name
+            qty_by_product[product_id] += quantity
+            # A sale with a zero subtotal (every line free) has
+            # nothing to prorate a discount against -- keep that
+            # line at face value rather than dividing by zero.
+            discount_ratio = (total_amount / subtotal) if subtotal else 1.0
+            revenue_by_product[product_id] += quantity * unit_price * discount_ratio
+
+        ranked = sorted(revenue_by_product.items(), key=lambda pair: pair[1], reverse=True)
         return [
-            TopProductEntry(product_id=pid, name=name, quantity_sold=int(qty), revenue=revenue)
-            for pid, name, qty, revenue in result.all()
+            TopProductEntry(
+                product_id=product_id,
+                name=name_by_product[product_id],
+                quantity_sold=qty_by_product[product_id],
+                revenue=round(revenue, 2),
+            )
+            for product_id, revenue in ranked[:limit]
         ]
 
     async def top_customers(

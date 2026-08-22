@@ -7,6 +7,7 @@ import {
   YAxis,
   CartesianGrid,
   Legend,
+  LabelList,
 } from 'recharts'
 import type { RevenueTrendOut } from '../../types/api'
 import { useCurrencyFormatter } from '../../lib/currency'
@@ -21,6 +22,11 @@ const PX_PER_POINT = 56
 export function RevenueTrendChart({ data }: { data: RevenueTrendOut }) {
   const formatCurrency = useCurrencyFormatter()
   const hasProfit = data.points.some((p) => p.profit !== null)
+  // Same density threshold as the dots below -- past this many points,
+  // a label on every single one overlaps its neighbours and the line
+  // itself, which is worse than no labels at all. Below it, the top/
+  // bottom margins above were already sized to fit them.
+  const showLabels = data.points.length <= 31
 
   if (data.points.length === 0) {
     return <p className="text-sm text-ink-soft">No sales in this range yet.</p>
@@ -85,6 +91,15 @@ export function RevenueTrendChart({ data }: { data: RevenueTrendOut }) {
             strokeWidth={2}
             dot={data.points.length <= 31}
           >
+            {showLabels && (
+              <LabelList
+                dataKey="revenue"
+                position="top"
+                formatter={(value) => (typeof value === 'number' ? formatCurrency(value) : '')}
+                fill="var(--color-brass)"
+                fontSize={10}
+              />
+            )}
           </Line>
           {hasProfit && (
             <Line
@@ -95,6 +110,15 @@ export function RevenueTrendChart({ data }: { data: RevenueTrendOut }) {
               strokeWidth={2}
               dot={data.points.length <= 31}
             >
+              {showLabels && (
+                <LabelList
+                  dataKey="profit"
+                  position="bottom"
+                  formatter={(value) => (typeof value === 'number' ? formatCurrency(value) : '')}
+                  fill="var(--color-stamp-green)"
+                  fontSize={10}
+                />
+              )}
             </Line>
           )}
         </LineChart>

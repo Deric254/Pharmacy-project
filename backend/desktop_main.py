@@ -87,7 +87,7 @@ def _load_or_create_secrets(data_dir: Path) -> dict[str, str]:
     return generated
 
 
-def _configure_environment(data_dir: Path) -> None:
+def _configure_environment(data_dir: Path, port: int) -> None:
     secrets_values = _load_or_create_secrets(data_dir)
     db_path = data_dir / "pharmacy.db"
 
@@ -104,12 +104,18 @@ def _configure_environment(data_dir: Path) -> None:
     os.environ.setdefault("COOKIE_SECURE", "false")
     os.environ.setdefault("JWT_SECRET_KEY", secrets_values["jwt_secret_key"])
     os.environ.setdefault("ENCRYPTION_KEY", secrets_values["encryption_key"])
-    os.environ.setdefault("CORS_ORIGINS", '["http://127.0.0.1:8000","http://localhost:8000"]')
+    # Built from the actual port this launch is using, not a hardcoded
+    # one -- see main()'s own comment on where `port` now comes from.
+    os.environ.setdefault(
+        "CORS_ORIGINS",
+        json.dumps([f"http://127.0.0.1:{port}", f"http://localhost:{port}"]),
+    )
 
 
 def _run_migrations() -> None:
-    from alembic import command
     from alembic.config import Config
+
+    from alembic import command
 
     if getattr(sys, "frozen", False):
         base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
@@ -179,7 +185,16 @@ def main() -> None:
     print("=" * 50)
     print()
 
-    port = 8000
+    # Electron picks a fresh, OS-assigned free port for every launch
+    # (see getFreePort() in electron/main.js) and passes it here via
+    # PHARMACY_ERP_BACKEND_PORT, so this process never has to guess
+    # what port is actually free, and can never collide with another
+    # system's backend that happens to share this same architecture.
+    # Falls back to 8000 when that env var isn't set at all -- the
+    # raw .exe double-clicked directly, or `python desktop_main.py`
+    # run by hand in dev, where nothing else has already chosen a
+    # port on this process's behalf.
+    port = int(os.environ.get("PHARMACY_ERP_BACKEND_PORT", "8000"))
     # Computed up front, before the already-running check below, so
     # every stage of startup -- including the already-running branch
     # itself -- can be logged to the same file. _app_data_dir() only
@@ -209,7 +224,10 @@ def main() -> None:
             # window instead of the "could not start" dialog it should
             # have been. Fail loudly here so Electron's own error
             # handling in startApp() actually sees it.
-            print(f"[ERROR] Port {port} is still in use by a process Electron's cleanup did not remove.")
+            print(
+                f"[ERROR] Port {port} is still in use by a process "
+                "Electron's cleanup did not remove."
+            )
             raise SystemExit(1)
         # Reaching here means _running_under_electron() is False --
         # the Electron path above already exited via SystemExit(1).
@@ -226,7 +244,7 @@ def main() -> None:
         return
 
     print(f"Data directory: {data_dir}")
-    _configure_environment(data_dir)
+    _configure_environment(data_dir, port)
     _log_stage(data_dir, "environment-configured")
 
     _log_stage(data_dir, "migrations-starting")

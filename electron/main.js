@@ -28,10 +28,14 @@ const { app, BrowserWindow, dialog, session, ipcMain, shell } = require('electro
 const path = require('node:path')
 const fs = require('node:fs')
 const http = require('node:http')
+const net = require('node:net')
 const { spawn } = require('node:child_process')
 
-const BACKEND_PORT = 8000
-const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`
+// No longer a fixed constant -- see getFreePort(). Set once at the
+// start of startApp(), before the backend is spawned, and read by
+// every function below that needs to talk to the backend.
+let backendPort = null
+let backendUrl = null
 const BACKEND_STARTUP_TIMEOUT_MS = 30000
 
 // Pinned explicitly, not left to Electron's defaults. Two real,
@@ -165,7 +169,14 @@ function startBackend() {
     // Tells desktop_main.py not to open a system browser tab -- this
     // window is already showing the app. Set on both paths (packaged
     // and dev) since either one is Electron spawning the backend.
-    const backendEnv = { ...process.env, PHARMACY_ERP_ELECTRON: '1' }
+    // PHARMACY_ERP_BACKEND_PORT tells it which OS-assigned port
+    // getFreePort() already claimed for this launch, so both sides
+    // agree on the same port without either one hardcoding it.
+    const backendEnv = {
+      ...process.env,
+      PHARMACY_ERP_ELECTRON: '1',
+      PHARMACY_ERP_BACKEND_PORT: String(backendPort),
+    }
 
     if (app.isPackaged) {
       backendProcess = spawn(packagedBackendPath(), [], {
@@ -188,6 +199,7 @@ function startBackend() {
     let spawned = false
     backendProcess.once('spawn', () => {
       spawned = true
+      writeBackendPidFile(backendProcess.pid)
       // Resolve WITH the process reference itself, not void -- the
       // caller must be able to watch this exact process for its exit
       // event directly, rather than re-reading the module-level
@@ -218,32 +230,24 @@ function startBackend() {
 }
 
 /**
- * Polls the backend port until nothing answers on it, instead of
- * trusting a fixed delay after clearAnyLeftoverBackendProcess. A
- * connection error (ECONNREFUSED) is the actual, verifiable signal
- * that the port is free -- an empty socket is not the same as "the OS
- * has definitely released this by now", which a fixed sleep can only
- * ever guess at.
+ * Asks the OS for a currently-unused TCP port instead of assuming
+ * one. Binding to port 0 is the standard way to ask the OS to pick --
+ * it will never hand back a port already bound by anything else on
+ * the machine, which is what makes this immune to collisions with any
+ * other system on the same computer, including ones built on this
+ * exact same architecture (same entrypoint filename, same framework,
+ * even the same port this app used to hardcode). The probe listener
+ * only exists to learn the number; it's closed immediately afterward
+ * so the real backend process can bind that same port itself.
  */
-function waitForPortFree(port, timeoutMs) {
-  const deadline = Date.now() + timeoutMs
-  return new Promise((resolve) => {
-    function attempt() {
-      const req = http.get(`http://127.0.0.1:${port}/health`, (res) => {
-        res.resume()
-        if (Date.now() > deadline) {
-          // Still answering after the timeout -- give up waiting and
-          // let startBackend()/desktop_main.py's own already-running
-          // check be the next, louder line of defense instead of
-          // hanging startup indefinitely on a port that never clears.
-          resolve()
-          return
-        }
-        setTimeout(attempt, 100)
-      })
-      req.on('error', () => resolve()) // connection refused == port is free
-    }
-    attempt()
+function getFreePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer()
+    probe.on('error', reject)
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = probe.address()
+      probe.close(() => resolve(port))
+    })
   })
 }
 
@@ -275,7 +279,7 @@ function waitForBackendHealthy(processToWatch = backendProcess) {
 
     function attempt() {
       if (settled) return
-      const req = http.get(`${BACKEND_URL}/health`, (res) => {
+      const req = http.get(`${backendUrl}/health`, (res) => {
         res.resume() // drain, don't leak the socket
         if (res.statusCode === 200) {
           finishResolve()
@@ -366,7 +370,7 @@ function createWindow() {
     }
   })
 
-  mainWindow.loadURL(BACKEND_URL)
+  mainWindow.loadURL(backendUrl)
 
   mainWindow.on('closed', () => {
     mainWindow = null
@@ -374,59 +378,98 @@ function createWindow() {
 }
 
 /**
- * Unconditionally clears anything listening on the backend's port
- * before every single launch -- not a health check, not "is this a
- * legitimate previous instance", just a guaranteed clean slate every
- * time, regardless of how a leftover process got there. Electron's
- * own single-instance-lock (see the top of this file) already
- * guarantees no other copy of THIS app is legitimately running by the
- * time this runs -- so anything still on this port at this exact
- * moment is, by definition, either a leftover from an imperfect past
- * shutdown or an unrelated program, never something worth preserving.
- * A user should never have to open Task Manager to make this app
- * work; this exists so they never have to.
- *
- * Both the port-based check and the name-based check run inside this
- * ONE PowerShell invocation, not two separate process spawns. They
- * used to be two separate functions (forceClearPort, spawning
- * powershell.exe; forceKillOrphanedBackendByName, spawning
- * taskkill.exe), each paying its own real process-startup cost on
- * literally every launch, whether or not anything actually needed
- * cleaning up -- for the common case where no orphan exists at all,
- * that was pure overhead paid twice, unconditionally, every single
- * time. Combining them into one script cuts that cost in half without
- * losing any of the actual protection: this still catches a leftover
- * process whether it's found by the port it's bound to or by its
- * exact image name.
- *
- * Exact name match only, never a wildcard -- 'Pharmacy-ERP' (the
- * backend) is a different string from 'Pharmacy ERP' (the Electron
- * shell itself, from productName in package.json), so this can never
- * target the very process running this code. Confirmed by direct
- * comparison, not assumption, since killing the wrong process here
- * would be far worse than the orphan this exists to prevent.
+ * Path to the file recording the PID of the backend process THIS app
+ * spawned last time it ran. Written immediately after every
+ * successful spawn (see startBackend()) and cleared on every clean
+ * shutdown (see stopBackend()) -- so if it's still present on the
+ * NEXT launch, the previous session ended without running its own
+ * cleanup at all (a crash, a force-kill, a Windows shutdown that
+ * didn't give the app time to close normally), and whatever process
+ * that exact PID pointed to may still be alive.
  */
-function clearAnyLeftoverBackendProcess(port) {
+function backendPidFilePath() {
+  return path.join(app.getPath('userData'), 'backend.pid')
+}
+
+function writeBackendPidFile(pid) {
+  try {
+    fs.writeFileSync(backendPidFilePath(), String(pid), 'utf8')
+  } catch (err) {
+    logDesktopDiagnostic(`write-backend-pid-failed ${err.message}`)
+  }
+}
+
+function clearBackendPidFile() {
+  try {
+    fs.rmSync(backendPidFilePath(), { force: true })
+  } catch (err) {
+    logDesktopDiagnostic(`clear-backend-pid-failed ${err.message}`)
+  }
+}
+
+/**
+ * Kills the exact backend process this app itself spawned and
+ * recorded last time it ran -- and ONLY that one recorded PID. Never
+ * anything found by scanning for a port number or an image name.
+ *
+ * This replaces the previous approach, which matched ANY process
+ * listening on the backend's port, OR named 'Pharmacy-ERP.exe', OR
+ * running a command line containing 'desktop_main.py'. That was safe
+ * only for as long as this exact port/filename/entrypoint combination
+ * was unique on the machine -- it is not: every system built on this
+ * same Electron+FastAPI+desktop_main.py architecture shares that
+ * pattern, so the old check could -- and did -- match and kill a
+ * completely different app's backend, not just this app's own
+ * leftovers, whenever both happened to be present on the same
+ * machine.
+ *
+ * Tracking one exact, previously-recorded PID makes that structurally
+ * impossible: this can never find a process it didn't itself spawn on
+ * a previous run, regardless of what port or process name any other
+ * app on the machine happens to use -- including apps built later,
+ * after this fix, that nobody has thought of yet.
+ *
+ * The recorded PID is still confirmed by process name before being
+ * killed, as a last identity check -- not because the number alone
+ * usually isn't enough, but because Windows does eventually reuse
+ * PIDs, and a stale recording pointing at a since-reused number must
+ * never take down whatever unrelated process now happens to hold it.
+ * This check runs only against the one already-selected PID, never as
+ * a system-wide scan.
+ */
+function killPreviousBackendIfAny() {
   return new Promise((resolve) => {
     if (process.platform !== 'win32') {
+      resolve()
+      return
+    }
+    let pid
+    try {
+      pid = Number.parseInt(fs.readFileSync(backendPidFilePath(), 'utf8').trim(), 10)
+    } catch {
+      resolve() // no pid file recorded -- nothing to clean up
+      return
+    }
+    if (!Number.isInteger(pid) || pid <= 0) {
+      clearBackendPidFile()
       resolve()
       return
     }
     const ps = spawn('powershell.exe', [
       '-NoProfile',
       '-Command',
-      `$ids = @(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | ` +
-        `Select-Object -ExpandProperty OwningProcess); ` +
-        `Get-CimInstance Win32_Process | Where-Object { ` +
-        `($_.Name -eq 'Pharmacy-ERP.exe' -or $_.ProcessId -in $ids -and ` +
-        `$_.CommandLine -match 'desktop_main\\.py') } | ` +
-        `ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`,
+      `Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | ` +
+        `Where-Object { $_.Name -eq 'Pharmacy-ERP.exe' -or $_.CommandLine -match 'desktop_main\\.py' } | ` +
+        `ForEach-Object { Stop-Process -Id ${pid} -Force -ErrorAction SilentlyContinue }`,
     ])
     ps.on('error', (err) => {
-      logDesktopDiagnostic(`clear-leftover-backend-failed ${err.message}`)
-      resolve() // never let this block startup -- worst case, the existing health-check path still applies
+      logDesktopDiagnostic(`kill-previous-backend-failed ${err.message}`)
+      resolve() // never let this block startup
     })
-    ps.on('exit', () => resolve())
+    ps.on('exit', () => {
+      clearBackendPidFile()
+      resolve()
+    })
   })
 }
 
@@ -512,25 +555,18 @@ async function startApp() {
     })
 
     ensureDevFrontendBuilt()
-    // Catches both a leftover process still bound to the port AND one
-    // found only by exact image name (crashed or hung before ever
-    // binding), in a SINGLE process spawn -- see the function's own
-    // comment for why this used to be two separate spawns (one
-    // powershell.exe, one taskkill.exe) on every single launch, paying
-    // real process-startup overhead twice, unconditionally, even on
-    // the common case where nothing needed cleaning up at all.
-    await clearAnyLeftoverBackendProcess(BACKEND_PORT)
-    // A killed process's port isn't always instantly free at the OS
-    // level -- Stop-Process returning doesn't guarantee the socket
-    // has been released yet. Actively confirming the port has gone
-    // quiet (instead of trusting a fixed sleep) is what actually
-    // closes that gap: a fixed delay is either too short on a slow
-    // machine (the exact failure this exists to prevent) or wasted
-    // time on a fast one. Capped at 5s so a port that's stuck for an
-    // unrelated reason can't hang startup forever -- startBackend()
-    // and desktop_main.py's own _already_running_instance check are
-    // still there as the next line of defense either way.
-    await waitForPortFree(BACKEND_PORT, 5000)
+    // Cleans up only the exact process this app itself spawned last
+    // time it ran, if that session ended without cleaning up after
+    // itself (crash, force-kill, abrupt shutdown) -- see
+    // killPreviousBackendIfAny()'s own comment for why this is no
+    // longer a port/name/commandline scan.
+    await killPreviousBackendIfAny()
+    // A fresh, OS-assigned port for this launch -- see getFreePort().
+    // Nothing else on the machine can already be bound to it, so
+    // there is nothing to wait for here the way the old fixed-port
+    // design had to wait for a just-killed process's port to clear.
+    backendPort = await getFreePort()
+    backendUrl = `http://127.0.0.1:${backendPort}`
     const spawnedBackend = await startBackend()
     // These two are independent of each other -- clearing session
     // storage never depends on the backend being up, it only needs
@@ -687,14 +723,19 @@ function stopBackend() {
   if (process.platform === 'win32' && processToKill.pid) {
     return new Promise((resolve) => {
       const kill = spawn('taskkill', ['/pid', String(processToKill.pid), '/t', '/f'])
-      kill.on('exit', () => resolve())
+      kill.on('exit', () => {
+        clearBackendPidFile()
+        resolve()
+      })
       kill.on('error', (err) => {
         logDesktopDiagnostic(`taskkill-failed ${err.message}`)
         processToKill.kill()
+        clearBackendPidFile()
         resolve()
       })
     })
   }
   processToKill.kill()
+  clearBackendPidFile()
   return Promise.resolve()
 }

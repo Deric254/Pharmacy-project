@@ -2,7 +2,6 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  LabelList,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -70,16 +69,6 @@ export function ProductRevenueChart({ data }: { data: TopProductEntry[] }) {
           }}
         />
         <Bar dataKey="revenue" name="Revenue" fill="var(--color-brass)" radius={[0, 3, 3, 0]}>
-          {/* The whole point of `rightMargin` above is reserving room
-              for this label past the end of each bar -- without it,
-              the chart has no data label at all, just bare bars. */}
-          <LabelList
-            dataKey="revenue"
-            position="right"
-            formatter={(value: number) => formatCurrency(value)}
-            fill="var(--color-ink)"
-            fontSize={11}
-          />
         </Bar>
       </BarChart>
     </ResponsiveContainer>

@@ -358,8 +358,68 @@ function createWindow() {
     }
   }, 10000)
 
-  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
-    logDesktopDiagnostic(`did-fail-load ${errorCode} ${errorDescription} ${validatedURL}`)
+  // Previously logged only -- did-fail-load fires with no dialog and
+  // no retry, so if the backend's own /health check had already passed
+  // (waitForBackendHealthy in startApp()) but the actual page
+  // navigation then failed for some separate reason, the result was a
+  // window that shows itself (via ready-to-show or the 10s fallback
+  // above) with nothing ever loaded into it -- a real, previously
+  // unhandled gap between "backend is up" and "the page actually
+  // loaded", not a hypothetical one.
+  //
+  // -3 (ERR_ABORTED) is deliberately excluded: it fires routinely for
+  // benign, expected navigation (a redirect superseded by another
+  // load, the page's own client-side routing) and is not evidence of
+  // a real failure -- treating it as one would retry/alert on normal
+  // operation, not just genuine faults.
+  //
+  // isMainFrame is checked because this event also fires for failed
+  // sub-resource loads (a font, an image) inside an otherwise
+  // perfectly working page; only a failed top-level navigation is
+  // "the app never actually appeared" -- the failure this fix exists
+  // to catch.
+  let didFailLoadRetried = false
+  mainWindow.webContents.on(
+    'did-fail-load',
+    (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      logDesktopDiagnostic(
+        `did-fail-load ${errorCode} ${errorDescription} ${validatedURL} isMainFrame=${isMainFrame}`,
+      )
+      if (!isMainFrame || errorCode === -3) return
+
+      if (!didFailLoadRetried) {
+        // One automatic retry first -- a transient failure (the
+        // backend answering /health a moment before it's fully ready
+        // to serve the actual page, a brief loopback hiccup) shouldn't
+        // need a person to manually restart the app at all.
+        didFailLoadRetried = true
+        setTimeout(() => {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.loadURL(backendUrl)
+          }
+        }, 500)
+        return
+      }
+
+      // Retried once and it failed again -- this is exactly the
+      // "double-click, blank window" report, made visible instead of
+      // silent. A person seeing this dialog knows something is wrong
+      // and can report it with the real error, instead of assuming the
+      // app is simply broken or slow.
+      dialog.showErrorBox(
+        'Pharmacy ERP could not load',
+        `The app window failed to load (${errorDescription}).\n\n` +
+          'Try closing and reopening the app. If this keeps happening, ' +
+          'contact whoever set this up for you with this exact message.',
+      )
+    },
+  )
+  // Resets the retry flag on a genuine success so a later, unrelated
+  // failure (not expected in this single-page app today, but not
+  // impossible either) gets its own fresh retry rather than going
+  // straight to the dialog because of an earlier, already-resolved one.
+  mainWindow.webContents.on('did-finish-load', () => {
+    didFailLoadRetried = false
   })
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     logDesktopDiagnostic(`render-process-gone ${JSON.stringify(details)}`)
@@ -689,6 +749,17 @@ ipcMain.handle('download-update-installer', (_event, url) => {
 
 function stopBackend() {
   if (!backendProcess || backendProcess.killed) {
+    // The backend was already gone by the time this ran (it crashed,
+    // or its own 'exit' handler already nulled backendProcess out
+    // before this function got called) -- but the pid file recorded
+    // at spawn time is still sitting there regardless of *how* the
+    // process ended. Previously left uncleared on this exact path:
+    // the next launch's killPreviousBackendIfAny() would then find
+    // that stale pid, spawn powershell.exe to investigate a process
+    // that's already gone, and pay that real startup cost for
+    // nothing -- not a rare crash-recovery cost, but a routine one on
+    // every ordinary close that happened to hit this branch.
+    clearBackendPidFile()
     backendProcess = null
     return Promise.resolve()
   }

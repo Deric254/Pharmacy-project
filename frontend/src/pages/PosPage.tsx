@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { customersApi, productsApi, salesApi } from '../api/domain'
+import { arrayBufferToBase64 } from '../lib/base64'
 import { useCurrencyFormatter } from '../lib/currency'
 import { calculateTotal, cartSignature, type CartLine } from '../lib/cartMath'
 import type { CustomerOut, PaymentMethod, ProductOut, SaleOut } from '../types/api'
@@ -664,9 +665,12 @@ function Receipt({ sale, onNewSale }: { sale: SaleOut; onNewSale: () => void }) 
         const electronPrint = window.electronAPI?.printReceiptSilently
         if (electronPrint) {
           const buffer = await blob.arrayBuffer()
-          const base64 = btoa(
-            new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), ''),
-          )
+          // arrayBufferToBase64, not a byte-at-a-time reduce() -- see
+          // lib/base64.ts for why that was measurably slow on larger
+          // receipts (a real, confirmed contributor to slow checkout
+          // printing, alongside the logo-shrinking fix in
+          // business_config_service.py).
+          const base64 = arrayBufferToBase64(buffer)
           await electronPrint(base64)
           return
         }

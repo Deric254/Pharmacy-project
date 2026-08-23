@@ -178,6 +178,31 @@ def _already_running_instance(port: int) -> bool:
         return False
 
 
+def _port_is_available(port: int) -> bool:
+    """
+    A real bind-and-release probe, not a guess -- this exists because
+    uvicorn.run() does not raise a catchable OSError when its own bind
+    fails. Verified directly: forcing a real port conflict and running
+    this file exactly as Electron spawns it (stdin/stdout closed)
+    showed uvicorn logging its own "address already in use" line
+    internally and exiting the process -- the `except OSError` block
+    further down was never reached, so the specific, friendly message
+    it exists to show never appeared, on either launch path. Checking
+    here, before ever calling uvicorn.run(), is the only way that
+    message reliably reaches anyone.
+    """
+    import socket
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind(("0.0.0.0", port))
+        return True
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+
 def main() -> None:
     print("=" * 50)
     print(" Pharmacy ERP")
@@ -242,6 +267,23 @@ def main() -> None:
             input("Press Enter to close this window...")
         return
 
+    if not _port_is_available(port):
+        # Reaching here means _already_running_instance(port) already
+        # confirmed this isn't a healthy copy of this same app -- so
+        # whatever is holding this port is a genuinely different
+        # process. See _port_is_available's own docstring for why this
+        # check exists instead of relying on uvicorn.run() to raise.
+        _log_stage(data_dir, f"port-unavailable {port}")
+        print()
+        print("=" * 50)
+        print(f" Something else on this computer is already using port {port},")
+        print(" and it isn't another copy of Pharmacy ERP (already checked).")
+        print(" Close whatever that is, or restart your computer, then try again.")
+        print("=" * 50)
+        with contextlib.suppress(EOFError):
+            input("Press Enter to close this window...")
+        raise SystemExit(1)
+
     print(f"Data directory: {data_dir}")
     _configure_environment(data_dir, port)
     _log_stage(data_dir, "environment-configured")
@@ -280,7 +322,8 @@ def main() -> None:
             print(" and it isn't another copy of Pharmacy ERP (already checked).")
             print(" Close whatever that is, or restart your computer, then try again.")
             print("=" * 50)
-            input("Press Enter to close this window...")
+            with contextlib.suppress(EOFError):
+                input("Press Enter to close this window...")
             raise SystemExit(1) from exc
         raise
 

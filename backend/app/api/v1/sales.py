@@ -13,10 +13,11 @@ from app.models.customer import Customer
 from app.models.sale import Sale
 from app.models.user import User
 from app.schemas.refund import RefundOut, RefundRequest
-from app.schemas.sale import SaleCreate, SaleOut, SalePage
+from app.schemas.sale import SaleCreate, SaleOut
 from app.services.business_config_service import BusinessConfigService
 from app.services.receipt_service import generate_receipt_pdf
 from app.services.refund_service import RefundService
+from app.services.report_export_service import ExportFormat, build_export_response
 from app.services.sale_service import SaleService
 
 router = APIRouter(prefix="/sales", tags=["sales"])
@@ -45,15 +46,37 @@ async def create_sale(
     return await SaleService(db).create_sale(payload, cashier)
 
 
-@router.get("", response_model=SalePage, dependencies=[Depends(_require_sales_create_or_refund)])
+@router.get("", dependencies=[Depends(_require_sales_create_or_refund)])
 async def list_sales(
     db: Annotated[AsyncSession, Depends(get_db)],
     start_date: date | None = None,
     end_date: date | None = None,
     limit: int = 50,
     offset: int = 0,
-) -> SalePage:
-    return await SaleService(db).list_sales(start_date, end_date, limit, offset)
+    export: ExportFormat = "json",
+) -> object:
+    service = SaleService(db)
+    if export != "json":
+        # Every matching sale for the filter, not just the page
+        # currently on screen -- see list_all_for_export's own
+        # docstring for why exporting the current page would silently
+        # under-report.
+        entries = await service.list_all_for_export(start_date, end_date)
+        headers = ["ID", "Date/time", "Cashier", "Customer", "Items", "Total"]
+        rows: list[list[object]] = [
+            [
+                e.id,
+                e.created_at.isoformat(),
+                e.cashier_name,
+                e.customer_name or "",
+                e.item_count,
+                e.total_amount,
+            ]
+            for e in entries
+        ]
+        return build_export_response(export, entries, "Sales", headers, rows)
+
+    return await service.list_sales(start_date, end_date, limit, offset)
 
 
 @router.get(

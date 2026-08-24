@@ -280,6 +280,60 @@ class SaleService:
         ]
         return SalePage(entries=entries, total=total, limit=limit, offset=offset)
 
+    async def list_all_for_export(
+        self,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> list[SaleListItemOut]:
+        """
+        Every matching sale, not one page of them -- an export silently
+        capped at the same page limit as the on-screen list would be a
+        real accuracy gap, not a UI nicety. Same filters and shape as
+        list_sales() above, just without limit/offset, mirroring
+        AuditLogService.list_all_for_export's own reasoning for why a
+        paginated listing needs a separate, unpaginated export query
+        rather than exporting whatever page happens to be on screen.
+        """
+        item_count_subquery = (
+            select(func.count(SaleItem.id))
+            .where(SaleItem.sale_id == Sale.id)
+            .correlate(Sale)
+            .scalar_subquery()
+        )
+        query = (
+            select(
+                Sale.id,
+                User.full_name.label("cashier_name"),
+                Customer.name.label("customer_name"),
+                Sale.total_amount,
+                Sale.created_at,
+                item_count_subquery.label("item_count"),
+            )
+            .join(User, User.id == Sale.cashier_user_id)
+            .outerjoin(Customer, Customer.id == Sale.customer_id)
+            .order_by(Sale.created_at.desc(), Sale.id.desc())
+        )
+
+        if start_date is not None:
+            utc_start, _ = await local_day_bounds_utc(self.db, start_date)
+            query = query.where(Sale.created_at >= utc_start)
+        if end_date is not None:
+            _, utc_end_exclusive = await local_day_bounds_utc(self.db, end_date)
+            query = query.where(Sale.created_at < utc_end_exclusive)
+
+        result = await self.db.execute(query)
+        return [
+            SaleListItemOut(
+                id=row.id,
+                cashier_name=row.cashier_name,
+                customer_name=row.customer_name,
+                item_count=row.item_count,
+                total_amount=row.total_amount,
+                created_at=row.created_at,
+            )
+            for row in result.all()
+        ]
+
     async def _load_active_products(self, product_ids: list[int]) -> dict[int, Product]:
         result = await self.db.execute(
             select(Product).where(Product.id.in_(product_ids), Product.deleted_at.is_(None))

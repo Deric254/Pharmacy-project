@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { salesApi } from '../api/domain'
 import { useCurrencyFormatter } from '../lib/currency'
-import { ApiError } from '../api/client'
+import { ApiError, downloadExport } from '../api/client'
 import { Modal } from '../components/Modal'
 import type {
   PaymentMethod,
@@ -51,11 +51,21 @@ export function SalesPage() {
 
   return (
     <div className="p-6">
-      <h1 className="mb-1 font-display text-2xl text-ink">Sales</h1>
-      <p className="mb-6 text-sm text-ink-soft">
-        Every sale that's gone through the register, newest first. Open one to see exactly what
-        was sold, or to process a refund.
-      </p>
+      <div className="mb-6 flex items-start justify-between">
+        <div>
+          <h1 className="mb-1 font-display text-2xl text-ink">Sales</h1>
+          <p className="text-sm text-ink-soft">
+            Every sale that's gone through the register, newest first. Open one to see exactly
+            what was sold, or to process a refund.
+          </p>
+        </div>
+        <button
+          onClick={() => void downloadExport('/sales', {}, 'excel')}
+          className="border border-rule px-3 py-1.5 text-sm text-ink-soft hover:border-brass"
+        >
+          Export to Excel
+        </button>
+      </div>
 
       {error && (
         <p role="alert" className="mb-4 border border-stamp-red-soft bg-stamp-red-soft/40 px-3 py-2 text-sm text-stamp-red">

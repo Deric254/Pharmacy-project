@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { productsApi, purchaseOrdersApi, suppliersApi } from '../api/domain'
 import { useAuthStore } from '../auth/store'
 import { useCurrencyFormatter } from '../lib/currency'
-import { ApiError } from '../api/client'
+import { ApiError, downloadExport } from '../api/client'
 import { Modal } from '../components/Modal'
 import type {
   ImportRowError,
@@ -238,6 +238,14 @@ function SuppliersModal({
 
   return (
     <Modal title="Suppliers" onClose={onClose}>
+      <div className="mb-4 flex justify-end">
+        <button
+          onClick={() => void downloadExport('/suppliers', {}, 'excel')}
+          className="border border-rule px-3 py-1.5 text-sm text-ink-soft hover:border-brass"
+        >
+          Export to Excel
+        </button>
+      </div>
       <form onSubmit={handleCreate} className="mb-4 flex gap-2">
         <input
           value={name}

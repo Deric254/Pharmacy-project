@@ -8,6 +8,7 @@ from app.core.database import get_db
 from app.core.rbac import get_current_user, require_permission
 from app.models.user import User
 from app.schemas.supplier import PaymentRecordRequest, SupplierCreate, SupplierOut
+from app.services.report_export_service import ExportFormat, build_export_response
 from app.services.supplier_service import SupplierService
 
 router = APIRouter(prefix="/suppliers", tags=["suppliers"])
@@ -26,13 +27,27 @@ def _require_purchasing_access(current_user: Annotated[User, Depends(get_current
     return current_user
 
 
-@router.get(
-    "",
-    response_model=list[SupplierOut],
-    dependencies=[Depends(_require_purchasing_access)],
-)
-async def list_suppliers(db: Annotated[AsyncSession, Depends(get_db)]) -> list[SupplierOut]:
-    return await SupplierService(db).list_all()
+@router.get("", dependencies=[Depends(_require_purchasing_access)])
+async def list_suppliers(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    export: ExportFormat = "json",
+) -> object:
+    suppliers = await SupplierService(db).list_all()
+    if export == "json":
+        return suppliers
+    headers = ["ID", "Name", "Phone", "Email", "Address", "Balance owed"]
+    rows: list[list[object]] = [
+        [
+            s.id,
+            s.name,
+            s.contact_phone or "",
+            s.contact_email or "",
+            s.address or "",
+            s.balance_owed,
+        ]
+        for s in suppliers
+    ]
+    return build_export_response(export, suppliers, "Suppliers", headers, rows)
 
 
 @router.post(

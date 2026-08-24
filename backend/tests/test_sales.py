@@ -669,6 +669,81 @@ class TestListSales:
         assert r.status_code == 200
 
 
+class TestSalesExport:
+    async def test_json_export_is_still_the_default(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        r = await client.get("/api/v1/sales", headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("application/json")
+
+    async def test_excel_export_returns_a_real_spreadsheet(self, client, owner_user):
+        product_id = await _make_product_with_batch(price=10.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 2}],
+                "payments": [{"method": "CASH", "amount": 20.0}],
+            },
+            headers=headers,
+        )
+
+        r = await client.get("/api/v1/sales?export=excel", headers=headers)
+        assert r.status_code == 200
+        assert (
+            r.headers["content-type"]
+            == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        assert len(r.content) > 0
+
+        import io
+        import zipfile
+
+        assert zipfile.is_zipfile(io.BytesIO(r.content))
+
+    async def test_export_includes_every_matching_sale_not_just_one_page(
+        self, client, owner_user
+    ):
+        """
+        The exact gap a naive "just add export to the paginated
+        endpoint" fix would leave: list_sales() caps at a page size,
+        so export must go through list_all_for_export() instead, or a
+        business with more sales than one page would silently get a
+        truncated export with no indication anything was cut off.
+        """
+        product_id = await _make_product_with_batch(price=10.0, qty=20)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        for _ in range(3):
+            r = await client.post(
+                "/api/v1/sales",
+                json={
+                    "items": [{"product_id": product_id, "quantity": 1}],
+                    "payments": [{"method": "CASH", "amount": 10.0}],
+                },
+                headers=headers,
+            )
+            assert r.status_code == 201, r.text
+
+        # A page size smaller than the real number of sales -- if
+        # export reused list_sales()'s own limit/offset, this would
+        # cap the export at 2 rows instead of the real 3.
+        r = await client.get(
+            "/api/v1/sales?export=excel&limit=2&offset=0", headers=headers
+        )
+        assert r.status_code == 200
+
+        import io
+
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(io.BytesIO(r.content))
+        sheet = workbook.active
+        # header row + 3 real sales, not header row + 2
+        assert sheet.max_row == 4
+
+
 class TestExpiredStockNeverSold:
     """
     The actual gap this closes: FEFO correctly ordered by soonest-

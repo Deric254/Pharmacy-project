@@ -68,6 +68,36 @@ class TestSupplierCRUD:
         assert r.status_code == 403
 
 
+class TestSupplierExport:
+    async def test_json_export_is_still_the_default(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        r = await client.get(
+            "/api/v1/suppliers", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("application/json")
+
+    async def test_excel_export_returns_a_real_spreadsheet(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        await client.post(
+            "/api/v1/suppliers", json={"name": "Exportable Supplier"}, headers=headers
+        )
+
+        r = await client.get("/api/v1/suppliers?export=excel", headers=headers)
+        assert r.status_code == 200
+        assert (
+            r.headers["content-type"]
+            == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        assert len(r.content) > 0
+
+        import io
+        import zipfile
+
+        assert zipfile.is_zipfile(io.BytesIO(r.content))
+
+
 class TestRecordPayment:
     """
     Real gap this closes: record_payment had zero dedicated test

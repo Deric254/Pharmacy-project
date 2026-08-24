@@ -440,3 +440,54 @@ class TestLifetimeValue:
             "/api/v1/customers/lifetime-value", headers={"Authorization": f"Bearer {token}"}
         )
         assert r.status_code == 403
+
+    async def test_lifetime_value_nets_out_refunds(self, client, owner_user):
+        """
+        A customer who bought 100 worth and then got 40 of it refunded
+        has a real lifetime value of 60, not 100 -- the refunded money
+        left the till, it can't still count as spend. This is the exact
+        "refund happens, money remains" bug: lifetime_value used to be a
+        flat SUM(Sale.total_amount) with no refund subtraction at all.
+        """
+        product_id = await _make_product_with_batch(price=50.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        customer = (
+            await client.post(
+                "/api/v1/customers",
+                json={"name": "Refunding Customer", "phone": "0700444444"},
+                headers=headers,
+            )
+        ).json()
+
+        sale_resp = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 2}],
+                "payments": [{"method": "CASH", "amount": 100.0}],
+                "customer_id": customer["id"],
+            },
+            headers=headers,
+        )
+        assert sale_resp.status_code == 201, sale_resp.text
+        sale = sale_resp.json()
+        sale_item = sale["items"][0]
+
+        refund_resp = await client.post(
+            f"/api/v1/sales/{sale['id']}/refunds",
+            json={
+                "reason": "CUSTOMER_RETURN",
+                "method": "CASH",
+                "items": [{"sale_item_id": sale_item["id"], "quantity": 1, "restock": True}],
+            },
+            headers=headers,
+        )
+        assert refund_resp.status_code == 201, refund_resp.text
+        assert refund_resp.json()["total_amount"] == 50.0
+
+        r = await client.get("/api/v1/customers/lifetime-value", headers=headers)
+        assert r.status_code == 200
+        entry = next(e for e in r.json()["entries"] if e["name"] == "Refunding Customer")
+        assert entry["lifetime_value"] == 50.0  # 100 sold - 50 refunded
+        assert entry["sale_count"] == 1  # a refund doesn't undo the sale itself

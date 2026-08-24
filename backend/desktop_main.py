@@ -236,11 +236,12 @@ def main() -> None:
     if _already_running_instance(port):
         _log_stage(data_dir, "already-running-instance-detected")
         if _running_under_electron():
-            # Electron already killed anything on this port before
-            # spawning this process (see clearAnyLeftoverBackendProcess
-            # in main.js) -- so if something is still answering here,
-            # it is NOT a legitimate "already running" instance, it's
-            # exactly the leftover that cleanup failed to remove.
+            # Electron already swept away every leftover copy of this
+            # app's own backend before spawning this process (see
+            # killPreviousBackendIfAny in main.js) -- so if something is
+            # still answering here, it is NOT a legitimate "already
+            # running" instance, it's exactly the leftover that cleanup
+            # failed to remove.
             # Deferring peacefully to it (the old behavior) made
             # Electron's health check pass against an unaccounted-for
             # zombie process -- possibly an old/broken build -- which

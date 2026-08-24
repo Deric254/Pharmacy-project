@@ -29,6 +29,7 @@ from app.models.customer import Customer
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
 from app.models.purchase_order import PurchaseOrderItem
+from app.models.refund import Refund, RefundItem
 from app.models.sale import Sale, SaleItem
 from app.models.stock_take import StockTake, StockTakeStatus
 from app.schemas.reports import (
@@ -66,33 +67,47 @@ class ReportService:
         self, start_date: date, end_date: date, group_by: str = "day"
     ) -> SalesSummaryOut:
         sales = await self._sales_in_range(start_date, end_date)
+        # Refunds are fetched by their OWN created_at, not the created_at
+        # of the sale they're against -- a refund processed today against
+        # last week's sale is real money leaving the till TODAY, not a
+        # rewrite of last week's already-closed total. Bucketed and netted
+        # against revenue below so a refunded sale doesn't leave stale
+        # money sitting in whatever period it reports as "revenue".
+        refunds = await self._refunds_in_range(start_date, end_date)
         tz = await get_business_timezone(self.db)
 
-        buckets: dict[str, list[Sale]] = defaultdict(list)
-        for sale in sales:
+        def bucket_key(dt: datetime) -> str:
             # created_at is stored UTC; convert to the business's own
             # local time via astimezone(), which resolves DST using
             # THIS row's own date -- not a single offset computed once
-            # for the whole request -- or a sale made early in the
-            # local day would still group under the UTC day before,
-            # even though _sales_in_range's own filter is now
-            # timezone-correct.
-            local_created_at = sale.created_at.replace(tzinfo=UTC).astimezone(tz)
-            key = (
-                local_created_at.strftime("%Y-%m-%d")
-                if group_by == "day"
-                else local_created_at.strftime("%Y-%m")
-            )
-            buckets[key].append(sale)
+            # for the whole request -- or a row made early in the
+            # local day would still group under the UTC day before.
+            local_dt = dt.replace(tzinfo=UTC).astimezone(tz)
+            return local_dt.strftime("%Y-%m-%d") if group_by == "day" else local_dt.strftime("%Y-%m")
+
+        revenue_by_period: dict[str, float] = defaultdict(float)
+        discount_by_period: dict[str, float] = defaultdict(float)
+        count_by_period: dict[str, int] = defaultdict(int)
+
+        for sale in sales:
+            key = bucket_key(sale.created_at)
+            revenue_by_period[key] += sale.total_amount
+            discount_by_period[key] += sale.discount_amount
+            count_by_period[key] += 1
+
+        for refund in refunds:
+            # Netted into revenue only -- sale_count and discount stay
+            # tied to actual sales made, a refund isn't a sale.
+            revenue_by_period[bucket_key(refund.created_at)] -= refund.total_amount
 
         entries = [
             SalesSummaryEntry(
                 period=period,
-                sale_count=len(bucket_sales),
-                total_revenue=sum(s.total_amount for s in bucket_sales),
-                total_discount=sum(s.discount_amount for s in bucket_sales),
+                sale_count=count_by_period.get(period, 0),
+                total_revenue=revenue_by_period[period],
+                total_discount=discount_by_period.get(period, 0.0),
             )
-            for period, bucket_sales in sorted(buckets.items())
+            for period in sorted(revenue_by_period.keys())
         ]
 
         return SalesSummaryOut(
@@ -115,6 +130,26 @@ class ReportService:
             )
         )
         total_cost = float(cost_result.scalar_one())
+
+        # A unit the customer returned that went back onto the shelf
+        # (RefundItem.restocked) is no longer actually sold -- its cost
+        # must come back out of COGS for the period the REFUND happened
+        # in, or this report keeps charging cost for stock that is
+        # physically sitting back in inventory. A non-restocked refund
+        # (damaged/expired) keeps its original cost as a real loss --
+        # nothing to reverse there, same restocked flag refund_service.py
+        # already uses to decide whether to touch qty_remaining at all.
+        cost_reversal_result = await self.db.execute(
+            select(func.coalesce(func.sum(RefundItem.quantity * MedicineBatch.cost_price), 0.0))
+            .join(MedicineBatch, MedicineBatch.id == RefundItem.batch_id)
+            .join(Refund, Refund.id == RefundItem.refund_id)
+            .where(
+                Refund.created_at >= utc_start,
+                Refund.created_at < utc_end,
+                RefundItem.restocked.is_(True),
+            )
+        )
+        total_cost -= float(cost_reversal_result.scalar_one())
 
         total_profit = total_revenue - total_cost
         margin = (total_profit / total_revenue * 100) if total_revenue > 0 else 0.0
@@ -337,7 +372,20 @@ class ReportService:
             )
         )
         total_revenue, count = result.one()
-        return float(total_revenue), int(count)
+        # Net of refunds processed in this same window -- see
+        # sales_summary's comment on why a refund is counted against
+        # the period it actually happened in, not the original sale's
+        # period. transaction_count is left alone: a refund isn't a
+        # sale, it doesn't undo the fact that a transaction occurred.
+        refund_result = await self.db.execute(
+            select(func.coalesce(func.sum(Refund.total_amount), 0.0)).where(
+                Refund.created_at >= utc_start,
+                Refund.created_at < utc_end,
+            )
+        )
+        total_refunds = refund_result.scalar_one()
+        net_revenue = float(total_revenue) - float(total_refunds)
+        return net_revenue, int(count)
 
     async def top_products_by_revenue(
         self, start_date: date, end_date: date, limit: int
@@ -396,6 +444,27 @@ class ReportService:
             discount_ratio = (total_amount / subtotal) if subtotal else 1.0
             revenue_by_product[product_id] += quantity * unit_price * discount_ratio
 
+        # RefundItem.line_total is already the real, discount-prorated
+        # money handed back on that line (see refund_service.py) -- no
+        # re-derivation needed here, just netted against this same
+        # product's revenue for the period the refund happened in, same
+        # "refund counts against its own date" rule as every other
+        # report in this file.
+        refund_result = await self.db.execute(
+            select(
+                RefundItem.product_id,
+                Product.name,
+                func.coalesce(func.sum(RefundItem.line_total), 0.0),
+            )
+            .join(Refund, Refund.id == RefundItem.refund_id)
+            .join(Product, Product.id == RefundItem.product_id)
+            .where(Refund.created_at >= utc_start, Refund.created_at < utc_end)
+            .group_by(RefundItem.product_id)
+        )
+        for product_id, name, refund_total in refund_result.all():
+            name_by_product.setdefault(product_id, name)
+            revenue_by_product[product_id] -= float(refund_total)
+
         ranked = sorted(revenue_by_product.items(), key=lambda pair: pair[1], reverse=True)
         return [
             TopProductEntry(
@@ -434,22 +503,48 @@ class ReportService:
             .join(Sale, Sale.customer_id == Customer.id)
             .where(Sale.id.in_(sale_ids))
             .group_by(Customer.id)
-            .order_by(func.sum(Sale.total_amount).desc())
-            .limit(limit)
         )
         rows = result.all()
 
-        total_revenue = sum(s.total_amount for s in sales)
+        # Refunds against this customer's sales, counted against the
+        # period the refund itself happened in (it may be a different
+        # period than the sale it's against) -- same rule every other
+        # revenue figure in this file follows. Not restricted to
+        # sale_ids: a refund processed in this window against an OLDER
+        # sale is still real money leaving in this window.
+        utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
+        refund_result = await self.db.execute(
+            select(Sale.customer_id, func.coalesce(func.sum(Refund.total_amount), 0.0))
+            .join(Refund, Refund.sale_id == Sale.id)
+            .where(
+                Refund.created_at >= utc_start,
+                Refund.created_at < utc_end,
+                Sale.customer_id.is_not(None),
+            )
+            .group_by(Sale.customer_id)
+        )
+        refund_by_customer = {customer_id: float(total) for customer_id, total in refund_result.all()}
+
+        total_revenue = sum(s.total_amount for s in sales) - sum(refund_by_customer.values())
+        net_rows = sorted(
+            (
+                (customer_id, name, sale_count, revenue - refund_by_customer.get(customer_id, 0.0))
+                for customer_id, name, sale_count, revenue in rows
+            ),
+            key=lambda row: row[3],
+            reverse=True,
+        )[:limit]
+
         entries = []
         running_total = 0.0
-        for customer_id, name, sale_count, revenue in rows:
-            running_total += revenue
+        for customer_id, name, sale_count, net_revenue in net_rows:
+            running_total += net_revenue
             entries.append(
                 TopCustomerEntry(
                     customer_id=customer_id,
                     name=name,
                     sale_count=sale_count,
-                    revenue=revenue,
+                    revenue=net_revenue,
                     cumulative_percent=(
                         round(running_total / total_revenue * 100, 1) if total_revenue > 0 else 0.0
                     ),
@@ -612,6 +707,56 @@ class ReportService:
                         cost_row.period, 0.0
                     ) + float(cost_row.cost)
 
+            # Refunds bucketed by their OWN created_at (shifted through
+            # this same segment's offset), not the created_at of the
+            # sale they're against -- same "a refund counts against the
+            # period it actually happened in" rule as every other report
+            # in this file. Without this, a chart could show a sale's
+            # full revenue in one period with nothing ever backing it
+            # out, even after the money was actually returned.
+            refund_shifted_column = func.datetime(Refund.created_at, f"{offset_minutes:+d} minutes")
+            refund_bucket_expr = bucket_expr_for(refund_shifted_column)
+            refund_date_filter = (
+                Refund.created_at >= utc_start,
+                Refund.created_at < utc_end,
+            )
+            refund_result = await self.db.execute(
+                select(
+                    refund_bucket_expr.label("period"),
+                    func.coalesce(func.sum(Refund.total_amount), 0.0).label("refund_total"),
+                )
+                .where(*refund_date_filter)
+                .group_by("period")
+            )
+            for refund_row in refund_result.all():
+                if refund_row.period not in revenue_by_period:
+                    period_order.append(refund_row.period)
+                    revenue_by_period[refund_row.period] = 0.0
+                    txn_count_by_period[refund_row.period] = 0
+                revenue_by_period[refund_row.period] -= float(refund_row.refund_total)
+
+            if include_profit:
+                # Restocked refund lines put cost back into inventory --
+                # same reversal profit_report() applies, bucketed the
+                # same way as the cost/revenue queries above.
+                cost_reversal_result = await self.db.execute(
+                    select(
+                        refund_bucket_expr.label("period"),
+                        func.coalesce(
+                            func.sum(RefundItem.quantity * MedicineBatch.cost_price), 0.0
+                        ).label("cost_reversal"),
+                    )
+                    .select_from(RefundItem)
+                    .join(Refund, Refund.id == RefundItem.refund_id)
+                    .join(MedicineBatch, MedicineBatch.id == RefundItem.batch_id)
+                    .where(*refund_date_filter, RefundItem.restocked.is_(True))
+                    .group_by("period")
+                )
+                for reversal_row in cost_reversal_result.all():
+                    cost_by_period[reversal_row.period] = cost_by_period.get(
+                        reversal_row.period, 0.0
+                    ) - float(reversal_row.cost_reversal)
+
         period_order.sort()
         points = [
             RevenueTrendPoint(
@@ -703,6 +848,18 @@ class ReportService:
             select(Sale).where(
                 Sale.created_at >= utc_start,
                 Sale.created_at < utc_end,
+            )
+        )
+        return list(result.scalars().all())
+
+    async def _refunds_in_range(self, start_date: date, end_date: date) -> list[Refund]:
+        # Filtered by the refund's OWN created_at, not the created_at of
+        # the sale it's against -- see sales_summary's comment for why.
+        utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
+        result = await self.db.execute(
+            select(Refund).where(
+                Refund.created_at >= utc_start,
+                Refund.created_at < utc_end,
             )
         )
         return list(result.scalars().all())

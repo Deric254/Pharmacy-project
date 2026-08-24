@@ -89,6 +89,52 @@ class TestSalesSummaryAndProfit:
         assert r.json()["total_revenue"] == 50.0
         assert r.json()["total_sale_count"] == 2
 
+    async def test_sales_summary_nets_out_refunds(self, client, owner_user, employee_user):
+        """
+        The exact "refund happens, money remains" bug: total_revenue
+        used to be a flat SUM(Sale.total_amount) with no refund
+        subtraction anywhere. A 20 sale refunded for 8 must show 12 of
+        real revenue left, not 20.
+        """
+        product_id, _ = await _make_product_with_batch(price=10.0)
+        employee_token = await _login(client, "joe", "pass1234")
+        owner_token = await _login(client, "lucy", "S3curePass!")
+
+        sale_resp = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 2}],
+                "payments": [{"method": "CASH", "amount": 20.0}],
+            },
+            headers={"Authorization": f"Bearer {employee_token}"},
+        )
+        assert sale_resp.status_code == 201, sale_resp.text
+        sale = sale_resp.json()
+        sale_item = sale["items"][0]
+
+        refund_resp = await client.post(
+            f"/api/v1/sales/{sale['id']}/refunds",
+            json={
+                "reason": "CUSTOMER_RETURN",
+                "method": "CASH",
+                "items": [{"sale_item_id": sale_item["id"], "quantity": 1, "restock": True}],
+            },
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert refund_resp.status_code == 201, refund_resp.text
+        assert refund_resp.json()["total_amount"] == 10.0
+
+        today = date.today().isoformat()
+        r = await client.get(
+            f"/api/v1/reports/sales?start_date={today}&end_date={today}",
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total_revenue"] == 10.0  # 20 sold - 10 refunded
+        assert body["total_sale_count"] == 1  # a refund doesn't undo the sale
+        assert body["entries"][0]["total_revenue"] == 10.0
+
     async def test_profit_uses_actual_batch_cost_per_line(self, client, owner_user, employee_user):
         """
         Two batches of the SAME product at different costs -- profit
@@ -464,6 +510,57 @@ class TestKpiDashboard:
         )
         assert r.json()["profit"] == 30.0  # (10-4) * 5
 
+    async def test_kpi_revenue_and_profit_net_out_restocked_refunds(self, client, owner_user):
+        """
+        Same "refund happens, money remains" bug, on the KPI dashboard's
+        revenue AND on profit: a restocked refund puts the unit's cost
+        back into inventory, so profit must also stop counting that
+        unit's cost as COGS for the period -- not just net the revenue.
+        5 sold at (10 price, 4 cost), 2 refunded and restocked:
+          revenue: 50 - 20 = 30
+          cost: (5*4) - (2*4) = 12
+          profit: 30 - 12 = 18
+        """
+        product_id, _ = await _make_product_with_batch(price=10.0, cost=4.0, qty=20)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        sale_resp = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 5}],
+                "payments": [{"method": "CASH", "amount": 50.0}],
+            },
+            headers=headers,
+        )
+        assert sale_resp.status_code == 201, sale_resp.text
+        sale = sale_resp.json()
+        sale_item = sale["items"][0]
+
+        refund_resp = await client.post(
+            f"/api/v1/sales/{sale['id']}/refunds",
+            json={
+                "reason": "CUSTOMER_RETURN",
+                "method": "CASH",
+                "items": [{"sale_item_id": sale_item["id"], "quantity": 2, "restock": True}],
+            },
+            headers=headers,
+        )
+        assert refund_resp.status_code == 201, refund_resp.text
+        assert refund_resp.json()["total_amount"] == 20.0
+
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/kpi-dashboard",
+            params={"start_date": today, "end_date": today},
+            headers=headers,
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["revenue"] == 30.0
+        assert body["profit"] == 18.0
+        assert body["transaction_count"] == 1  # a refund isn't a second transaction
+
     async def test_revenue_change_percent_compares_to_immediately_prior_period(
         self, client, owner_user, employee_user
     ):
@@ -598,6 +695,50 @@ class TestKpiDashboard:
         top_products = r.json()["top_products"]
         assert top_products[0]["product_id"] == product_id
         assert top_products[0]["revenue"] == 200.0
+
+    async def test_top_products_revenue_nets_out_refunds(self, client, owner_user):
+        """
+        Same "refund happens, money remains" bug: a product sold for
+        100 with 30 refunded off it must show 70 of real revenue, not
+        100 -- the refund used to never touch this figure at all.
+        """
+        product_id, _ = await _make_product_with_batch(price=10.0, cost=4.0, qty=20)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        sale_resp = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 10}],
+                "payments": [{"method": "CASH", "amount": 100.0}],
+            },
+            headers=headers,
+        )
+        assert sale_resp.status_code == 201, sale_resp.text
+        sale = sale_resp.json()
+        sale_item = sale["items"][0]
+
+        refund_resp = await client.post(
+            f"/api/v1/sales/{sale['id']}/refunds",
+            json={
+                "reason": "CUSTOMER_RETURN",
+                "method": "CASH",
+                "items": [{"sale_item_id": sale_item["id"], "quantity": 3, "restock": True}],
+            },
+            headers=headers,
+        )
+        assert refund_resp.status_code == 201, refund_resp.text
+        assert refund_resp.json()["total_amount"] == 30.0
+
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/kpi-dashboard",
+            params={"start_date": today, "end_date": today},
+            headers=headers,
+        )
+        top_products = r.json()["top_products"]
+        entry = next(p for p in top_products if p["product_id"] == product_id)
+        assert entry["revenue"] == 70.0  # 100 sold - 30 refunded
 
     async def test_low_stock_and_expiring_counts_reflect_real_inventory(self, client, owner_user):
         # Reorder point 10, stock only 3 -- genuinely low.
@@ -837,6 +978,60 @@ class TestTopCustomers:
             headers=headers,
         )
         assert r.json()["entries"] == []
+
+    async def test_top_customers_revenue_nets_out_refunds(self, client, owner_user):
+        """
+        Same "refund happens, money remains" bug on the top-customers
+        report: a customer who spent 100 and got 40 refunded should
+        rank and total as a real 60, not 100.
+        """
+        product_id, _ = await _make_product_with_batch(price=20.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        customer = (
+            await client.post(
+                "/api/v1/customers", json={"name": "Refunded Customer"}, headers=headers
+            )
+        ).json()
+
+        sale_resp = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 5}],
+                "payments": [{"method": "CASH", "amount": 100.0}],
+                "customer_id": customer["id"],
+            },
+            headers=headers,
+        )
+        assert sale_resp.status_code == 201, sale_resp.text
+        sale = sale_resp.json()
+        sale_item = sale["items"][0]
+
+        refund_resp = await client.post(
+            f"/api/v1/sales/{sale['id']}/refunds",
+            json={
+                "reason": "CUSTOMER_RETURN",
+                "method": "CASH",
+                "items": [{"sale_item_id": sale_item["id"], "quantity": 2, "restock": True}],
+            },
+            headers=headers,
+        )
+        assert refund_resp.status_code == 201, refund_resp.text
+        assert refund_resp.json()["total_amount"] == 40.0
+
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/top-customers",
+            params={"start_date": today, "end_date": today},
+            headers=headers,
+        )
+        assert r.status_code == 200
+        body = r.json()
+        entry = next(e for e in body["entries"] if e["name"] == "Refunded Customer")
+        assert entry["revenue"] == 60.0  # 100 sold - 40 refunded
+        assert body["total_revenue"] == 60.0
+        assert entry["cumulative_percent"] == 100.0
 
 
 class TestRevenuePotential:

@@ -348,6 +348,49 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show()
   })
+
+  // The only thing in this app that ever calls window.open() is the
+  // receipt view (see handleViewReceipt in SalesPage.tsx and PosPage.tsx)
+  // -- always with a blob: URL for a PDF it just fetched, never an
+  // outbound link. Left unhandled, Electron's raw default for
+  // window.open() is an undecorated popup with none of the
+  // customizations just above: a visible native menu bar, no app icon,
+  // the wrong background color, and no ready-to-show hold-back -- so it
+  // flashes white and looks like an entirely different, unrelated
+  // program instead of part of this one, which is exactly the "not
+  // part of this system" symptom this was reported as.
+  //
+  // The genuine target="_blank" anchors elsewhere in this app (a
+  // GitHub release link, a Gmail compose link, the OAuth playground
+  // link in BackupsPage) go through this exact same handler too --
+  // those must never be captured into an in-app window sized and
+  // titled for a receipt. Routed by URL scheme instead: only blob:
+  // (which nothing but the receipt view ever produces) gets the
+  // in-app popup; everything else is denied here and handed to the
+  // system's own default browser instead, exactly where a real
+  // outbound link belongs.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('blob:')) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          width: 440,
+          height: 720,
+          title: 'Receipt',
+          backgroundColor: '#f7f3ec',
+          autoHideMenuBar: true,
+          ...iconOption,
+          webPreferences: {
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: true,
+          },
+        },
+      }
+    }
+    shell.openExternal(url)
+    return { action: 'deny' }
+  })
   // Defensive fallback: if ready-to-show never fires for any reason,
   // showing a blank window late is still far better than the app
   // silently never appearing at all, which would look like a failed
@@ -468,41 +511,73 @@ function clearBackendPidFile() {
 }
 
 /**
- * Kills the exact backend process this app itself spawned and
- * recorded last time it ran -- and ONLY that one recorded PID. Never
- * anything found by scanning for a port number or an image name.
+ * Kills every leftover copy of THIS app's own packaged backend still
+ * running from a previous launch -- not just the single PID this
+ * session happens to have on file, and never anything found by
+ * scanning for a port number.
  *
- * This replaces the previous approach, which matched ANY process
- * listening on the backend's port, OR named 'Pharmacy-ERP.exe', OR
- * running a command line containing 'desktop_main.py'. That was safe
- * only for as long as this exact port/filename/entrypoint combination
- * was unique on the machine -- it is not: every system built on this
- * same Electron+FastAPI+desktop_main.py architecture shares that
- * pattern, so the old check could -- and did -- match and kill a
- * completely different app's backend, not just this app's own
- * leftovers, whenever both happened to be present on the same
- * machine.
+ * History worth keeping: an earlier version of this function matched
+ * ANY process listening on the backend's port, OR named
+ * 'Pharmacy-ERP.exe', OR running a command line containing
+ * 'desktop_main.py'. The port half of that was the actual bug -- safe
+ * only for as long as this exact port happened to be unique on the
+ * machine, which it isn't: any other system built on the same
+ * Electron+FastAPI architecture shares that pattern, so a port-based
+ * match could -- and did -- kill a completely different app's
+ * backend. That's why a port is never part of the match here, even
+ * though the request that led to this rewrite specifically asked for
+ * "clear everything on the port": there's also nothing to clear that
+ * way anymore -- getFreePort() already guarantees the port this
+ * launch uses was free before anything bound it, so a same-port
+ * leftover isn't a real failure mode this app can have.
  *
- * Tracking one exact, previously-recorded PID makes that structurally
- * impossible: this can never find a process it didn't itself spawn on
- * a previous run, regardless of what port or process name any other
- * app on the machine happens to use -- including apps built later,
- * after this fix, that nobody has thought of yet.
+ * What WAS a real problem: matching only one previously-recorded PID
+ * misses every OTHER leftover -- several stacked-up crashes across
+ * past launches, or a pid file that predates this exact recording
+ * mechanism, all left unkilled. The fix that actually addresses "an
+ * old copy is still holding on" is matching by this app's own image
+ * name, not by widening to a port or a generic filename any other
+ * program could equally use. 'Pharmacy-ERP.exe' is this app's own
+ * productName (see electron/package.json's build config) -- nothing
+ * else on the machine can share it by accident the way a port number
+ * or 'python.exe' could, so an image-name sweep is exactly as safe as
+ * the single-PID check it replaces, just no longer capped at finding
+ * only one.
  *
- * The recorded PID is still confirmed by process name before being
- * killed, as a last identity check -- not because the number alone
- * usually isn't enough, but because Windows does eventually reuse
- * PIDs, and a stale recording pointing at a since-reused number must
- * never take down whatever unrelated process now happens to hold it.
- * This check runs only against the one already-selected PID, never as
- * a system-wide scan.
+ * taskkill.exe is also a small native Windows binary, not a hosted
+ * scripting engine -- swapping the previous powershell.exe +
+ * Get-CimInstance call for this is a straight speed win on every
+ * launch that actually finds something to clean up, not a slower
+ * path traded for a safer one.
  */
 function killPreviousBackendIfAny() {
+  if (process.platform !== 'win32') {
+    return Promise.resolve()
+  }
+
+  if (app.isPackaged) {
+    return new Promise((resolve) => {
+      const kill = spawn('taskkill', ['/F', '/T', '/IM', 'Pharmacy-ERP.exe'])
+      kill.on('error', (err) => {
+        logDesktopDiagnostic(`kill-previous-backend-failed ${err.message}`)
+        resolve() // never let this block startup
+      })
+      kill.on('exit', () => {
+        clearBackendPidFile()
+        resolve()
+      })
+    })
+  }
+
+  // Development only, below: the backend here is the machine's own
+  // shared python.exe (or a venv copy of it), not a uniquely-named
+  // exe -- an image-name sweep like the packaged one above would just
+  // as happily kill an unrelated Python program running on the same
+  // machine. Falls back to the narrower, previously-recorded-PID
+  // check instead, confirmed against this exact process's own command
+  // line before anything is killed -- this path only ever matters on
+  // Deric's own dev machine, never on a pharmacy's real install.
   return new Promise((resolve) => {
-    if (process.platform !== 'win32') {
-      resolve()
-      return
-    }
     let pid
     try {
       pid = Number.parseInt(fs.readFileSync(backendPidFilePath(), 'utf8').trim(), 10)
@@ -519,12 +594,12 @@ function killPreviousBackendIfAny() {
       '-NoProfile',
       '-Command',
       `Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | ` +
-        `Where-Object { $_.Name -eq 'Pharmacy-ERP.exe' -or $_.CommandLine -match 'desktop_main\\.py' } | ` +
+        `Where-Object { $_.CommandLine -match 'desktop_main\\.py' } | ` +
         `ForEach-Object { Stop-Process -Id ${pid} -Force -ErrorAction SilentlyContinue }`,
     ])
     ps.on('error', (err) => {
       logDesktopDiagnostic(`kill-previous-backend-failed ${err.message}`)
-      resolve() // never let this block startup
+      resolve()
     })
     ps.on('exit', () => {
       clearBackendPidFile()

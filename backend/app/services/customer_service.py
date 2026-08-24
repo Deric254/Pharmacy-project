@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business_config import BusinessConfig
 from app.models.customer import Customer
+from app.models.refund import Refund
 from app.models.sale import Sale
 from app.schemas.customer import (
     CustomerCreate,
@@ -71,25 +72,43 @@ class CustomerService:
                 Customer.id,
                 Customer.name,
                 Customer.phone,
-                func.sum(Sale.total_amount).label("lifetime_value"),
+                func.sum(Sale.total_amount).label("gross_value"),
                 func.count(Sale.id).label("sale_count"),
             )
             .join(Sale, Sale.customer_id == Customer.id)
             .group_by(Customer.id)
-            .order_by(func.sum(Sale.total_amount).desc())
         )
         rows = result.all()
 
-        entries = [
-            CustomerLifetimeValueEntry(
-                customer_id=row.id,
-                name=row.name,
-                phone=row.phone,
-                lifetime_value=float(row.lifetime_value),
-                sale_count=int(row.sale_count),
-            )
-            for row in rows
-        ]
+        # Refunded money is still counted in gross_value above (it's a
+        # straight sum of Sale.total_amount) -- subtracted out here so a
+        # customer who returned everything they bought doesn't keep
+        # showing lifetime spend that was actually handed back. Not
+        # restricted to this customer's own sales only in the join
+        # sense -- every refund already traces to exactly one sale via
+        # Refund.sale_id, so this is a clean per-customer total.
+        refund_result = await self.db.execute(
+            select(Sale.customer_id, func.coalesce(func.sum(Refund.total_amount), 0.0))
+            .join(Refund, Refund.sale_id == Sale.id)
+            .where(Sale.customer_id.is_not(None))
+            .group_by(Sale.customer_id)
+        )
+        refund_by_customer = {customer_id: float(total) for customer_id, total in refund_result.all()}
+
+        entries = sorted(
+            (
+                CustomerLifetimeValueEntry(
+                    customer_id=row.id,
+                    name=row.name,
+                    phone=row.phone,
+                    lifetime_value=float(row.gross_value) - refund_by_customer.get(row.id, 0.0),
+                    sale_count=int(row.sale_count),
+                )
+                for row in rows
+            ),
+            key=lambda e: e.lifetime_value,
+            reverse=True,
+        )
         average = sum(e.lifetime_value for e in entries) / len(entries) if entries else None
         return CustomerLifetimeValueOut(entries=entries, average_lifetime_value=average)
 

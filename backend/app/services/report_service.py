@@ -83,7 +83,11 @@ class ReportService:
             # for the whole request -- or a row made early in the
             # local day would still group under the UTC day before.
             local_dt = dt.replace(tzinfo=UTC).astimezone(tz)
-            return local_dt.strftime("%Y-%m-%d") if group_by == "day" else local_dt.strftime("%Y-%m")
+            return (
+                local_dt.strftime("%Y-%m-%d")
+                if group_by == "day"
+                else local_dt.strftime("%Y-%m")
+            )
 
         revenue_by_period: dict[str, float] = defaultdict(float)
         discount_by_period: dict[str, float] = defaultdict(float)
@@ -523,7 +527,9 @@ class ReportService:
             )
             .group_by(Sale.customer_id)
         )
-        refund_by_customer = {customer_id: float(total) for customer_id, total in refund_result.all()}
+        refund_by_customer = {
+            customer_id: float(total) for customer_id, total in refund_result.all()
+        }
 
         total_revenue = sum(s.total_amount for s in sales) - sum(refund_by_customer.values())
         net_rows = sorted(

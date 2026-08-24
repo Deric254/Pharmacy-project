@@ -93,7 +93,9 @@ class CustomerService:
             .where(Sale.customer_id.is_not(None))
             .group_by(Sale.customer_id)
         )
-        refund_by_customer = {customer_id: float(total) for customer_id, total in refund_result.all()}
+        refund_by_customer = {
+            customer_id: float(total) for customer_id, total in refund_result.all()
+        }
 
         entries = sorted(
             (

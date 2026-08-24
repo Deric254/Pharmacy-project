@@ -84,9 +84,7 @@ class ReportService:
             # local day would still group under the UTC day before.
             local_dt = dt.replace(tzinfo=UTC).astimezone(tz)
             return (
-                local_dt.strftime("%Y-%m-%d")
-                if group_by == "day"
-                else local_dt.strftime("%Y-%m")
+                local_dt.strftime("%Y-%m-%d") if group_by == "day" else local_dt.strftime("%Y-%m")
             )
 
         revenue_by_period: dict[str, float] = defaultdict(float)

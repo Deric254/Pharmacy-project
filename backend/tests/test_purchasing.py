@@ -71,9 +71,7 @@ class TestSupplierCRUD:
 class TestSupplierExport:
     async def test_json_export_is_still_the_default(self, client, owner_user):
         token = await _login(client, "lucy", "S3curePass!")
-        r = await client.get(
-            "/api/v1/suppliers", headers={"Authorization": f"Bearer {token}"}
-        )
+        r = await client.get("/api/v1/suppliers", headers={"Authorization": f"Bearer {token}"})
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("application/json")
 

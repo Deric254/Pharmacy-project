@@ -702,9 +702,7 @@ class TestSalesExport:
 
         assert zipfile.is_zipfile(io.BytesIO(r.content))
 
-    async def test_export_includes_every_matching_sale_not_just_one_page(
-        self, client, owner_user
-    ):
+    async def test_export_includes_every_matching_sale_not_just_one_page(self, client, owner_user):
         """
         The exact gap a naive "just add export to the paginated
         endpoint" fix would leave: list_sales() caps at a page size,
@@ -729,9 +727,7 @@ class TestSalesExport:
         # A page size smaller than the real number of sales -- if
         # export reused list_sales()'s own limit/offset, this would
         # cap the export at 2 rows instead of the real 3.
-        r = await client.get(
-            "/api/v1/sales?export=excel&limit=2&offset=0", headers=headers
-        )
+        r = await client.get("/api/v1/sales?export=excel&limit=2&offset=0", headers=headers)
         assert r.status_code == 200
 
         import io

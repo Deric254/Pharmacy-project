@@ -575,7 +575,9 @@ class ReportService:
                 func.coalesce(
                     func.sum(
                         MedicineBatch.qty_remaining
-                        * func.coalesce(MedicineBatch.selling_price, Product.default_selling_price)
+                        * func.coalesce(
+                            MedicineBatch.selling_price, Product.default_selling_price
+                        )
                     ),
                     0.0,
                 ).label("revenue"),

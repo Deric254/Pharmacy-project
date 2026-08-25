@@ -189,7 +189,9 @@ class ProductService:
         return next_price_by_product
 
     @staticmethod
-    def _apply_margin(out: ProductOut, cost: float | None, selling_price: float | None) -> None:
+    def _apply_margin(
+        out: ProductOut, cost: float | None, selling_price: float | None
+    ) -> None:
         """
         Margin (profit as a % of selling price) and markup (profit as
         a % of cost) are genuinely different numbers people confuse --
@@ -199,7 +201,9 @@ class ProductService:
         """
         if cost is None:
             return
-        selling_price = selling_price if selling_price is not None else out.default_selling_price
+        selling_price = (
+            selling_price if selling_price is not None else out.default_selling_price
+        )
         out.current_cost = cost
         out.current_selling_price = selling_price
         profit = selling_price - cost

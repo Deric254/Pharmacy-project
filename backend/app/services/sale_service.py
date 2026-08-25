@@ -28,14 +28,7 @@ from app.models.product import Product
 from app.models.sale import Payment, Sale, SaleItem
 from app.models.stock_movement import MovementType
 from app.models.user import User
-from app.schemas.sale import (
-    SaleCreate,
-    SaleListItemOut,
-    SaleOut,
-    SalePage,
-    SaleQuoteOut,
-    SaleQuoteRequest,
-)
+from app.schemas.sale import SaleCreate, SaleListItemOut, SaleOut, SalePage, SaleQuoteOut, SaleQuoteRequest
 from app.services.customer_service import award_loyalty_points
 from app.services.inventory_service import check_and_publish_low_stock
 from app.services.stock_selection_service import (
@@ -213,9 +206,7 @@ class SaleService:
         return SaleOut.model_validate(sale)
 
     async def quote_sale(self, payload: SaleQuoteRequest) -> SaleQuoteOut:
-        products_by_id = await self._load_active_products(
-            [item.product_id for item in payload.items]
-        )
+        products_by_id = await self._load_active_products([item.product_id for item in payload.items])
         subtotal = 0.0
         for item in payload.items:
             product = products_by_id[item.product_id]

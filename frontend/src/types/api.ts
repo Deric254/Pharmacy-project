@@ -30,6 +30,7 @@ export interface ProductOut {
   created_at: string
   total_qty_available: number
   current_cost: number | null
+  current_selling_price: number | null
   margin_amount: number | null
   margin_percent: number | null
   markup_percent: number | null
@@ -117,6 +118,17 @@ export interface SaleCreate {
   discount_amount: number
   customer_id: number | null
   idempotency_key?: string | null
+}
+
+export interface SaleQuoteRequest {
+  items: SaleItemRequest[]
+  discount_amount: number
+}
+
+export interface SaleQuoteOut {
+  subtotal: number
+  discount_amount: number
+  total_amount: number
 }
 
 export interface SaleItemOut {

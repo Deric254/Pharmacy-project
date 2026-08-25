@@ -41,6 +41,7 @@ class ProductOut(BaseModel):
     # true cost from -- None rather than a fabricated number when a
     # product has no batches at all yet.
     current_cost: float | None = None  # cost of whichever batch would sell next (FEFO)
+    current_selling_price: float | None = None  # price of whichever batch would sell next
     margin_amount: float | None = None  # selling price minus cost, in currency
     margin_percent: float | None = None  # profit as a % of selling price
     markup_percent: float | None = None  # profit as a % of cost

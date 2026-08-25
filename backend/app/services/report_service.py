@@ -568,11 +568,19 @@ class ReportService:
             select(
                 Product.id,
                 Product.name,
-                Product.default_selling_price,
                 func.coalesce(func.sum(MedicineBatch.qty_remaining), 0).label("qty"),
                 func.coalesce(
                     func.sum(MedicineBatch.qty_remaining * MedicineBatch.cost_price), 0.0
                 ).label("cost"),
+                func.coalesce(
+                    func.sum(
+                        MedicineBatch.qty_remaining
+                        * func.coalesce(
+                            MedicineBatch.selling_price, Product.default_selling_price
+                        )
+                    ),
+                    0.0,
+                ).label("revenue"),
             )
             .outerjoin(
                 MedicineBatch,
@@ -589,10 +597,9 @@ class ReportService:
         by_product: list[RevenuePotentialEntry] = []
         total_revenue = 0.0
         total_cost = 0.0
-        for product_id, name, selling_price, qty, cost in result.all():
+        for product_id, name, qty, cost, revenue in result.all():
             if qty <= 0:
                 continue
-            revenue = qty * selling_price
             gross_profit = revenue - cost
             total_revenue += revenue
             total_cost += cost

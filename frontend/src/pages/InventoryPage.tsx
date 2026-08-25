@@ -539,7 +539,7 @@ function ProductManagementPanel({ onChanged }: { onChanged: () => void }) {
                 {p.total_qty_available} in stock
               </span>
               <span className="figure text-xs text-ink-soft" title="Selling price">
-                Sell {formatCurrency(p.default_selling_price)}
+                Sell {formatCurrency(p.current_selling_price ?? p.default_selling_price)}
               </span>
               <span className="figure text-xs text-ink-soft" title="Buying price (cost)">
                 Buy {p.current_cost !== null ? formatCurrency(p.current_cost) : '—'}

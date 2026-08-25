@@ -21,6 +21,8 @@ import type {
   RefundRequest,
   SaleCreate,
   SaleOut,
+  SaleQuoteOut,
+  SaleQuoteRequest,
   SalePage,
   StockTakeCreate,
   StockTakeItemOut,
@@ -49,6 +51,7 @@ export const productsApi = {
 
 export const salesApi = {
   create: (payload: SaleCreate) => api.post<SaleOut>('/sales', payload),
+  quote: (payload: SaleQuoteRequest) => api.post<SaleQuoteOut>('/sales/quote', payload),
   get: (id: number) => api.get<SaleOut>(`/sales/${id}`),
   list: (params: { start_date?: string; end_date?: string; limit?: number; offset?: number }) =>
     api.get<SalePage>('/sales', params),

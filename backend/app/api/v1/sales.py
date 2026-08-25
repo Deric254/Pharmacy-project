@@ -13,7 +13,7 @@ from app.models.customer import Customer
 from app.models.sale import Sale
 from app.models.user import User
 from app.schemas.refund import RefundOut, RefundRequest
-from app.schemas.sale import SaleCreate, SaleOut
+from app.schemas.sale import SaleCreate, SaleOut, SaleQuoteOut, SaleQuoteRequest
 from app.services.business_config_service import BusinessConfigService
 from app.services.receipt_service import generate_receipt_pdf
 from app.services.refund_service import RefundService
@@ -44,6 +44,15 @@ async def create_sale(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SaleOut:
     return await SaleService(db).create_sale(payload, cashier)
+
+
+@router.post("/quote", response_model=SaleQuoteOut)
+async def quote_sale(
+    payload: SaleQuoteRequest,
+    _: Annotated[User, Depends(require_permission("sales.create"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SaleQuoteOut:
+    return await SaleService(db).quote_sale(payload)
 
 
 @router.get("", dependencies=[Depends(_require_sales_create_or_refund)])

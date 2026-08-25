@@ -28,7 +28,7 @@ from app.models.product import Product
 from app.models.sale import Payment, Sale, SaleItem
 from app.models.stock_movement import MovementType
 from app.models.user import User
-from app.schemas.sale import SaleCreate, SaleListItemOut, SaleOut, SalePage
+from app.schemas.sale import SaleCreate, SaleListItemOut, SaleOut, SalePage, SaleQuoteOut, SaleQuoteRequest
 from app.services.customer_service import award_loyalty_points
 from app.services.inventory_service import check_and_publish_low_stock
 from app.services.stock_selection_service import (
@@ -173,6 +173,7 @@ class SaleService:
                 if existing is not None:
                     return SaleOut.model_validate(existing)
             raise
+
         except HTTPException:
             await self.db.rollback()
             raise
@@ -203,6 +204,35 @@ class SaleService:
             await self.db.rollback()
 
         return SaleOut.model_validate(sale)
+
+    async def quote_sale(self, payload: SaleQuoteRequest) -> SaleQuoteOut:
+        products_by_id = await self._load_active_products([item.product_id for item in payload.items])
+        subtotal = 0.0
+        for item in payload.items:
+            product = products_by_id[item.product_id]
+            allocations = await select_batches_fefo(
+                self.db, item.product_id, item.quantity, lock=False
+            )
+            for batch, quantity in allocations:
+                unit_price = (
+                    batch.selling_price
+                    if batch.selling_price is not None
+                    else product.default_selling_price
+                )
+                subtotal += unit_price * quantity
+        if payload.discount_amount > subtotal:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Discount ({payload.discount_amount:.2f}) cannot exceed "
+                    f"the subtotal ({subtotal:.2f})."
+                ),
+            )
+        return SaleQuoteOut(
+            subtotal=subtotal,
+            discount_amount=payload.discount_amount,
+            total_amount=subtotal - payload.discount_amount,
+        )
 
     async def _find_by_idempotency_key(self, key: str) -> Sale | None:
         result = await self.db.execute(select(Sale).where(Sale.idempotency_key == key))

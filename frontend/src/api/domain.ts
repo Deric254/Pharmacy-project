@@ -21,6 +21,8 @@ import type {
   RefundRequest,
   SaleCreate,
   SaleOut,
+  SaleQuoteOut,
+  SaleQuoteRequest,
   SalePage,
   StockTakeCreate,
   StockTakeItemOut,
@@ -35,6 +37,8 @@ export const productsApi = {
   getByBarcode: (barcode: string) =>
     api.get<ProductOut>(`/products/barcode/${encodeURIComponent(barcode)}`),
   batches: (productId: number) => api.get<BatchOut[]>(`/products/${productId}/batches`),
+  updateBatch: (productId: number, batchId: number, selling_price: number) =>
+    api.patch<BatchOut>(`/products/${productId}/batches/${batchId}`, { selling_price }),
   create: (payload: ProductCreate) => api.post<ProductOut>('/products', payload),
   update: (productId: number, payload: ProductUpdate) =>
     api.patch<ProductOut>(`/products/${productId}`, payload),
@@ -47,6 +51,7 @@ export const productsApi = {
 
 export const salesApi = {
   create: (payload: SaleCreate) => api.post<SaleOut>('/sales', payload),
+  quote: (payload: SaleQuoteRequest) => api.post<SaleQuoteOut>('/sales/quote', payload),
   get: (id: number) => api.get<SaleOut>(`/sales/${id}`),
   list: (params: { start_date?: string; end_date?: string; limit?: number; offset?: number }) =>
     api.get<SalePage>('/sales', params),

@@ -32,6 +32,7 @@ class MedicineBatch(Base):
     qty_remaining: Mapped[int] = mapped_column(Integer)  # derived/cached, reconciled vs ledger
 
     cost_price: Mapped[float] = mapped_column(MoneyCents, default=0.0)
+    selling_price: Mapped[float | None] = mapped_column(MoneyCents, nullable=True, default=None)
 
     # Non-null while an open stock take is counting this batch -- FEFO
     # selection excludes locked batches so a sale mid-count can't

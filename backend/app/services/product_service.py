@@ -140,13 +140,14 @@ class ProductService:
             .group_by(MedicineBatch.product_id)
         )
         qty_by_product: dict[int, int] = dict(qty_result.tuples().all())
-        cost_by_product = await self._next_fefo_cost_by_product(product_ids)
+        next_price_by_product = await self._next_fefo_price_by_product(product_ids)
 
         outputs = []
         for product in products:
             out = ProductOut.model_validate(product)
             out.total_qty_available = int(qty_by_product.get(product.id, 0))
-            self._apply_margin(out, cost_by_product.get(product.id))
+            cost, selling_price = next_price_by_product.get(product.id, (None, None))
+            self._apply_margin(out, cost, selling_price)
             outputs.append(out)
 
         # Most-stocked first -- name is only a tie-breaker for equal
@@ -155,7 +156,9 @@ class ProductService:
         outputs.sort(key=lambda o: (-o.total_qty_available, o.name.lower()))
         return outputs
 
-    async def _next_fefo_cost_by_product(self, product_ids: list[int]) -> dict[int, float]:
+    async def _next_fefo_price_by_product(
+        self, product_ids: list[int]
+    ) -> dict[int, tuple[float, float | None]]:
         """
         The cost of whichever batch would actually be sold next for
         each product -- same FEFO ordering select_batches_fefo uses
@@ -167,17 +170,26 @@ class ProductService:
         avoids N+1 queries on what's a list endpoint.
         """
         result = await self.db.execute(
-            select(MedicineBatch.product_id, MedicineBatch.cost_price)
-            .where(MedicineBatch.product_id.in_(product_ids), MedicineBatch.qty_remaining > 0)
+            select(
+                MedicineBatch.product_id,
+                MedicineBatch.cost_price,
+                MedicineBatch.selling_price,
+            )
+            .where(
+                MedicineBatch.product_id.in_(product_ids),
+                MedicineBatch.qty_remaining > 0,
+                MedicineBatch.expiry_date >= date.today(),
+                MedicineBatch.locked_by_stock_take_id.is_(None),
+            )
             .order_by(MedicineBatch.product_id, MedicineBatch.expiry_date.asc())
         )
-        cost_by_product: dict[int, float] = {}
-        for product_id, cost_price in result.tuples().all():
-            cost_by_product.setdefault(product_id, cost_price)  # first per group = earliest expiry
-        return cost_by_product
+        next_price_by_product: dict[int, tuple[float, float | None]] = {}
+        for product_id, cost_price, selling_price in result.tuples().all():
+            next_price_by_product.setdefault(product_id, (cost_price, selling_price))
+        return next_price_by_product
 
     @staticmethod
-    def _apply_margin(out: ProductOut, cost: float | None) -> None:
+    def _apply_margin(out: ProductOut, cost: float | None, selling_price: float | None) -> None:
         """
         Margin (profit as a % of selling price) and markup (profit as
         a % of cost) are genuinely different numbers people confuse --
@@ -187,11 +199,13 @@ class ProductService:
         """
         if cost is None:
             return
+        selling_price = selling_price if selling_price is not None else out.default_selling_price
         out.current_cost = cost
-        profit = out.default_selling_price - cost
+        out.current_selling_price = selling_price
+        profit = selling_price - cost
         out.margin_amount = profit
-        if out.default_selling_price > 0:
-            out.margin_percent = (profit / out.default_selling_price) * 100
+        if selling_price > 0:
+            out.margin_percent = (profit / selling_price) * 100
         if cost > 0:
             out.markup_percent = (profit / cost) * 100
 
@@ -226,6 +240,7 @@ class ProductService:
         total_qty = qty_result.scalar_one()
         out = ProductOut.model_validate(product)
         out.total_qty_available = int(total_qty)
-        cost_by_product = await self._next_fefo_cost_by_product([product.id])
-        self._apply_margin(out, cost_by_product.get(product.id))
+        next_price_by_product = await self._next_fefo_price_by_product([product.id])
+        cost, selling_price = next_price_by_product.get(product.id, (None, None))
+        self._apply_margin(out, cost, selling_price)
         return out

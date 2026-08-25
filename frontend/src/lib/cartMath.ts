@@ -12,7 +12,12 @@ export interface CartLine {
  * hasn't been touched yet".
  */
 export function calculateSubtotal(cart: CartLine[]): number {
-  return cart.reduce((sum, line) => sum + line.product.default_selling_price * line.quantity, 0)
+  return cart.reduce(
+    (sum, line) =>
+      sum +
+      (line.product.current_selling_price ?? line.product.default_selling_price) * line.quantity,
+    0,
+  )
 }
 
 /**

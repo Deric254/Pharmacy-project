@@ -32,10 +32,29 @@ jobs:
           python-version: "3.12"
 
       - name: Install python-semantic-release
-        run: pip install python-semantic-release==9.*
+        # python-semantic-release 9.x depends on GitPython but doesn't pin
+        # it. GitPython 3.1.45+ removed the private Actor.name_email_regex
+        # attribute that psr 9.x's config parsing relies on internally,
+        # which breaks every psr 9.x release with:
+        #   "type object 'Actor' has no attribute 'name_email_regex'"
+        # Pinning GitPython here keeps the install deterministic instead
+        # of silently picking up whatever GitPython release is newest on
+        # the day the workflow happens to run.
+        run: pip install "python-semantic-release==9.*" "GitPython==3.1.44"
 
       - name: Determine and apply version bump
         id: release
+        # All of python-semantic-release's config lives in
+        # backend/pyproject.toml ([tool.semantic_release], with paths like
+        # "app/__init__.py" and "../CHANGELOG.md" written relative to that
+        # directory) -- there is no config at the repo root. Without this,
+        # `semantic-release` runs from the repo root, silently finds no
+        # config, and falls back to its built-in defaults: it still creates
+        # a tag and a commit, but never touches backend/pyproject.toml's
+        # version or backend/app/__init__.py's __version__, and uses the
+        # wrong commit message template. Matches the working-directory
+        # convention the backend/frontend/electron steps below already use.
+        working-directory: backend
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { customersApi, productsApi, salesApi } from '../api/domain'
-import { arrayBufferToBase64 } from '../lib/base64'
 import { useCurrencyFormatter } from '../lib/currency'
 import { calculateTotal, cartSignature, type CartLine } from '../lib/cartMath'
 import type { CustomerOut, PaymentMethod, ProductOut, SaleOut } from '../types/api'
@@ -642,73 +641,6 @@ function Receipt({ sale, onNewSale }: { sale: SaleOut; onNewSale: () => void }) 
   async function fetchReceiptBlob(): Promise<Blob> {
     return salesApi.receiptBlob(sale.id)
   }
-
-  useEffect(() => {
-    let cancelled = false
-    let iframe: HTMLIFrameElement | null = null
-    let objectUrl: string | null = null
-
-    void (async () => {
-      try {
-        const blob = await fetchReceiptBlob()
-        if (cancelled) return
-
-        // Real silent printing, only possible from inside Electron's
-        // main process (see electron/main.js's print-receipt-silently
-        // handler) -- prints straight to a real printer with zero
-        // dialog if one's available, and does nothing at all (still
-        // zero dialog) if not. This is the actual fix for print
-        // dialogs slowing down checkout: the old approach below
-        // (iframe + window.print()) can only ever show the browser's
-        // own print UI, every time, printer or not, because a
-        // sandboxed web page has no direct access to a printer.
-        const electronPrint = window.electronAPI?.printReceiptSilently
-        if (electronPrint) {
-          const buffer = await blob.arrayBuffer()
-          // arrayBufferToBase64, not a byte-at-a-time reduce() -- see
-          // lib/base64.ts for why that was measurably slow on larger
-          // receipts (a real, confirmed contributor to slow checkout
-          // printing, alongside the logo-shrinking fix in
-          // business_config_service.py).
-          const base64 = arrayBufferToBase64(buffer)
-          await electronPrint(base64)
-          return
-        }
-
-        // Fallback for anywhere this isn't running inside Electron
-        // (e.g. the dev server in a plain browser) -- the only
-        // silent-printing capability doesn't exist there at all, so
-        // this is the best a web page can do, same as before.
-        objectUrl = URL.createObjectURL(blob)
-        iframe = document.createElement('iframe')
-        iframe.style.position = 'fixed'
-        iframe.style.width = '0'
-        iframe.style.height = '0'
-        iframe.style.border = 'none'
-        iframe.src = objectUrl
-        document.body.appendChild(iframe)
-        iframe.onload = () => {
-          try {
-            iframe?.contentWindow?.print()
-          } catch {
-            // No printer, print dialog unavailable, anything at all --
-            // this was automatic, so it fails silently and the person
-            // still has the manual Print button below as a fallback.
-          }
-        }
-      } catch {
-        // Same as above: an automatic action must never surface an
-        // error or block getting back to selling.
-      }
-    })()
-
-    return () => {
-      cancelled = true
-      if (iframe && document.body.contains(iframe)) document.body.removeChild(iframe)
-      if (objectUrl) URL.revokeObjectURL(objectUrl)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sale.id])
 
   useEffect(() => {
     // Any keypress dismisses the receipt back to a fresh sale -- a

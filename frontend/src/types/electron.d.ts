@@ -7,7 +7,6 @@ export {}
 declare global {
   interface Window {
     electronAPI?: {
-      printReceiptSilently: (base64Pdf: string) => Promise<{ printed: boolean }>
       downloadUpdateInstaller: (url: string) => Promise<void>
     }
   }

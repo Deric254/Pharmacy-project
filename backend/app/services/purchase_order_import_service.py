@@ -37,13 +37,14 @@ from app.schemas.purchase_order import (
 )
 from app.services.purchasing_service import PurchasingService
 
-_HEADERS = ["Product name", "Quantity", "Batch number", "Expiry date", "Unit cost"]
+_HEADERS = ["Product name", "Quantity", "Batch number", "Expiry date", "Unit cost", "Selling price"]
 _EXAMPLE_ROW: list[str | int | float] = [
     "EXAMPLE - Paracetamol 500mg",
     100,
     "BATCH-001",
     "2027-06-30",
     8.5,
+    12.0,
 ]
 _MAX_ROWS = 500  # a single delivery is realistically dozens of lines, not thousands
 
@@ -72,6 +73,7 @@ def generate_purchase_order_import_template() -> bytes:
     ws.column_dimensions["C"].width = 18
     ws.column_dimensions["D"].width = 16
     ws.column_dimensions["E"].width = 14
+    ws.column_dimensions["F"].width = 16
 
     qty_validation = DataValidation(
         type="whole",
@@ -96,6 +98,18 @@ def generate_purchase_order_import_template() -> bytes:
     )
     ws.add_data_validation(cost_validation)
     cost_validation.add(f"E2:E{_MAX_ROWS}")
+
+    selling_validation = DataValidation(
+        type="decimal",
+        operator="greaterThanOrEqual",
+        formula1=0,
+        allow_blank=False,
+        showErrorMessage=True,
+        errorTitle="Invalid selling price",
+        error="Selling price must be a number, 0 or greater.",
+    )
+    ws.add_data_validation(selling_validation)
+    selling_validation.add(f"F2:F{_MAX_ROWS}")
 
     instructions = ws.cell(
         row=1,
@@ -141,7 +155,7 @@ async def _parse_and_validate(
         ) from exc
 
     errors: list[ImportRowError] = []
-    parsed_rows: list[tuple[int, str, int, str, date_type, float]] = []
+    parsed_rows: list[tuple[int, str, int, str, date_type, float, float]] = []
     seen_batch_numbers: dict[str, int] = {}
 
     rows = list(ws.iter_rows(min_row=2, values_only=True))
@@ -153,8 +167,8 @@ async def _parse_and_validate(
 
     for offset, row in enumerate(rows):
         row_num = offset + 2
-        row_values: list[Any] = (list(row) + [None] * 5)[:5]
-        name_raw, qty_raw, batch_raw, expiry_raw, cost_raw = row_values
+        row_values: list[Any] = (list(row) + [None] * 6)[:6]
+        name_raw, qty_raw, batch_raw, expiry_raw, cost_raw, selling_raw = row_values
         name = _clean_str(name_raw)
 
         if not name:
@@ -217,8 +231,23 @@ async def _parse_and_validate(
             row_ok = False
             cost = 0.0
 
+        try:
+            selling_price = float(selling_raw) if selling_raw is not None else None
+            if selling_price is None or selling_price < 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            errors.append(
+                ImportRowError(
+                    row=row_num,
+                    field="Selling price",
+                    message="Must be a number, 0 or more.",
+                )
+            )
+            row_ok = False
+            selling_price = 0.0
+
         if row_ok and expiry is not None:
-            parsed_rows.append((row_num, name, qty, batch_number, expiry, cost))
+            parsed_rows.append((row_num, name, qty, batch_number, expiry, cost, selling_price))
 
     if not parsed_rows and not errors:
         errors.append(
@@ -229,7 +258,7 @@ async def _parse_and_validate(
     # Match every candidate name against the real, active catalog in
     # one case-insensitive query -- never invents a product from a
     # typo'd name.
-    names_to_match = list({name.lower() for _, name, _, _, _, _ in parsed_rows})
+    names_to_match = list({name.lower() for _, name, _, _, _, _, _ in parsed_rows})
     matched_by_lower: dict[str, int] = {}
     if names_to_match:
         result = await db.execute(
@@ -240,7 +269,7 @@ async def _parse_and_validate(
         matched_by_lower = dict((lower_name, pid) for pid, lower_name in result.all())
 
     lines: list[QuickPurchaseLine] = []
-    for row_num, name, qty, batch_number, expiry, cost in parsed_rows:
+    for row_num, name, qty, batch_number, expiry, cost, selling_price in parsed_rows:
         product_id = matched_by_lower.get(name.lower())
         if product_id is None:
             errors.append(
@@ -259,6 +288,7 @@ async def _parse_and_validate(
                     batch_number=batch_number,
                     expiry_date=expiry,
                     unit_cost=cost,
+                    selling_price=selling_price,
                 )
             )
         except ValidationError as exc:

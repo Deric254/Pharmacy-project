@@ -70,13 +70,16 @@ class SaleService:
 
             for item in payload.items:
                 product = products_by_id[item.product_id]
-                unit_price = product.default_selling_price
-                subtotal += unit_price * item.quantity
-
                 allocations = await select_batches_fefo(
                     self.db, item.product_id, item.quantity, lock=True
                 )
-                for batch, _qty in allocations:
+                for batch, qty in allocations:
+                    unit_price = (
+                        batch.selling_price
+                        if batch.selling_price is not None
+                        else product.default_selling_price
+                    )
+                    subtotal += unit_price * qty
                     if unit_price < batch.cost_price:
                         raise HTTPException(
                             status_code=400,
@@ -113,7 +116,11 @@ class SaleService:
             await self.db.flush()  # assigns sale.id without ending the transaction
 
             for product_id, (batch, qty) in all_allocations:
-                unit_price = products_by_id[product_id].default_selling_price
+                unit_price = (
+                    batch.selling_price
+                    if batch.selling_price is not None
+                    else products_by_id[product_id].default_selling_price
+                )
                 self.db.add(
                     SaleItem(
                         sale_id=sale.id,

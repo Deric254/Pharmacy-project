@@ -6,7 +6,7 @@ from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
 from app.models.stock_movement import MovementType, StockMovement
 from app.models.user import User
-from app.schemas.batch import BatchCreate, BatchOut
+from app.schemas.batch import BatchCreate, BatchOut, BatchUpdate
 
 
 class BatchService:
@@ -29,6 +29,7 @@ class BatchService:
         )
         if product_result.scalar_one_or_none() is None:
             raise HTTPException(status_code=404, detail="Product not found")
+        product = product_result.scalar_one()
 
         batch = MedicineBatch(
             product_id=product_id,
@@ -37,6 +38,11 @@ class BatchService:
             qty_received=payload.qty_received,
             qty_remaining=payload.qty_received,
             cost_price=payload.cost_price,
+            selling_price=(
+                payload.selling_price
+                if payload.selling_price is not None
+                else product.default_selling_price
+            ),
         )
         self.db.add(batch)
         await self.db.flush()  # assigns batch.id without ending the transaction
@@ -51,6 +57,17 @@ class BatchService:
             )
         )
 
+        await self.db.commit()
+        await self.db.refresh(batch)
+        return BatchOut.model_validate(batch)
+
+    async def update_selling_price(
+        self, product_id: int, batch_id: int, payload: BatchUpdate
+    ) -> BatchOut:
+        batch = await self.db.get(MedicineBatch, batch_id)
+        if batch is None or batch.product_id != product_id:
+            raise HTTPException(status_code=404, detail="Batch not found")
+        batch.selling_price = payload.selling_price
         await self.db.commit()
         await self.db.refresh(batch)
         return BatchOut.model_validate(batch)

@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.rbac import require_permission
 from app.models.user import User
-from app.schemas.batch import BatchCreate, BatchOut
+from app.schemas.batch import BatchCreate, BatchOut, BatchUpdate
 from app.schemas.product import BulkImportResult, ProductCreate, ProductOut, ProductUpdate
 from app.services.batch_service import BatchService
 from app.services.product_import_service import bulk_import, generate_import_template
@@ -154,3 +154,14 @@ async def create_batch(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> BatchOut:
     return await BatchService(db).create_batch(product_id, payload, created_by=current_user)
+
+
+@router.patch("/{product_id}/batches/{batch_id}", response_model=BatchOut)
+async def update_batch(
+    product_id: int,
+    batch_id: int,
+    payload: BatchUpdate,
+    _: Annotated[User, Depends(require_permission("batches.create"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> BatchOut:
+    return await BatchService(db).update_selling_price(product_id, batch_id, payload)

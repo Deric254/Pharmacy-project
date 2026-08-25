@@ -500,6 +500,7 @@ interface QuickPurchaseLineDraft {
   batchNumber: string
   expiryDate: string
   unitCost: number
+  sellingPrice: number
 }
 
 function generateSessionBatchNumber(): string {
@@ -534,6 +535,7 @@ function QuickPurchaseModal({
       batchNumber: sessionBatchNumber,
       expiryDate: '',
       unitCost: 0,
+      sellingPrice: 0,
     },
   ])
   const [productResults, setProductResults] = useState<ProductOut[]>([])
@@ -568,6 +570,7 @@ function QuickPurchaseModal({
         batchNumber: sessionBatchNumber,
         expiryDate: '',
         unitCost: 0,
+        sellingPrice: 0,
       },
     ])
   }
@@ -603,6 +606,7 @@ function QuickPurchaseModal({
           batch_number: l.batchNumber.trim(),
           expiry_date: l.expiryDate,
           unit_cost: l.unitCost,
+          selling_price: l.sellingPrice,
         })),
       })
       onReceived()
@@ -717,6 +721,19 @@ function QuickPurchaseModal({
                   step={0.01}
                   value={line.unitCost}
                   onChange={(e) => updateLine(index, { unitCost: Number(e.target.value) })}
+                  className="figure mt-1 w-full border border-rule bg-paper px-2 py-1.5 text-sm"
+                />
+              </label>
+              <label className="block">
+                <span className="block text-xs uppercase tracking-wide text-ink-soft">
+                  Selling price
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={line.sellingPrice}
+                  onChange={(e) => updateLine(index, { sellingPrice: Number(e.target.value) })}
                   className="figure mt-1 w-full border border-rule bg-paper px-2 py-1.5 text-sm"
                 />
               </label>

@@ -62,6 +62,7 @@ export interface BatchOut {
   qty_received: number
   qty_remaining: number
   cost_price: number
+  selling_price: number | null
   created_at: string
 }
 
@@ -254,6 +255,7 @@ export interface QuickPurchaseLine {
   batch_number: string
   expiry_date: string
   unit_cost: number
+  selling_price: number
 }
 
 export interface QuickPurchaseRequest {

@@ -343,13 +343,9 @@ export function PosPage() {
         }
       }
 
-      const quote = await salesApi.quote({
-        items: cart.map((l) => ({ product_id: l.product.id, quantity: l.quantity })),
-        discount_amount: discount,
-      })
       const sale = await salesApi.create({
         items: cart.map((l) => ({ product_id: l.product.id, quantity: l.quantity })),
-        payments: [{ method: paymentMethod, amount: quote.total_amount }],
+        payments: [{ method: paymentMethod, amount: estimatedTotal }],
         discount_amount: discount,
         customer_id: customerId,
         idempotency_key: idempotencyKey,
@@ -429,7 +425,7 @@ export function PosPage() {
             >
               <p className="truncate text-sm font-medium">{product.name}</p>
               <p className="figure mt-1 text-sm text-ink-soft">
-                {formatCurrency(product.current_selling_price ?? product.default_selling_price)}
+                {formatCurrency(product.default_selling_price)}
               </p>
               <p className="text-xs text-ink-soft">{product.total_qty_available} in stock</p>
               {product.margin_percent !== null && (
@@ -463,10 +459,7 @@ export function PosPage() {
                 <div className="flex justify-between text-sm">
                   <span className="truncate pr-2">{line.product.name}</span>
                   <span className="figure">
-                    {formatCurrency(
-                      (line.product.current_selling_price ?? line.product.default_selling_price) *
-                        line.quantity,
-                    )}
+                    {formatCurrency(line.product.default_selling_price * line.quantity)}
                   </span>
                 </div>
                 <div className="mt-1 flex items-center gap-2">

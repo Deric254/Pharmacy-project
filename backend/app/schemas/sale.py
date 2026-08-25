@@ -44,24 +44,6 @@ class SaleCreate(BaseModel):
         return self
 
 
-class SaleQuoteRequest(BaseModel):
-    items: list[SaleItemRequest] = Field(min_length=1)
-    discount_amount: Money = 0.0
-
-    @model_validator(mode="after")
-    def items_have_unique_products(self) -> "SaleQuoteRequest":
-        product_ids = [item.product_id for item in self.items]
-        if len(product_ids) != len(set(product_ids)):
-            raise ValueError("Each product should appear once per sale; combine quantities instead")
-        return self
-
-
-class SaleQuoteOut(BaseModel):
-    subtotal: float
-    discount_amount: float
-    total_amount: float
-
-
 class SaleItemOut(BaseModel):
     id: int
     product_id: int

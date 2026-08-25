@@ -27,9 +27,9 @@ class BatchService:
         product_result = await self.db.execute(
             select(Product).where(Product.id == product_id, Product.deleted_at.is_(None))
         )
-        if product_result.scalar_one_or_none() is None:
+        product = product_result.scalar_one_or_none()
+        if product is None:
             raise HTTPException(status_code=404, detail="Product not found")
-        product = product_result.scalar_one()
 
         batch = MedicineBatch(
             product_id=product_id,

@@ -99,17 +99,7 @@ def generate_purchase_order_import_template() -> bytes:
     ws.add_data_validation(cost_validation)
     cost_validation.add(f"E2:E{_MAX_ROWS}")
 
-    selling_validation = DataValidation(
-        type="decimal",
-        operator="greaterThanOrEqual",
-        formula1=0,
-        allow_blank=False,
-        showErrorMessage=True,
-        errorTitle="Invalid selling price",
-        error="Selling price must be a number, 0 or greater.",
-    )
-    ws.add_data_validation(selling_validation)
-    selling_validation.add(f"F2:F{_MAX_ROWS}")
+    cost_validation.add(f"F2:F{_MAX_ROWS}")
 
     instructions = ws.cell(
         row=1,

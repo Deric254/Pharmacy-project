@@ -155,7 +155,7 @@ async def _parse_and_validate(
         ) from exc
 
     errors: list[ImportRowError] = []
-    parsed_rows: list[tuple[int, str, int, str, date_type, float, float | None]] = []
+    parsed_rows: list[tuple[int, str, int, str, date_type, float, float]] = []
     seen_batch_numbers: dict[str, int] = {}
 
     rows = list(ws.iter_rows(min_row=2, values_only=True))
@@ -231,23 +231,20 @@ async def _parse_and_validate(
             row_ok = False
             cost = 0.0
 
-        if selling_raw is None or _clean_str(selling_raw) == "":
-            selling_price = None
-        else:
-            try:
-                selling_price = float(selling_raw)
-                if selling_price < 0:
-                    raise ValueError
-            except (TypeError, ValueError):
-                errors.append(
-                    ImportRowError(
-                        row=row_num,
-                        field="Selling price",
-                        message="Must be a number, 0 or more.",
-                    )
+        try:
+            selling_price = float(selling_raw) if selling_raw is not None else None
+            if selling_price is None or selling_price < 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            errors.append(
+                ImportRowError(
+                    row=row_num,
+                    field="Selling price",
+                    message="Must be a number, 0 or more.",
                 )
-                row_ok = False
-                selling_price = None
+            )
+            row_ok = False
+            selling_price = 0.0
 
         if row_ok and expiry is not None:
             parsed_rows.append((row_num, name, qty, batch_number, expiry, cost, selling_price))

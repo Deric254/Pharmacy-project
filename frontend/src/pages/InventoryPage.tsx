@@ -308,9 +308,6 @@ function BatchAdjustRow({
   const [notes, setNotes] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [sellingPrice, setSellingPrice] = useState(batch.selling_price ?? 0)
-  const [markupPercent, setMarkupPercent] = useState(
-    batch.cost_price > 0 ? ((sellingPrice - batch.cost_price) / batch.cost_price) * 100 : 0,
-  )
   const [savingPrice, setSavingPrice] = useState(false)
 
   return (
@@ -331,21 +328,6 @@ function BatchAdjustRow({
           onChange={(e) => setSellingPrice(Math.max(0, Number(e.target.value) || 0))}
           className="figure w-20 border border-rule bg-paper px-2 py-1"
           aria-label="Batch selling price"
-        />
-        <input
-          type="number"
-          min={0}
-          step={0.01}
-          value={markupPercent || ''}
-          onChange={(e) => {
-            const nextMarkup = Math.max(0, Number(e.target.value) || 0)
-            setMarkupPercent(nextMarkup)
-            setSellingPrice(
-              Math.round(batch.cost_price * (1 + nextMarkup / 100) * 100) / 100,
-            )
-          }}
-          className="figure w-20 border border-rule bg-paper px-2 py-1"
-          aria-label="Batch markup percentage"
         />
         <button
           disabled={savingPrice || sellingPrice === (batch.selling_price ?? 0)}

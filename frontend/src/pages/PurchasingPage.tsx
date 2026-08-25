@@ -501,7 +501,6 @@ interface QuickPurchaseLineDraft {
   expiryDate: string
   unitCost: number
   sellingPrice: number
-  markupPercent: number
 }
 
 function generateSessionBatchNumber(): string {
@@ -537,7 +536,6 @@ function QuickPurchaseModal({
       expiryDate: '',
       unitCost: 0,
       sellingPrice: 0,
-      markupPercent: 0,
     },
   ])
   const [productResults, setProductResults] = useState<ProductOut[]>([])
@@ -573,7 +571,6 @@ function QuickPurchaseModal({
         expiryDate: '',
         unitCost: 0,
         sellingPrice: 0,
-        markupPercent: 0,
       },
     ])
   }
@@ -668,12 +665,7 @@ function QuickPurchaseModal({
                       <button
                         type="button"
                         onClick={() => {
-                          updateLine(index, {
-                            productId: p.id,
-                            productName: p.name,
-                            sellingPrice: p.default_selling_price,
-                            markupPercent: 0,
-                          })
+                          updateLine(index, { productId: p.id, productName: p.name })
                           setActiveSearchIndex(null)
                           setProductResults([])
                         }}
@@ -742,24 +734,6 @@ function QuickPurchaseModal({
                   step={0.01}
                   value={line.sellingPrice}
                   onChange={(e) => updateLine(index, { sellingPrice: Number(e.target.value) })}
-                  className="figure mt-1 w-full border border-rule bg-paper px-2 py-1.5 text-sm"
-                />
-              </label>
-              <label className="block">
-                <span className="block text-xs uppercase tracking-wide text-ink-soft">
-                  Markup %
-                </span>
-                <input
-                  type="number"
-                  min={0}
-                  step={0.01}
-                  value={line.markupPercent || ''}
-                  onChange={(e) => {
-                    const markupPercent = Math.max(0, Number(e.target.value) || 0)
-                    const sellingPrice =
-                      Math.round(line.unitCost * (1 + markupPercent / 100) * 100) / 100
-                    updateLine(index, { markupPercent, sellingPrice })
-                  }}
                   className="figure mt-1 w-full border border-rule bg-paper px-2 py-1.5 text-sm"
                 />
               </label>

@@ -10,11 +10,6 @@ class BatchCreate(BaseModel):
     expiry_date: date
     qty_received: PositiveQuantity
     cost_price: Money
-    selling_price: Money | None = None
-
-
-class BatchUpdate(BaseModel):
-    selling_price: Money
 
 
 class BatchOut(BaseModel):
@@ -25,7 +20,6 @@ class BatchOut(BaseModel):
     qty_received: int
     qty_remaining: int
     cost_price: float
-    selling_price: float | None
     created_at: datetime
 
     model_config = {"from_attributes": True}

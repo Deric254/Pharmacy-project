@@ -47,7 +47,6 @@ class QuickPurchaseLine(BaseModel):
     batch_number: str = Field(min_length=1, max_length=80)
     expiry_date: date
     unit_cost: Money
-    selling_price: Money | None = None
 
 
 class QuickPurchaseRequest(BaseModel):

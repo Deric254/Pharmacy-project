@@ -20,7 +20,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.medicine_batch import MedicineBatch
-from app.models.product import Product
 from app.models.purchase_order import PurchaseOrder, PurchaseOrderItem, PurchaseOrderStatus
 from app.models.stock_movement import MovementType, StockMovement
 from app.models.supplier import Supplier, SupplierTransaction
@@ -63,19 +62,7 @@ class PurchasingService:
         await self.db.flush()
 
         total_owed = 0.0
-        product_result = await self.db.execute(
-            select(Product).where(Product.id.in_([line.product_id for line in payload.lines]))
-        )
-        products_by_id = {product.id: product for product in product_result.scalars().all()}
         for line in payload.lines:
-            product = products_by_id.get(line.product_id)
-            if product is None:
-                raise HTTPException(status_code=404, detail="Product not found")
-            selling_price = (
-                line.selling_price
-                if line.selling_price is not None
-                else product.default_selling_price
-            )
             # Receiving the same physical batch again -- same product,
             # same batch number, same expiry -- merges into the
             # existing record via standard weighted-average cost,
@@ -98,17 +85,6 @@ class PurchasingService:
                     existing_batch.qty_remaining * existing_batch.cost_price
                     + line.quantity * line.unit_cost
                 ) / combined_qty
-                if (
-                    existing_batch.selling_price is not None
-                    and existing_batch.selling_price != selling_price
-                ):
-                    raise HTTPException(
-                        status_code=409,
-                        detail=(
-                            "This batch already has a different selling price. "
-                            "Use a different batch number or edit the existing batch."
-                        ),
-                    )
                 existing_batch.qty_received += line.quantity
                 existing_batch.qty_remaining = combined_qty
                 batch = existing_batch
@@ -120,7 +96,6 @@ class PurchasingService:
                     qty_received=line.quantity,
                     qty_remaining=line.quantity,
                     cost_price=line.unit_cost,
-                    selling_price=selling_price,
                 )
                 self.db.add(batch)
             await self.db.flush()

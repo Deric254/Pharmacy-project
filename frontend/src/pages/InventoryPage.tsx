@@ -202,18 +202,6 @@ function AdjustmentPanel({ onAdjusted }: { onAdjusted: () => void }) {
     }
   }
 
-  async function updateBatchPrice(batchId: number, sellingPrice: number) {
-    if (!selectedProduct) return
-    setError(null)
-    try {
-      await productsApi.updateBatch(selectedProduct.id, batchId, sellingPrice)
-      setBatches(await productsApi.batches(selectedProduct.id))
-      onAdjusted()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not update batch price.')
-    }
-  }
-
   return (
     <div className="mb-6 ledger-panel p-4">
       <h2 className="mb-3 text-xs uppercase tracking-wide text-ink-soft">Adjust stock</h2>
@@ -277,7 +265,7 @@ function AdjustmentPanel({ onAdjusted }: { onAdjusted: () => void }) {
           </div>
           <div className="space-y-2">
             {batches.map((batch) => (
-              <BatchAdjustRow key={batch.id} batch={batch} onSubmit={submitAdjustment} onPriceChange={updateBatchPrice} />
+              <BatchAdjustRow key={batch.id} batch={batch} onSubmit={submitAdjustment} />
             ))}
             {batches.length === 0 && (
               <p className="text-sm text-ink-soft">No batches for this product yet.</p>
@@ -292,7 +280,6 @@ function AdjustmentPanel({ onAdjusted }: { onAdjusted: () => void }) {
 function BatchAdjustRow({
   batch,
   onSubmit,
-  onPriceChange,
 }: {
   batch: BatchOut
   onSubmit: (
@@ -301,14 +288,11 @@ function BatchAdjustRow({
     reason: AdjustmentReason,
     notes: string,
   ) => Promise<void>
-  onPriceChange: (batchId: number, sellingPrice: number) => Promise<void>
 }) {
   const [delta, setDelta] = useState(0)
   const [reason, setReason] = useState<AdjustmentReason>('MISCOUNT')
   const [notes, setNotes] = useState('')
   const [submitting, setSubmitting] = useState(false)
-  const [sellingPrice, setSellingPrice] = useState(batch.selling_price ?? 0)
-  const [savingPrice, setSavingPrice] = useState(false)
 
   return (
     <div className="ruled-row grid grid-cols-[1fr_auto] items-center gap-2 pb-2 text-sm">
@@ -317,29 +301,8 @@ function BatchAdjustRow({
           {batch.batch_number} <span className="text-ink-soft">· exp {batch.expiry_date}</span>
         </p>
         <p className="figure text-ink-soft">{batch.qty_remaining} remaining</p>
-        <p className="figure text-ink-soft">Buy {batch.cost_price.toFixed(2)}</p>
       </div>
       <div className="flex flex-wrap items-center justify-end gap-1">
-        <input
-          type="number"
-          min={0}
-          step={0.01}
-          value={sellingPrice}
-          onChange={(e) => setSellingPrice(Math.max(0, Number(e.target.value) || 0))}
-          className="figure w-20 border border-rule bg-paper px-2 py-1"
-          aria-label="Batch selling price"
-        />
-        <button
-          disabled={savingPrice || sellingPrice === (batch.selling_price ?? 0)}
-          onClick={async () => {
-            setSavingPrice(true)
-            await onPriceChange(batch.id, sellingPrice)
-            setSavingPrice(false)
-          }}
-          className="border border-rule px-2 py-1 text-xs disabled:opacity-40"
-        >
-          Save price
-        </button>
         <input
           type="number"
           value={delta || ''}

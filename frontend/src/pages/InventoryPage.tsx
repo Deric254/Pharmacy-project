@@ -101,7 +101,10 @@ export function InventoryPage() {
       )}
 
       {canAdjust && (
-        <AdjustmentPanel onAdjusted={() => setReloadKey((k) => k + 1)} />
+        <AdjustmentPanel
+          onAdjusted={() => setReloadKey((k) => k + 1)}
+          canReprice={canRepriceBatches}
+        />
       )}
 
       {canAdjust && <ReconciliationPanel />}
@@ -149,7 +152,13 @@ export function InventoryPage() {
   )
 }
 
-function AdjustmentPanel({ onAdjusted }: { onAdjusted: () => void }) {
+function AdjustmentPanel({
+  onAdjusted,
+  canReprice,
+}: {
+  onAdjusted: () => void
+  canReprice: boolean
+}) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<ProductOut[]>([])
   const [selectedProduct, setSelectedProduct] = useState<ProductOut | null>(null)
@@ -306,7 +315,7 @@ function AdjustmentPanel({ onAdjusted }: { onAdjusted: () => void }) {
                   onSubmit={submitAdjustment}
                   onPriceChange={updateBatchPrice}
                   sellsNext={batch.id === fefoNextId}
-                  canReprice={canRepriceBatches}
+                  canReprice={canReprice}
                 />
               ))
             })()}

@@ -47,9 +47,7 @@ def upgrade() -> None:
     role_ids = {
         row.name: row.id
         for row in conn.execute(
-            sa.text(
-                "SELECT id, name FROM roles WHERE name IN ('Administrator', 'ChemistOwner')"
-            )
+            sa.text("SELECT id, name FROM roles WHERE name IN ('Administrator', 'ChemistOwner')")
         )
     }
     perm_id = conn.execute(

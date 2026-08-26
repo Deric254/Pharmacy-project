@@ -276,9 +276,38 @@ function AdjustmentPanel({ onAdjusted }: { onAdjusted: () => void }) {
             </button>
           </div>
           <div className="space-y-2">
-            {batches.map((batch) => (
-              <BatchAdjustRow key={batch.id} batch={batch} onSubmit={submitAdjustment} onPriceChange={updateBatchPrice} />
-            ))}
+            {(() => {
+              // Mirrors the backend's FEFO selection (expiry order,
+              // qty_remaining > 0, not expired) closely enough for
+              // display purposes -- batches already arrive sorted by
+              // expiry_date from the API, matching select_batches_fefo.
+              // The one thing this can't see is a batch mid stock-take
+              // lock (BatchOut doesn't expose that), so this is "the
+              // batch that will sell next once any active count on it
+              // finishes" rather than a byte-for-byte guarantee.
+              const today = new Date().toISOString().slice(0, 10)
+              const fefoNextId = batches.find(
+                (b) => b.qty_remaining > 0 && b.expiry_date >= today,
+              )?.id
+              return batches.map((batch) => (
+                <BatchAdjustRow
+                  // Local price/markup state is seeded once on mount
+                  // (useState's initializer only runs once per key).
+                  // Folding selling_price into the key means a real
+                  // server-side price change -- from another user, or
+                  // from a refetch after adjusting a *different*
+                  // batch's quantity -- forces a clean remount instead
+                  // of leaving this row's draft compared against a
+                  // stale baseline, which could otherwise let "Save"
+                  // silently overwrite someone else's concurrent edit.
+                  key={`${batch.id}-${batch.selling_price ?? 'null'}`}
+                  batch={batch}
+                  onSubmit={submitAdjustment}
+                  onPriceChange={updateBatchPrice}
+                  sellsNext={batch.id === fefoNextId}
+                />
+              ))
+            })()}
             {batches.length === 0 && (
               <p className="text-sm text-ink-soft">No batches for this product yet.</p>
             )}
@@ -293,8 +322,10 @@ function BatchAdjustRow({
   batch,
   onSubmit,
   onPriceChange,
+  sellsNext,
 }: {
   batch: BatchOut
+  sellsNext: boolean
   onSubmit: (
     batchId: number,
     delta: number,
@@ -318,9 +349,20 @@ function BatchAdjustRow({
       <div>
         <p>
           {batch.batch_number} <span className="text-ink-soft">· exp {batch.expiry_date}</span>
+          {sellsNext ? (
+            <span className="ml-2 border border-stamp-green-soft bg-stamp-green-soft/40 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-stamp-green">
+              Sells next
+            </span>
+          ) : null}
         </p>
         <p className="figure text-ink-soft">{batch.qty_remaining} remaining</p>
         <p className="figure text-ink-soft">Buy {batch.cost_price.toFixed(2)}</p>
+        {!sellsNext && (
+          <p className="mt-1 max-w-xs text-xs text-ink-soft">
+            An earlier batch sells first (FEFO). A price change here won't show at the
+            register or in reports until that batch is sold out.
+          </p>
+        )}
       </div>
       <div className="flex flex-wrap items-center justify-end gap-1">
         <input

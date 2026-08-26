@@ -463,7 +463,13 @@ class TestIdempotentCheckout:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert r.status_code == 400
-        assert "loss" in r.json()["detail"].lower()
+        detail = r.json()["detail"].lower()
+        assert "loss" in detail
+        # A product can have several batches at different prices --
+        # naming which specific batch is the problem (not just the
+        # product) is what lets someone actually go fix it, rather
+        # than guessing which of several batches to edit in Inventory.
+        assert "batch" in detail
 
     async def test_rejected_sale_never_touches_stock(self, client, employee_user):
         """

@@ -91,10 +91,12 @@ class SaleService:
                         raise HTTPException(
                             status_code=400,
                             detail=(
-                                f'"{product.name}" would sell at a loss: selling price '
-                                f"{unit_price:.2f} is below this stock's cost "
-                                f"{batch.cost_price:.2f}. Raise the selling price or adjust "
-                                "the batch cost before selling this line."
+                                f'"{product.name}" (batch {batch.batch_number}, '
+                                f"exp {batch.expiry_date.isoformat()}) would sell at a loss: "
+                                f"selling price {unit_price:.2f} is below this batch's cost "
+                                f"{batch.cost_price:.2f}. This is the batch FEFO would sell "
+                                "next for this product -- raise its selling price in "
+                                "Inventory, or adjust its cost, before selling this line."
                             ),
                         )
                 for allocation in allocations:

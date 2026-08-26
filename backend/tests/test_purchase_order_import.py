@@ -59,16 +59,42 @@ class TestPurchaseOrderImportTemplate:
         content = generate_purchase_order_import_template()
         wb = openpyxl.load_workbook(io.BytesIO(content))
         ws = wb.active
-        assert [c.value for c in ws[1]][:5] == [
+        assert [c.value for c in ws[1]][:6] == [
             "Product name",
             "Quantity",
             "Batch number",
             "Expiry date",
             "Unit cost",
+            "Selling price",
         ]
         validations = list(ws.data_validations.dataValidation)
-        assert len(validations) == 2
+        assert len(validations) == 3
         assert {v.type for v in validations} == {"whole", "decimal"}
+
+    def test_template_selling_price_column_allows_blank_with_its_own_message(self):
+        """
+        Selling price is optional -- leaving it blank on a restock row
+        is the normal case (it means "no opinion, keep the batch's
+        existing price"), not an error. This locks in that its
+        validation is a genuinely separate rule from Unit cost's,
+        rather than being silently reused (which previously made Excel
+        reject a blank Selling price cell with an "Invalid cost" /
+        "Unit cost must be..." message on the wrong column entirely).
+        """
+        content = generate_purchase_order_import_template()
+        wb = openpyxl.load_workbook(io.BytesIO(content))
+        ws = wb.active
+        selling_price_validation = next(
+            v for v in ws.data_validations.dataValidation if "F2" in str(v.sqref)
+        )
+        assert selling_price_validation.allow_blank is True
+        assert "cost" not in (selling_price_validation.error or "").lower()
+        assert "cost" not in (selling_price_validation.errorTitle or "").lower()
+
+        unit_cost_validation = next(
+            v for v in ws.data_validations.dataValidation if str(v.sqref) == "E2:E500"
+        )
+        assert unit_cost_validation.allow_blank is False
 
 
 class TestPurchaseOrderBulkImport:

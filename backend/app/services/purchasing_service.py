@@ -71,11 +71,6 @@ class PurchasingService:
             product = products_by_id.get(line.product_id)
             if product is None:
                 raise HTTPException(status_code=404, detail="Product not found")
-            selling_price = (
-                line.selling_price
-                if line.selling_price is not None
-                else product.default_selling_price
-            )
             # Receiving the same physical batch again -- same product,
             # same batch number, same expiry -- merges into the
             # existing record via standard weighted-average cost,
@@ -98,17 +93,32 @@ class PurchasingService:
                     existing_batch.qty_remaining * existing_batch.cost_price
                     + line.quantity * line.unit_cost
                 ) / combined_qty
-                if (
-                    existing_batch.selling_price is not None
-                    and existing_batch.selling_price != selling_price
-                ):
-                    raise HTTPException(
-                        status_code=409,
-                        detail=(
-                            "This batch already has a different selling price. "
-                            "Use a different batch number or edit the existing batch."
-                        ),
-                    )
+                # Only ever compare/apply a price the purchaser actually
+                # typed on THIS line (line.selling_price, still None when
+                # left blank) -- never the resolved default. Two real bugs
+                # otherwise follow from resolving to product.default_selling_price
+                # before this point: (1) a genuinely blank line would get
+                # compared against the batch's real price and could
+                # wrongly 409 a plain restock that never mentioned price
+                # at all; (2) an explicit price on a batch that had none
+                # yet would fail this `is not None` check on the *existing*
+                # side and silently vanish -- never applied, never rejected,
+                # just dropped -- confirmed live: submitting selling_price
+                # on a second delivery of a batch with no price set left
+                # the batch's selling_price as None afterward.
+                if line.selling_price is not None:
+                    if (
+                        existing_batch.selling_price is not None
+                        and existing_batch.selling_price != line.selling_price
+                    ):
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                "This batch already has a different selling price. "
+                                "Use a different batch number or edit the existing batch."
+                            ),
+                        )
+                    existing_batch.selling_price = line.selling_price
                 existing_batch.qty_received += line.quantity
                 existing_batch.qty_remaining = combined_qty
                 batch = existing_batch
@@ -120,7 +130,11 @@ class PurchasingService:
                     qty_received=line.quantity,
                     qty_remaining=line.quantity,
                     cost_price=line.unit_cost,
-                    selling_price=selling_price,
+                    selling_price=(
+                        line.selling_price
+                        if line.selling_price is not None
+                        else product.default_selling_price
+                    ),
                 )
                 self.db.add(batch)
             await self.db.flush()

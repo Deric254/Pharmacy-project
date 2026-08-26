@@ -432,6 +432,70 @@ class TestMarginAndMarkup:
         assert product["current_cost"] == 12.0
         assert product["margin_amount"] == 8.0
 
+    async def test_editing_a_non_fefo_next_batch_price_is_invisible_at_product_level(
+        self, client, owner_user
+    ):
+        """
+        Real-world confusion this guards against: a product with
+        several batches at different prices, where someone edits a
+        batch's selling price expecting it to show at the register --
+        but current_selling_price (and therefore the POS price and
+        margin) only ever reflects the FEFO-next batch. The edit to a
+        later-expiring batch genuinely saves (confirmed here), it just
+        has zero visible effect anywhere else until the earlier batch
+        sells out. This is the intended design (matches current_cost's
+        FEFO-only behavior above) -- this test exists so a future
+        change to that design is a deliberate choice, not an accident,
+        and so the behavior is documented precisely enough that support
+        can explain it instead of it looking like random breakage.
+        """
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        create = await client.post(
+            "/api/v1/products",
+            json={"name": "FEFO Price Visibility Product", "default_selling_price": 20.0},
+            headers=headers,
+        )
+        product_id = create.json()["id"]
+        await client.post(
+            f"/api/v1/products/{product_id}/batches",
+            json={
+                "batch_number": "SOON",
+                "expiry_date": "2027-01-01",
+                "qty_received": 10,
+                "cost_price": 10.0,
+                "selling_price": 25.0,
+            },
+            headers=headers,
+        )
+        later = await client.post(
+            f"/api/v1/products/{product_id}/batches",
+            json={
+                "batch_number": "LATER",
+                "expiry_date": "2028-01-01",
+                "qty_received": 10,
+                "cost_price": 10.0,
+                "selling_price": 30.0,
+            },
+            headers=headers,
+        )
+        later_batch_id = later.json()["id"]
+
+        before = await client.get(f"/api/v1/products/{product_id}", headers=headers)
+        assert before.json()["current_selling_price"] == 25.0  # the SOON batch, FEFO-next
+
+        edit = await client.patch(
+            f"/api/v1/products/{product_id}/batches/{later_batch_id}",
+            json={"selling_price": 99.0},
+            headers=headers,
+        )
+        assert edit.status_code == 200
+        assert edit.json()["selling_price"] == 99.0  # the edit genuinely saved
+
+        after = await client.get(f"/api/v1/products/{product_id}", headers=headers)
+        # Still 25.0, not 99.0 -- the SOON batch is still what's next.
+        assert after.json()["current_selling_price"] == 25.0
+
 
 class TestNameCannotBeJustWhitespace:
     """

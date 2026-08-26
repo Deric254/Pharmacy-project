@@ -16,6 +16,7 @@ Purchasing tests. The properties that matter:
 import asyncio
 
 from app.core.database import AsyncSessionLocal
+from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
 from app.models.supplier import Supplier
 
@@ -464,6 +465,142 @@ class TestQuickPurchase:
 
         batches = await client.get(f"/api/v1/products/{product_id}/batches", headers=headers)
         assert len(batches.json()) == 2
+
+    async def test_explicit_selling_price_applied_to_legacy_null_batch(self, client, owner_user):
+        """
+        A batch with no selling_price set (the real-world case for any
+        batch created before this field existed -- migration 0029
+        backfills those to NULL) that receives a new delivery which DOES
+        specify a selling_price must have that price applied. Before the
+        fix, `selling_price` was resolved to `product.default_selling_price`
+        before the merge decision, so the `existing_batch.selling_price
+        is not None` guard on the *existing* side silently swallowed an
+        explicitly-submitted price whenever the existing batch happened
+        to have none yet -- no error, no confirmation, just dropped.
+        """
+        from sqlalchemy import select
+
+        product_id = await _make_product("Legacy Null Price Product")
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        supplier = await client.post(
+            "/api/v1/suppliers", json={"name": "Legacy Null Price Supplier"}, headers=headers
+        )
+        supplier_id = supplier.json()["id"]
+
+        r1 = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": supplier_id,
+                "lines": [
+                    {
+                        "product_id": product_id,
+                        "quantity": 100,
+                        "batch_number": "LEGACY-001",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 10.0,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert r1.status_code == 201, r1.text
+
+        # Force the batch back to NULL to simulate a pre-feature batch.
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(MedicineBatch).where(MedicineBatch.batch_number == "LEGACY-001")
+            )
+            batch = result.scalar_one()
+            batch.selling_price = None
+            await db.commit()
+
+        r2 = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": supplier_id,
+                "lines": [
+                    {
+                        "product_id": product_id,
+                        "quantity": 50,
+                        "batch_number": "LEGACY-001",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 10.0,
+                        "selling_price": 25.0,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert r2.status_code == 201, r2.text
+
+        batches = await client.get(f"/api/v1/products/{product_id}/batches", headers=headers)
+        assert batches.json()[0]["selling_price"] == 25.0
+
+    async def test_plain_restock_never_blocked_by_unspecified_price(self, client, owner_user):
+        """
+        Restocking a batch that already has a selling_price, WITHOUT
+        specifying a price on the new line (the normal case -- nobody
+        retypes the price on every routine restock), must never be
+        blocked. Before the fix, an unspecified line price was resolved
+        to `product.default_selling_price` before the merge check, so a
+        routine restock with no price opinion at all could get a false
+        409 the moment the product's generic default drifted from
+        whatever price this specific batch was actually set to sell at.
+        """
+        product_id = await _make_product("Restock No Price Product", price=20.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        supplier = await client.post(
+            "/api/v1/suppliers", json={"name": "Restock No Price Supplier"}, headers=headers
+        )
+        supplier_id = supplier.json()["id"]
+
+        r1 = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": supplier_id,
+                "lines": [
+                    {
+                        "product_id": product_id,
+                        "quantity": 100,
+                        "batch_number": "RESTOCK-001",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 10.0,
+                        "selling_price": 25.0,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert r1.status_code == 201, r1.text
+
+        r2 = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": supplier_id,
+                "lines": [
+                    {
+                        "product_id": product_id,
+                        "quantity": 50,
+                        "batch_number": "RESTOCK-001",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 10.0,
+                        # no selling_price -- must not conflict with the
+                        # batch's real price (25.0) just because it
+                        # differs from the product default (20.0)
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert r2.status_code == 201, r2.text
+
+        batches = await client.get(f"/api/v1/products/{product_id}/batches", headers=headers)
+        assert batches.json()[0]["selling_price"] == 25.0
+        assert batches.json()[0]["qty_remaining"] == 150
 
 
 class TestQuickPurchaseConcurrency:

@@ -502,6 +502,17 @@ interface QuickPurchaseLineDraft {
   unitCost: number
   sellingPrice: number
   markupPercent: number
+  // True only once the person actually edits the Selling price or
+  // Markup % field for this line -- as opposed to `sellingPrice`
+  // simply holding the product's current default because that's what
+  // gets seeded in when a product is picked. Submitting a line whose
+  // price was never touched must NOT tell the backend "explicitly sell
+  // this batch at this price": if `batchNumber`/`expiryDate` happen to
+  // match an existing batch (a restock), the backend now treats any
+  // submitted selling_price as an explicit instruction, and would
+  // wrongly 409 -- or wrongly overwrite -- that batch's real price
+  // just because it differs from today's generic product default.
+  sellingPriceTouched: boolean
 }
 
 function generateSessionBatchNumber(): string {
@@ -538,6 +549,7 @@ function QuickPurchaseModal({
       unitCost: 0,
       sellingPrice: 0,
       markupPercent: 0,
+      sellingPriceTouched: false,
     },
   ])
   const [productResults, setProductResults] = useState<ProductOut[]>([])
@@ -574,6 +586,7 @@ function QuickPurchaseModal({
         unitCost: 0,
         sellingPrice: 0,
         markupPercent: 0,
+        sellingPriceTouched: false,
       },
     ])
   }
@@ -609,7 +622,7 @@ function QuickPurchaseModal({
           batch_number: l.batchNumber.trim(),
           expiry_date: l.expiryDate,
           unit_cost: l.unitCost,
-          selling_price: l.sellingPrice,
+          selling_price: l.sellingPriceTouched ? l.sellingPrice : undefined,
         })),
       })
       onReceived()
@@ -741,7 +754,12 @@ function QuickPurchaseModal({
                   min={0}
                   step={0.01}
                   value={line.sellingPrice}
-                  onChange={(e) => updateLine(index, { sellingPrice: Number(e.target.value) })}
+                  onChange={(e) =>
+                    updateLine(index, {
+                      sellingPrice: Number(e.target.value),
+                      sellingPriceTouched: true,
+                    })
+                  }
                   className="figure mt-1 w-full border border-rule bg-paper px-2 py-1.5 text-sm"
                 />
               </label>
@@ -758,7 +776,7 @@ function QuickPurchaseModal({
                     const markupPercent = Math.max(0, Number(e.target.value) || 0)
                     const sellingPrice =
                       Math.round(line.unitCost * (1 + markupPercent / 100) * 100) / 100
-                    updateLine(index, { markupPercent, sellingPrice })
+                    updateLine(index, { markupPercent, sellingPrice, sellingPriceTouched: true })
                   }}
                   className="figure mt-1 w-full border border-rule bg-paper px-2 py-1.5 text-sm"
                 />

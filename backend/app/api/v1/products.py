@@ -161,7 +161,9 @@ async def update_batch(
     product_id: int,
     batch_id: int,
     payload: BatchUpdate,
-    _: Annotated[User, Depends(require_permission("batches.create"))],
+    current_user: Annotated[User, Depends(require_permission("batches.reprice"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> BatchOut:
-    return await BatchService(db).update_selling_price(product_id, batch_id, payload)
+    return await BatchService(db).update_selling_price(
+        product_id, batch_id, payload, changed_by=current_user
+    )

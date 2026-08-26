@@ -2,6 +2,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.audit_log import AuditLog
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
 from app.models.stock_movement import MovementType, StockMovement
@@ -62,12 +63,40 @@ class BatchService:
         return BatchOut.model_validate(batch)
 
     async def update_selling_price(
-        self, product_id: int, batch_id: int, payload: BatchUpdate
+        self, product_id: int, batch_id: int, payload: BatchUpdate, changed_by: User
     ) -> BatchOut:
+        """
+        Free to call at any time, on any batch, regardless of FEFO
+        order or whether it's the batch currently selling -- that's
+        the point (see InventoryPage: editing a non-FEFO batch is
+        allowed, it just won't be reflected at the register until
+        that batch is the one being drawn from). What's not optional
+        is the audit trail: every change is logged with who, when,
+        old price, and new price, in the same transaction as the
+        price change itself, so a reprice can never happen silently.
+        """
         batch = await self.db.get(MedicineBatch, batch_id)
         if batch is None or batch.product_id != product_id:
             raise HTTPException(status_code=404, detail="Batch not found")
-        batch.selling_price = payload.selling_price
+
+        old_price = batch.selling_price
+        new_price = payload.selling_price
+        if old_price != new_price:
+            batch.selling_price = new_price
+            self.db.add(
+                AuditLog(
+                    user_id=changed_by.id,
+                    user_name_snapshot=changed_by.full_name,
+                    action="batch.price_changed",
+                    entity_type="medicine_batch",
+                    entity_id=str(batch.id),
+                    old_value=f"{old_price:.2f}" if old_price is not None else "null",
+                    new_value=(
+                        f"{new_price:.2f} (product_id={batch.product_id}, "
+                        f"batch={batch.batch_number}, exp={batch.expiry_date.isoformat()})"
+                    ),
+                )
+            )
         await self.db.commit()
         await self.db.refresh(batch)
         return BatchOut.model_validate(batch)

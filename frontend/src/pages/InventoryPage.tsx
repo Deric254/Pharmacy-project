@@ -30,6 +30,7 @@ export function InventoryPage() {
   const hasPermission = useAuthStore((s) => s.hasPermission)
   const canAdjust = hasPermission('inventory.adjust')
   const canManageProducts = hasPermission('products.manage')
+  const canRepriceBatches = hasPermission('batches.reprice')
   const formatCurrency = useCurrencyFormatter()
 
   const [lowStock, setLowStock] = useState<LowStockProductOut[]>([])
@@ -305,6 +306,7 @@ function AdjustmentPanel({ onAdjusted }: { onAdjusted: () => void }) {
                   onSubmit={submitAdjustment}
                   onPriceChange={updateBatchPrice}
                   sellsNext={batch.id === fefoNextId}
+                  canReprice={canRepriceBatches}
                 />
               ))
             })()}
@@ -323,6 +325,7 @@ function BatchAdjustRow({
   onSubmit,
   onPriceChange,
   sellsNext,
+  canReprice,
 }: {
   batch: BatchOut
   sellsNext: boolean
@@ -333,6 +336,7 @@ function BatchAdjustRow({
     notes: string,
   ) => Promise<void>
   onPriceChange: (batchId: number, sellingPrice: number) => Promise<void>
+  canReprice: boolean
 }) {
   const [delta, setDelta] = useState(0)
   const [reason, setReason] = useState<AdjustmentReason>('MISCOUNT')
@@ -370,8 +374,9 @@ function BatchAdjustRow({
           min={0}
           step={0.01}
           value={sellingPrice}
+          disabled={!canReprice}
           onChange={(e) => setSellingPrice(Math.max(0, Number(e.target.value) || 0))}
-          className="figure w-20 border border-rule bg-paper px-2 py-1"
+          className="figure w-20 border border-rule bg-paper px-2 py-1 disabled:opacity-40"
           aria-label="Batch selling price"
         />
         <input
@@ -379,6 +384,7 @@ function BatchAdjustRow({
           min={0}
           step={0.01}
           value={markupPercent || ''}
+          disabled={!canReprice}
           onChange={(e) => {
             const nextMarkup = Math.max(0, Number(e.target.value) || 0)
             setMarkupPercent(nextMarkup)
@@ -386,11 +392,11 @@ function BatchAdjustRow({
               Math.round(batch.cost_price * (1 + nextMarkup / 100) * 100) / 100,
             )
           }}
-          className="figure w-20 border border-rule bg-paper px-2 py-1"
+          className="figure w-20 border border-rule bg-paper px-2 py-1 disabled:opacity-40"
           aria-label="Batch markup percentage"
         />
         <button
-          disabled={savingPrice || sellingPrice === (batch.selling_price ?? 0)}
+          disabled={!canReprice || savingPrice || sellingPrice === (batch.selling_price ?? 0)}
           onClick={async () => {
             setSavingPrice(true)
             await onPriceChange(batch.id, sellingPrice)

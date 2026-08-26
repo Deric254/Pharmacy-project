@@ -18,6 +18,16 @@ class SaleItemRequest(BaseModel):
     quantity: PositiveQuantity
 
 
+# No real till transaction is anywhere near this many distinct line
+# items -- this exists purely so a malformed or malicious request
+# can't force the server to loop select_batches_fefo + a DB write per
+# line thousands of times inside one transaction, holding this app's
+# single SQLite writer for an abnormally long time. Same reasoning as
+# the ceilings in _money.py: reject absurd input with a clean 422
+# before any DB work starts, rather than let it through and hope.
+MAX_SALE_LINE_ITEMS = 500
+
+
 class PaymentRequest(BaseModel):
     method: PaymentMethod
     amount: PositiveMoney
@@ -25,7 +35,7 @@ class PaymentRequest(BaseModel):
 
 
 class SaleCreate(BaseModel):
-    items: list[SaleItemRequest] = Field(min_length=1)
+    items: list[SaleItemRequest] = Field(min_length=1, max_length=MAX_SALE_LINE_ITEMS)
     payments: list[PaymentRequest] = Field(min_length=1)
     discount_amount: Money = 0.0
     customer_id: int | None = None
@@ -45,7 +55,7 @@ class SaleCreate(BaseModel):
 
 
 class SaleQuoteRequest(BaseModel):
-    items: list[SaleItemRequest] = Field(min_length=1)
+    items: list[SaleItemRequest] = Field(min_length=1, max_length=MAX_SALE_LINE_ITEMS)
     discount_amount: Money = 0.0
 
     @model_validator(mode="after")

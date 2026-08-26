@@ -27,6 +27,9 @@ from app.services.report_export_service import ExportFormat, build_export_respon
 # customers.manage permission for this scope.
 router = APIRouter(prefix="/customers", tags=["customers"])
 _MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024
+# Same reasoning and same value as _MAX_BROWSE_RESULTS in products.py --
+# applies only to the JSON response, never to the CSV/XLSX export branch.
+_MAX_BROWSE_RESULTS = 200
 
 _EXCEL_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -68,7 +71,7 @@ async def list_customers(
 ) -> object:
     customers = await CustomerService(db).list_all(search=search)
     if export == "json":
-        return customers
+        return customers[:_MAX_BROWSE_RESULTS]
     headers = ["ID", "Name", "Phone", "Email", "Loyalty points"]
     rows: list[list[object]] = [
         [c.id, c.name, c.phone or "", c.email or "", c.loyalty_points] for c in customers

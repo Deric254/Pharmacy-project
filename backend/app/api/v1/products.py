@@ -17,6 +17,15 @@ from app.services.report_export_service import ExportFormat, build_export_respon
 router = APIRouter(prefix="/products", tags=["products"])
 _MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024
 
+# Applies only to the JSON/browsing response below -- never to the CSV/XLSX
+# export branch, which must always return every matching row regardless of
+# count (that's the entire point of an export). This exists purely so a POS
+# screen loading with no search term (or a cleared search box) can never
+# pull an entire multi-thousand-SKU catalog over the wire and render it as
+# one giant DOM list -- 200 matches the page-size cap already used for
+# Sales and Audit Logs elsewhere in this app, kept for consistency.
+_MAX_BROWSE_RESULTS = 200
+
 _EXCEL_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
@@ -60,7 +69,9 @@ async def list_products(
 ) -> object:
     products = await ProductService(db).list_all(search=search)
     if export == "json":
-        return products
+        # Already sorted most-stocked-first by the service, so this slice
+        # keeps the most relevant products, not an arbitrary cut.
+        return products[:_MAX_BROWSE_RESULTS]
     headers = [
         "ID",
         "Name",

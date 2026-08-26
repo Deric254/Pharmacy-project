@@ -399,7 +399,7 @@ export function PosPage() {
 
   return (
     <div className="grid h-screen grid-cols-[1fr_360px]">
-      <div className="overflow-y-auto p-6">
+      <div className="min-h-0 overflow-y-auto p-6">
         <h1 className="mb-4 font-display text-2xl text-ink">Point of Sale</h1>
         <form onSubmit={(e: FormEvent) => e.preventDefault()} className="mb-4">
           <input
@@ -453,8 +453,8 @@ export function PosPage() {
         </div>
       </div>
 
-      <aside className="flex flex-col border-l border-rule bg-panel">
-        <div className="flex-1 overflow-y-auto p-4">
+      <aside className="flex min-h-0 flex-col border-l border-rule bg-panel">
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
           <h2 className="mb-3 text-xs uppercase tracking-wide text-ink-soft">Cart</h2>
           {cart.length === 0 && <p className="text-sm text-ink-soft">Nothing added yet.</p>}
           <ul className="space-y-2">

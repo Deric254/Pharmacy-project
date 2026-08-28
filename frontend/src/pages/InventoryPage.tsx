@@ -1,7 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { inventoryApi, productsApi } from '../api/domain'
 import { useAuthStore } from '../auth/store'
+import { useConfigStore } from '../config/store'
 import { useCurrencyFormatter } from '../lib/currency'
+import { businessToday, fallbackTimezone } from '../lib/businessDate'
 import { ApiError, downloadExport } from '../api/client'
 import { Modal } from '../components/Modal'
 import type {
@@ -31,6 +33,7 @@ export function InventoryPage() {
   const canAdjust = hasPermission('inventory.adjust')
   const canManageProducts = hasPermission('products.manage')
   const canRepriceBatches = hasPermission('batches.reprice')
+  const canCorrectCost = hasPermission('batches.correct_cost')
   const formatCurrency = useCurrencyFormatter()
 
   const [lowStock, setLowStock] = useState<LowStockProductOut[]>([])
@@ -104,6 +107,7 @@ export function InventoryPage() {
         <AdjustmentPanel
           onAdjusted={() => setReloadKey((k) => k + 1)}
           canReprice={canRepriceBatches}
+          canCorrectCost={canCorrectCost}
         />
       )}
 
@@ -155,10 +159,13 @@ export function InventoryPage() {
 function AdjustmentPanel({
   onAdjusted,
   canReprice,
+  canCorrectCost,
 }: {
   onAdjusted: () => void
   canReprice: boolean
+  canCorrectCost: boolean
 }) {
+  const timezone = useConfigStore((s) => s.config?.timezone) ?? fallbackTimezone()
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<ProductOut[]>([])
   const [selectedProduct, setSelectedProduct] = useState<ProductOut | null>(null)
@@ -221,6 +228,18 @@ function AdjustmentPanel({
       onAdjusted()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not update batch price.')
+    }
+  }
+
+  async function correctBatchCost(batchId: number, costPrice: number, reason: string) {
+    if (!selectedProduct) return
+    setError(null)
+    try {
+      await productsApi.correctBatchCost(selectedProduct.id, batchId, costPrice, reason)
+      setBatches(await productsApi.batches(selectedProduct.id))
+      onAdjusted()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not correct batch cost.')
     }
   }
 
@@ -295,7 +314,7 @@ function AdjustmentPanel({
               // lock (BatchOut doesn't expose that), so this is "the
               // batch that will sell next once any active count on it
               // finishes" rather than a byte-for-byte guarantee.
-              const today = new Date().toISOString().slice(0, 10)
+              const today = businessToday(timezone)
               const fefoNextId = batches.find(
                 (b) => b.qty_remaining > 0 && b.expiry_date >= today,
               )?.id
@@ -310,12 +329,14 @@ function AdjustmentPanel({
                   // of leaving this row's draft compared against a
                   // stale baseline, which could otherwise let "Save"
                   // silently overwrite someone else's concurrent edit.
-                  key={`${batch.id}-${batch.selling_price ?? 'null'}`}
+                  key={`${batch.id}-${batch.selling_price ?? 'null'}-${batch.cost_price}`}
                   batch={batch}
                   onSubmit={submitAdjustment}
                   onPriceChange={updateBatchPrice}
+                  onCostCorrect={correctBatchCost}
                   sellsNext={batch.id === fefoNextId}
                   canReprice={canReprice}
+                  canCorrectCost={canCorrectCost}
                 />
               ))
             })()}
@@ -333,8 +354,10 @@ function BatchAdjustRow({
   batch,
   onSubmit,
   onPriceChange,
+  onCostCorrect,
   sellsNext,
   canReprice,
+  canCorrectCost,
 }: {
   batch: BatchOut
   sellsNext: boolean
@@ -345,7 +368,9 @@ function BatchAdjustRow({
     notes: string,
   ) => Promise<void>
   onPriceChange: (batchId: number, sellingPrice: number) => Promise<void>
+  onCostCorrect: (batchId: number, costPrice: number, reason: string) => Promise<void>
   canReprice: boolean
+  canCorrectCost: boolean
 }) {
   const [delta, setDelta] = useState(0)
   const [reason, setReason] = useState<AdjustmentReason>('MISCOUNT')
@@ -356,6 +381,19 @@ function BatchAdjustRow({
     batch.cost_price > 0 ? ((sellingPrice - batch.cost_price) / batch.cost_price) * 100 : 0,
   )
   const [savingPrice, setSavingPrice] = useState(false)
+  // Nothing has moved out of this batch yet -- the same real condition
+  // the backend enforces (via the stock movement ledger, the actual
+  // source of truth), mirrored here only as a display hint so the
+  // control isn't shown at all in the overwhelmingly common case
+  // where it would just be rejected. The backend re-checks the real
+  // ledger regardless of what this shows, so a stale/cached mismatch
+  // here can never let a correction through that shouldn't happen --
+  // it can only make this device show the control one refresh late.
+  const costCorrectable = batch.qty_remaining === batch.qty_received
+  const [correctingCost, setCorrectingCost] = useState(false)
+  const [costDraft, setCostDraft] = useState(batch.cost_price)
+  const [costReason, setCostReason] = useState('')
+  const [savingCost, setSavingCost] = useState(false)
 
   return (
     <div className="ruled-row grid grid-cols-[1fr_auto] items-center gap-2 pb-2 text-sm">
@@ -369,7 +407,73 @@ function BatchAdjustRow({
           ) : null}
         </p>
         <p className="figure text-ink-soft">{batch.qty_remaining} remaining</p>
-        <p className="figure text-ink-soft">Buy {batch.cost_price.toFixed(2)}</p>
+        {canCorrectCost && costCorrectable && !correctingCost && (
+          <p className="figure text-ink-soft">
+            Buy {batch.cost_price.toFixed(2)}{' '}
+            <button
+              onClick={() => {
+                setCostDraft(batch.cost_price)
+                setCostReason('')
+                setCorrectingCost(true)
+              }}
+              className="ml-1 text-[10px] uppercase tracking-wide text-ink-soft underline"
+            >
+              Correct
+            </button>
+          </p>
+        )}
+        {(!canCorrectCost || !costCorrectable) && !correctingCost && (
+          <p className="figure text-ink-soft">Buy {batch.cost_price.toFixed(2)}</p>
+        )}
+        {correctingCost && (
+          <div className="mt-1 flex flex-col gap-1 border border-rule bg-paper p-2">
+            <label className="text-[10px] uppercase tracking-wide text-ink-soft">
+              Correct buying price
+              <input
+                type="number"
+                min={0}
+                step={0.01}
+                value={costDraft}
+                onChange={(e) => setCostDraft(Math.max(0, Number(e.target.value) || 0))}
+                className="figure mt-0.5 w-24 border border-rule bg-paper px-2 py-1"
+                aria-label="Corrected buying price"
+              />
+            </label>
+            <label className="text-[10px] uppercase tracking-wide text-ink-soft">
+              Reason (required)
+              <input
+                value={costReason}
+                onChange={(e) => setCostReason(e.target.value)}
+                placeholder="e.g. mistyped cost on receiving"
+                className="mt-0.5 w-full border border-rule bg-paper px-2 py-1 text-xs"
+              />
+            </label>
+            <div className="flex gap-1">
+              <button
+                disabled={
+                  savingCost ||
+                  !costReason.trim() ||
+                  costDraft === batch.cost_price
+                }
+                onClick={async () => {
+                  setSavingCost(true)
+                  await onCostCorrect(batch.id, costDraft, costReason.trim())
+                  setSavingCost(false)
+                  setCorrectingCost(false)
+                }}
+                className="border border-ink bg-ink px-2 py-1 text-xs text-paper disabled:opacity-40"
+              >
+                Save correction
+              </button>
+              <button
+                onClick={() => setCorrectingCost(false)}
+                className="border border-rule px-2 py-1 text-xs"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
         {!sellsNext && (
           <p className="mt-1 max-w-xs text-xs text-ink-soft">
             An earlier batch sells first (FEFO). A price change here won't show at the

@@ -17,6 +17,11 @@ class BatchUpdate(BaseModel):
     selling_price: Money
 
 
+class BatchCostCorrection(BaseModel):
+    cost_price: Money
+    reason: str = Field(min_length=1, max_length=255)
+
+
 class BatchOut(BaseModel):
     id: int
     product_id: int

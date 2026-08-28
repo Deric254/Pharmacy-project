@@ -3,7 +3,9 @@ import { Link } from 'react-router-dom'
 import { inventoryApi } from '../api/domain'
 import { reportsApi } from '../api/reports'
 import { useAuthStore } from '../auth/store'
+import { useConfigStore } from '../config/store'
 import { useCurrencyFormatter } from '../lib/currency'
+import { businessToday, fallbackTimezone, startOfMonth, subtractDays } from '../lib/businessDate'
 import { useViewedRangeStore } from '../lib/viewedRangeStore'
 import { useSaleCompletedRefresh } from '../lib/useSaleCompletedRefresh'
 import type {
@@ -33,24 +35,13 @@ const CustomerParetoChart = lazy(() =>
 
 type Preset = 'today' | 'week' | 'month' | 'custom'
 
-function isoDate(d: Date): string {
-  const year = d.getFullYear()
-  const month = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-function presetRange(preset: Preset): { start: string; end: string } {
-  const today = new Date()
-  const end = isoDate(today)
+function presetRange(preset: Preset, timezone: string): { start: string; end: string } {
+  const end = businessToday(timezone)
   if (preset === 'week') {
-    const start = new Date(today)
-    start.setDate(start.getDate() - 6)
-    return { start: isoDate(start), end }
+    return { start: subtractDays(end, 6), end }
   }
   if (preset === 'month') {
-    const start = new Date(today.getFullYear(), today.getMonth(), 1)
-    return { start: isoDate(start), end }
+    return { start: startOfMonth(end), end }
   }
   return { start: end, end } // today
 }
@@ -62,9 +53,10 @@ export function DashboardPage() {
   const canSeeReports = hasPermission('reports.view')
   const canSeeProfit = hasPermission('reports.view_profit')
   const formatCurrency = useCurrencyFormatter()
+  const timezone = useConfigStore((s) => s.config?.timezone) ?? fallbackTimezone()
 
   const [preset, setPreset] = useState<Preset>('today')
-  const [range, setRange] = useState(presetRange('today'))
+  const [range, setRange] = useState(() => presetRange('today', timezone))
   const setViewedRange = useViewedRangeStore((s) => s.setViewedRange)
 
   useEffect(() => {
@@ -84,7 +76,7 @@ export function DashboardPage() {
 
   function applyPreset(next: Preset) {
     setPreset(next)
-    if (next !== 'custom') setRange(presetRange(next))
+    if (next !== 'custom') setRange(presetRange(next, timezone))
   }
 
   useEffect(() => {

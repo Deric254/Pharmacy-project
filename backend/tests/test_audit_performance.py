@@ -113,9 +113,13 @@ class TestQueryCountRegressionGuard:
             r = await client.get("/api/v1/inventory/low-stock", headers=headers)
         assert r.status_code == 200
         assert len(r.json()) >= 15
-        # One aggregated GROUP BY query (plus a couple auth queries),
-        # not one per flagged product.
-        assert counter.count <= 5, (
+        # One aggregated GROUP BY query (plus a couple auth queries,
+        # plus resolving the business's configured timezone for the
+        # "not yet expired" filter -- business_today(), a fixed cost
+        # once per request on a cache miss, not once per row: a
+        # SELECT plus the commit that persists a self-heal check, see
+        # BusinessConfigService.get()), not one query per row.
+        assert counter.count <= 9, (
             f"low-stock report issued {counter.count} queries for 15 flagged "
             f"products -- expected a small constant number, not one per row"
         )

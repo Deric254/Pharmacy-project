@@ -21,6 +21,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.business_time import (
+    business_today,
     get_business_timezone,
     local_day_bounds_utc,
     local_offset_segments,
@@ -166,7 +167,7 @@ class ReportService:
         )
 
     async def expired_stock(self) -> ExpiredStockReportOut:
-        today = date.today()
+        today = await business_today(self.db)
         result = await self.db.execute(
             select(MedicineBatch, Product.name)
             .join(Product, Product.id == MedicineBatch.product_id)
@@ -564,6 +565,7 @@ class ReportService:
         when this would happen or whether it will -- that depends on
         real customer demand this system has no way to know.
         """
+        today = await business_today(self.db)
         result = await self.db.execute(
             select(
                 Product.id,
@@ -584,7 +586,7 @@ class ReportService:
                 MedicineBatch,
                 and_(
                     MedicineBatch.product_id == Product.id,
-                    MedicineBatch.expiry_date >= date.today(),
+                    MedicineBatch.expiry_date >= today,
                     MedicineBatch.locked_by_stock_take_id.is_(None),
                 ),
             )
@@ -793,6 +795,7 @@ class ReportService:
         feature exists to avoid.
         """
         window_start = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=lookback_days)
+        today = await business_today(self.db)
 
         sold_result = await self.db.execute(
             select(SaleItem.product_id, func.sum(SaleItem.quantity))
@@ -812,7 +815,7 @@ class ReportService:
                 MedicineBatch,
                 and_(
                     MedicineBatch.product_id == Product.id,
-                    MedicineBatch.expiry_date >= date.today(),
+                    MedicineBatch.expiry_date >= today,
                     MedicineBatch.locked_by_stock_take_id.is_(None),
                 ),
             )

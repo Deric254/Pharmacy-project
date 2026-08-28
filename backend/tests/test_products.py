@@ -664,3 +664,211 @@ class TestProductListOrdering:
         )
         assert r.status_code == 200, r.text
         return str(r.json()["access_token"])
+
+
+class TestBatchCostCorrection:
+    async def _login(self, client, username: str, password: str) -> str:
+        r = await client.post(
+            "/api/v1/auth/login", json={"username": username, "password": password}
+        )
+        assert r.status_code == 200, r.text
+        return str(r.json()["access_token"])
+
+    async def _make_product_with_batch(
+        self, client, headers, cost_price: float = 10.0, batch_number: str = "CORR1"
+    ) -> tuple[int, int]:
+        product = await client.post(
+            "/api/v1/products",
+            json={"name": f"Cost Correction Product {batch_number}", "default_selling_price": 30.0},
+            headers=headers,
+        )
+        product_id = product.json()["id"]
+        batch = await client.post(
+            f"/api/v1/products/{product_id}/batches",
+            json={
+                "batch_number": batch_number,
+                "expiry_date": "2028-01-01",
+                "qty_received": 10,
+                "cost_price": cost_price,
+                "selling_price": 30.0,
+            },
+            headers=headers,
+        )
+        return product_id, batch.json()["id"]
+
+    async def test_correcting_cost_on_an_untouched_batch_succeeds(self, client, owner_user):
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id, batch_id = await self._make_product_with_batch(client, headers, cost_price=10.0)
+
+        r = await client.patch(
+            f"/api/v1/products/{product_id}/batches/{batch_id}/cost",
+            json={"cost_price": 7.5, "reason": "mistyped cost on receiving"},
+            headers=headers,
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["cost_price"] == 7.5
+
+        batches = await client.get(f"/api/v1/products/{product_id}/batches", headers=headers)
+        assert batches.json()[0]["cost_price"] == 7.5
+
+    async def test_correcting_cost_after_a_sale_is_refused(self, client, owner_user):
+        """
+        The core guarantee: once a real sale has drawn from a batch,
+        its recorded profit must never be silently rewritten by a
+        later cost "correction". This must fail with a 409, not
+        succeed and quietly change historical profit.
+        """
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id, batch_id = await self._make_product_with_batch(client, headers, cost_price=10.0)
+
+        sale = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 30.0}],
+            },
+            headers=headers,
+        )
+        assert sale.status_code == 201, sale.text
+
+        r = await client.patch(
+            f"/api/v1/products/{product_id}/batches/{batch_id}/cost",
+            json={"cost_price": 1.0, "reason": "trying to change it after the sale"},
+            headers=headers,
+        )
+        assert r.status_code == 409
+
+        batches = await client.get(f"/api/v1/products/{product_id}/batches", headers=headers)
+        assert batches.json()[0]["cost_price"] == 10.0  # unchanged
+
+    async def test_correcting_cost_after_a_stock_adjustment_is_refused(self, client, owner_user):
+        """
+        Same guarantee, for the other non-sale way a batch's ledger
+        can move: a stock take / manual adjustment. A write-off or
+        variance was recorded against the cost as it stood then.
+        """
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id, batch_id = await self._make_product_with_batch(client, headers, cost_price=10.0)
+
+        adjust = await client.post(
+            "/api/v1/inventory/adjustments",
+            json={
+                "batch_id": batch_id,
+                "quantity_delta": -2,
+                "reason": "DAMAGED",
+                "notes": "two units damaged in transit",
+            },
+            headers=headers,
+        )
+        assert adjust.status_code == 201, adjust.text
+
+        r = await client.patch(
+            f"/api/v1/products/{product_id}/batches/{batch_id}/cost",
+            json={"cost_price": 1.0, "reason": "trying to change it after the write-off"},
+            headers=headers,
+        )
+        assert r.status_code == 409
+
+    async def test_a_second_purchase_merge_does_not_block_correction(self, client, owner_user):
+        """
+        Merging in a second delivery of the same batch (weighted-avg
+        cost) is itself a PURCHASE movement, not a sale/adjustment --
+        it must not by itself lock out a later cost correction, since
+        nothing has actually sold or been counted out yet.
+        """
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id, batch_id = await self._make_product_with_batch(
+            client, headers, cost_price=10.0, batch_number="MERGECHECK"
+        )
+
+        suppliers = await client.get("/api/v1/suppliers", headers=headers)
+        if not suppliers.json():
+            create_supplier = await client.post(
+                "/api/v1/suppliers", json={"name": "Merge Check Supplier"}, headers=headers
+            )
+            supplier_id = create_supplier.json()["id"]
+        else:
+            supplier_id = suppliers.json()[0]["id"]
+
+        product = await client.get(f"/api/v1/products/{product_id}", headers=headers)
+        assert product.status_code == 200
+
+        merge = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": supplier_id,
+                "lines": [
+                    {
+                        "product_id": product_id,
+                        "batch_number": "MERGECHECK",
+                        "expiry_date": "2028-01-01",
+                        "quantity": 5,
+                        "unit_cost": 20.0,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert merge.status_code == 201, merge.text
+
+        r = await client.patch(
+            f"/api/v1/products/{product_id}/batches/{batch_id}/cost",
+            json={"cost_price": 8.0, "reason": "correcting after a plain restock merge"},
+            headers=headers,
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["cost_price"] == 8.0
+
+    async def test_employee_without_permission_is_forbidden(
+        self, client, owner_user, employee_user
+    ):
+        owner_token = await self._login(client, "lucy", "S3curePass!")
+        owner_headers = {"Authorization": f"Bearer {owner_token}"}
+        product_id, batch_id = await self._make_product_with_batch(client, owner_headers)
+
+        employee_token = await self._login(client, "joe", "pass1234")
+        r = await client.patch(
+            f"/api/v1/products/{product_id}/batches/{batch_id}/cost",
+            json={"cost_price": 1.0, "reason": "should not be allowed"},
+            headers={"Authorization": f"Bearer {employee_token}"},
+        )
+        assert r.status_code == 403
+
+    async def test_a_blank_reason_is_rejected(self, client, owner_user):
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id, batch_id = await self._make_product_with_batch(client, headers)
+
+        r = await client.patch(
+            f"/api/v1/products/{product_id}/batches/{batch_id}/cost",
+            json={"cost_price": 5.0, "reason": ""},
+            headers=headers,
+        )
+        assert r.status_code == 422
+
+    async def test_correction_is_audit_logged(self, client, owner_user):
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id, batch_id = await self._make_product_with_batch(client, headers, cost_price=10.0)
+
+        r = await client.patch(
+            f"/api/v1/products/{product_id}/batches/{batch_id}/cost",
+            json={"cost_price": 6.5, "reason": "supplier invoice was actually 6.50 not 10.00"},
+            headers=headers,
+        )
+        assert r.status_code == 200, r.text
+
+        logs = await client.get(
+            "/api/v1/audit-logs", params={"action": "batch.cost_corrected"}, headers=headers
+        )
+        assert logs.status_code == 200, logs.text
+        entries = logs.json()["entries"]
+        matching = [e for e in entries if e["entity_id"] == str(batch_id)]
+        assert len(matching) == 1
+        assert matching[0]["old_value"] == "10.00"
+        assert "6.50" in matching[0]["new_value"]
+        assert "supplier invoice was actually 6.50" in matching[0]["new_value"]

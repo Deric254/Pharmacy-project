@@ -39,6 +39,8 @@ export const productsApi = {
   batches: (productId: number) => api.get<BatchOut[]>(`/products/${productId}/batches`),
   updateBatch: (productId: number, batchId: number, selling_price: number) =>
     api.patch<BatchOut>(`/products/${productId}/batches/${batchId}`, { selling_price }),
+  correctBatchCost: (productId: number, batchId: number, cost_price: number, reason: string) =>
+    api.patch<BatchOut>(`/products/${productId}/batches/${batchId}/cost`, { cost_price, reason }),
   create: (payload: ProductCreate) => api.post<ProductOut>('/products', payload),
   update: (productId: number, payload: ProductUpdate) =>
     api.patch<ProductOut>(`/products/${productId}`, payload),

@@ -11,13 +11,13 @@ together. Keeping this module free of that context is what lets it be
 reused unchanged by Sales, Adjustments, and Transfers later.
 """
 
-from datetime import date
 from typing import Any, cast
 
 from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.business_time import business_today
 from app.models.medicine_batch import MedicineBatch
 from app.models.stock_movement import MovementType, StockMovement
 
@@ -59,13 +59,14 @@ async def select_batches_fefo(
     if qty_needed <= 0:
         raise ValueError("qty_needed must be positive")
 
+    today = await business_today(db)
     query = (
         select(MedicineBatch)
         .where(
             MedicineBatch.product_id == product_id,
             MedicineBatch.qty_remaining > 0,
             MedicineBatch.locked_by_stock_take_id.is_(None),
-            MedicineBatch.expiry_date >= date.today(),
+            MedicineBatch.expiry_date >= today,
         )
         .order_by(MedicineBatch.expiry_date.asc())
     )

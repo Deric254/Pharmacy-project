@@ -82,6 +82,8 @@ async def seeded_roles():
                 "inventory.adjust",
                 "products.manage",
                 "batches.create",
+                "batches.reprice",
+                "batches.correct_cost",
                 "stocktake.perform",
                 "stocktake.approve_variance",
                 "purchasing.create_po",
@@ -129,6 +131,8 @@ async def seeded_roles():
             perms["users.manage"],
             perms["ai.use"],
             perms["backups.manage"],
+            perms["batches.reprice"],
+            perms["batches.correct_cost"],
         ]
         owner.permissions = list(perms.values())  # ChemistOwner: full visibility, everything
         db.add_all([employee, admin, owner])

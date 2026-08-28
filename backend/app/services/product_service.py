@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.business_time import business_today
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
 from app.schemas.product import ProductCreate, ProductOut, ProductUpdate
@@ -128,13 +129,14 @@ class ProductService:
         # every real sale attempt correctly failed against it -- a
         # genuine, confusing inconsistency.
         product_ids = [p.id for p in products]
+        today = await business_today(self.db)
         qty_result = await self.db.execute(
             select(
                 MedicineBatch.product_id, func.coalesce(func.sum(MedicineBatch.qty_remaining), 0)
             )
             .where(
                 MedicineBatch.product_id.in_(product_ids),
-                MedicineBatch.expiry_date >= date.today(),
+                MedicineBatch.expiry_date >= today,
                 MedicineBatch.locked_by_stock_take_id.is_(None),
             )
             .group_by(MedicineBatch.product_id)
@@ -178,7 +180,7 @@ class ProductService:
             .where(
                 MedicineBatch.product_id.in_(product_ids),
                 MedicineBatch.qty_remaining > 0,
-                MedicineBatch.expiry_date >= date.today(),
+                MedicineBatch.expiry_date >= await business_today(self.db),
                 MedicineBatch.locked_by_stock_take_id.is_(None),
             )
             .order_by(MedicineBatch.product_id, MedicineBatch.expiry_date.asc())
@@ -233,7 +235,7 @@ class ProductService:
         qty_result = await self.db.execute(
             select(func.coalesce(func.sum(MedicineBatch.qty_remaining), 0)).where(
                 MedicineBatch.product_id == product.id,
-                MedicineBatch.expiry_date >= date.today(),
+                MedicineBatch.expiry_date >= await business_today(self.db),
                 MedicineBatch.locked_by_stock_take_id.is_(None),
             )
         )

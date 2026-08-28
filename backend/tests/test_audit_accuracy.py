@@ -10,6 +10,7 @@ messier, more realistic multi-batch/discount/boundary scenarios.
 
 from datetime import date, timedelta
 
+from app.core.business_time import business_today
 from app.core.database import AsyncSessionLocal
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
@@ -76,7 +77,13 @@ class TestMultiBatchProfitAccuracy:
         assert sale.json()["total_amount"] == 130.0
 
         owner_token = await _login(client, "lucy", "S3curePass!")
-        today = date.today().isoformat()
+        # business_today(), not date.today() -- the sale was just
+        # committed via the real API at the true current instant, so
+        # the report window must be computed the same way production
+        # does, not via this process's own possibly-different-day
+        # guess at "today".
+        async with AsyncSessionLocal() as db:
+            today = (await business_today(db)).isoformat()
         report = await client.get(
             f"/api/v1/reports/profit?start_date={today}&end_date={today}",
             headers={"Authorization": f"Bearer {owner_token}"},

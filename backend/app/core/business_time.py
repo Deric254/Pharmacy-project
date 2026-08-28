@@ -53,6 +53,35 @@ async def get_business_timezone(db: AsyncSession) -> ZoneInfo:
         return ZoneInfo("UTC")
 
 
+async def business_today(db: AsyncSession) -> date:
+    """
+    "Today", as a calendar date, in the business's configured
+    timezone -- never the server process's own OS clock.
+
+    The bug this closes: `date.today()` answers "what day is it
+    where this process happens to be running", not "what day is it
+    for this business". Those match for a single-location desktop
+    install running on a clock set to the same timezone as the shop
+    -- but this app is sold to be run anywhere (see this module's
+    own docstring), including from a cloud-hosted backend that
+    defaults to UTC, or checked from a device in a different
+    timezone than the business itself. Whenever those two clocks
+    disagree, every caller that used to do `date.today()` directly
+    would silently drop or shift the last few hours of a business
+    day out of "today" -- proven directly: a real sale, made and
+    committed a moment before the call, went missing from that same
+    moment's "today" revenue figure, with no error raised anywhere.
+
+    Every place in this codebase that means "today, for this
+    business" -- not "today, on this machine" -- must resolve it
+    through this function, so there is exactly one definition of
+    "today" and it is always correct regardless of where the app or
+    the person asking happens to be.
+    """
+    tz = await get_business_timezone(db)
+    return datetime.now(tz).date()
+
+
 def _utc_instant_for_local_midnight(tz: ZoneInfo, local_date: date) -> datetime:
     """
     The UTC instant corresponding to local midnight on `local_date`,

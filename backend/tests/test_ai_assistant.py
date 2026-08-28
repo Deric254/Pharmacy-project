@@ -10,11 +10,12 @@ AI assistant tests. The properties that matter:
      without any live network call to a paid third-party API.
 """
 
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 import httpx
 from sqlalchemy import select
 
+from app.core.business_time import business_today, get_business_timezone
 from app.core.database import AsyncSessionLocal
 from app.core.security import decrypt_secret, encrypt_secret
 from app.models.ai_conversation import AIConversation, AIConversationMessage
@@ -592,8 +593,6 @@ class TestBusinessContext:
         comparison to compute -- this checks that number actually
         reaches the assistant's context, not just the dashboard.
         """
-        from datetime import datetime, timedelta
-
         from app.models.medicine_batch import MedicineBatch
         from app.models.product import Product
         from app.models.sale import Sale, SaleItem
@@ -622,6 +621,13 @@ class TestBusinessContext:
             db.add(batch)
             await db.flush()
 
+            # Anchored to the business's own "today" (business_today())
+            # at local noon, not to whatever instant this process
+            # happens to run at -- otherwise this is flaky for the few
+            # hours each day the business's local calendar day has
+            # already rolled over ahead of this process's own clock.
+            today = await business_today(db)
+            tz = await get_business_timezone(db)
             for offset_days, price in [(1, 50.0), (0, 100.0)]:  # yesterday, then today
                 sale = Sale(
                     cashier_user_id=owner_user.id,
@@ -631,7 +637,10 @@ class TestBusinessContext:
                 )
                 db.add(sale)
                 await db.flush()
-                sale.created_at = datetime.now() - timedelta(days=offset_days)
+                local_noon = datetime.combine(
+                    today - timedelta(days=offset_days), time(12, 0), tzinfo=tz
+                )
+                sale.created_at = local_noon.astimezone(UTC).replace(tzinfo=None)
                 db.add(
                     SaleItem(
                         sale_id=sale.id,
@@ -719,6 +728,17 @@ class TestBusinessContext:
                     line_total=50.0,
                 )
             )
+            # Pinned to a safe instant inside the business's own
+            # "today" (business_today(), whatever timezone this
+            # business is actually configured with) rather than
+            # trusting func.now() to land there -- the test would
+            # otherwise be flaky for the few hours each day where the
+            # business's local calendar day has already rolled over
+            # ahead of this process's own clock.
+            today = await business_today(db)
+            tz = await get_business_timezone(db)
+            local_noon = datetime.combine(today, time(12, 0), tzinfo=tz)
+            sale.created_at = local_noon.astimezone(UTC).replace(tzinfo=None)
             await db.commit()
 
         # Deliberately neither the schema default (KES) nor USD --

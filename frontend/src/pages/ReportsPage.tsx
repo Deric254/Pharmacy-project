@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { reportsApi, downloadReportExport } from '../api/reports'
 import { useAuthStore } from '../auth/store'
+import { useConfigStore } from '../config/store'
 import { useCurrencyFormatter } from '../lib/currency'
+import { businessToday, fallbackTimezone, subtractDays } from '../lib/businessDate'
 import { useSaleCompletedRefresh } from '../lib/useSaleCompletedRefresh'
 import { ApiError } from '../api/client'
 import type {
@@ -24,18 +26,13 @@ const TABS: { id: Tab; label: string; permission: string }[] = [
   { id: 'stocktakes', label: 'Stock Take History', permission: 'reports.view' },
 ]
 
-function localIsoDate(value: Date): string {
-  const year = value.getFullYear()
-  const month = String(value.getMonth() + 1).padStart(2, '0')
-  const day = String(value.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-function defaultDateRange() {
-  const end = new Date()
-  const start = new Date()
-  start.setDate(start.getDate() - 30)
-  return { start: localIsoDate(start), end: localIsoDate(end) }
+// Falls back to the device's own timezone only if branding/config
+// genuinely failed to load (see config/store.ts) -- matches that
+// store's own established "never block the app" behavior, rather
+// than introducing a second, different failure mode here.
+function defaultDateRange(timezone: string) {
+  const end = businessToday(timezone)
+  return { start: subtractDays(end, 30), end }
 }
 
 export function ReportsPage() {
@@ -151,7 +148,8 @@ function DateRangeControls({
 
 function SalesReport() {
   const formatCurrency = useCurrencyFormatter()
-  const [{ start, end }, setRange] = useState(defaultDateRange())
+  const timezone = useConfigStore((s) => s.config?.timezone) ?? fallbackTimezone()
+  const [{ start, end }, setRange] = useState(() => defaultDateRange(timezone))
   const [groupBy, setGroupBy] = useState<'day' | 'month'>('day')
   const [data, setData] = useState<SalesSummaryOut | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -215,7 +213,8 @@ function SalesReport() {
 
 function ProfitReport() {
   const formatCurrency = useCurrencyFormatter()
-  const [{ start, end }, setRange] = useState(defaultDateRange())
+  const timezone = useConfigStore((s) => s.config?.timezone) ?? fallbackTimezone()
+  const [{ start, end }, setRange] = useState(() => defaultDateRange(timezone))
   const [data, setData] = useState<ProfitReportOut | null>(null)
   const [error, setError] = useState<string | null>(null)
   const salesVersion = useSaleCompletedRefresh(true)

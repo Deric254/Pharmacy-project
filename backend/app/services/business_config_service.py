@@ -18,6 +18,7 @@ import io
 import json
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import BusinessConfigUpdatedEvent, publish
@@ -146,11 +147,29 @@ class BusinessConfigService:
     async def _get_or_create_row(self) -> BusinessConfig:
         result = await self.db.execute(select(BusinessConfig).where(BusinessConfig.id == 1))
         config = result.scalar_one_or_none()
-        if config is None:
-            config = BusinessConfig(id=1)
-            self.db.add(config)
-            await self.db.flush()
-            await self.db.refresh(config, attribute_names=["updated_at"])
+        if config is not None:
+            return config
+
+        # The business_config table always has exactly one row (id=1),
+        # created lazily on first read rather than in a migration. Two
+        # concurrent requests can both see no row here and both try to
+        # create it -- exactly what happens under real concurrent
+        # checkout traffic, since every sale now reads the business's
+        # timezone (via business_today()) to pick the right FEFO batch.
+        # A plain SELECT-then-INSERT loses that race with an
+        # IntegrityError; a SAVEPOINT scopes the failed insert to
+        # itself, so losing the race here never rolls back whatever
+        # else this request's transaction was already doing.
+        try:
+            async with self.db.begin_nested():
+                config = BusinessConfig(id=1)
+                self.db.add(config)
+                await self.db.flush()
+        except IntegrityError:
+            result = await self.db.execute(select(BusinessConfig).where(BusinessConfig.id == 1))
+            return result.scalar_one()
+
+        await self.db.refresh(config, attribute_names=["updated_at"])
         return config
 
     @staticmethod

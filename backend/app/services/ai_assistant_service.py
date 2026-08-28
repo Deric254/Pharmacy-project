@@ -23,6 +23,7 @@ from datetime import UTC, date, datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.business_time import business_today
 from app.core.security import decrypt_secret
 from app.models.ai_conversation import AIConversation, AIConversationMessage
 from app.models.ai_provider_key import AIProviderKey, AIProviderName
@@ -119,7 +120,7 @@ class AIAssistantService:
         fresh here, server-side, exactly as if the person had asked
         about today with no range supplied at all.
         """
-        today = date.today()
+        today = await business_today(self.db)
         range_start = viewed_start or today
         range_end = viewed_end or today
         user_permission_codes = {p.code for p in user.role.permissions}

@@ -18,7 +18,7 @@ a signal for a human to investigate (possible bug, or someone edited
 the DB directly), not something to silently paper over.
 """
 
-from datetime import date, timedelta
+from datetime import timedelta
 from typing import Any, cast
 
 from fastapi import HTTPException
@@ -26,6 +26,7 @@ from sqlalchemy import and_, func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.business_time import business_today
 from app.core.events import BatchExpiringEvent, StockLowEvent, publish
 from app.models.business_config import BusinessConfig
 from app.models.medicine_batch import MedicineBatch
@@ -48,6 +49,7 @@ class InventoryService:
         self.db = db
 
     async def get_low_stock_products(self) -> list[LowStockProductOut]:
+        today = await business_today(self.db)
         result = await self.db.execute(
             select(
                 Product.id,
@@ -60,7 +62,7 @@ class InventoryService:
                 MedicineBatch,
                 and_(
                     MedicineBatch.product_id == Product.id,
-                    MedicineBatch.expiry_date >= date.today(),
+                    MedicineBatch.expiry_date >= today,
                     MedicineBatch.locked_by_stock_take_id.is_(None),
                 ),
             )
@@ -81,7 +83,8 @@ class InventoryService:
 
     async def get_expiring_batches(self, within_days: int | None = None) -> list[ExpiringBatchOut]:
         threshold_days = within_days if within_days is not None else await self._max_alert_window()
-        cutoff = date.today() + timedelta(days=threshold_days)
+        today = await business_today(self.db)
+        cutoff = today + timedelta(days=threshold_days)
 
         result = await self.db.execute(
             select(MedicineBatch, Product.name)
@@ -89,7 +92,6 @@ class InventoryService:
             .where(MedicineBatch.expiry_date <= cutoff, MedicineBatch.qty_remaining > 0)
             .order_by(MedicineBatch.expiry_date)
         )
-        today = date.today()
         return [
             ExpiringBatchOut(
                 batch_id=batch.id,
@@ -104,6 +106,7 @@ class InventoryService:
         ]
 
     async def get_valuation(self) -> StockValuationOut:
+        today = await business_today(self.db)
         result = await self.db.execute(
             select(
                 Product.id,
@@ -117,7 +120,7 @@ class InventoryService:
                 MedicineBatch,
                 and_(
                     MedicineBatch.product_id == Product.id,
-                    MedicineBatch.expiry_date >= date.today(),
+                    MedicineBatch.expiry_date >= today,
                 ),
             )
             .where(Product.deleted_at.is_(None))
@@ -252,6 +255,7 @@ async def check_and_publish_low_stock(db: AsyncSession, product_ids: list[int]) 
     if not product_ids:
         return
 
+    today = await business_today(db)
     result = await db.execute(
         select(
             Product.id,
@@ -262,7 +266,7 @@ async def check_and_publish_low_stock(db: AsyncSession, product_ids: list[int]) 
             MedicineBatch,
             and_(
                 MedicineBatch.product_id == Product.id,
-                MedicineBatch.expiry_date >= date.today(),
+                MedicineBatch.expiry_date >= today,
                 MedicineBatch.locked_by_stock_take_id.is_(None),
             ),
         )

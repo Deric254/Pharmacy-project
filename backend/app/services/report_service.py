@@ -123,9 +123,14 @@ class ReportService:
         total_revenue, _ = await self._revenue_and_count_in_range(start_date, end_date)
         utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
 
+        # SaleItem.unit_cost is frozen at the moment of sale (see that
+        # column's own comment) -- never a live join to
+        # MedicineBatch.cost_price, which would let a batch's cost
+        # changing later (a correction, or anything else) silently
+        # change what an already-closed period's profit shows the next
+        # time this report runs.
         cost_result = await self.db.execute(
-            select(func.coalesce(func.sum(SaleItem.quantity * MedicineBatch.cost_price), 0.0))
-            .join(MedicineBatch, MedicineBatch.id == SaleItem.batch_id)
+            select(func.coalesce(func.sum(SaleItem.quantity * SaleItem.unit_cost), 0.0))
             .join(Sale, Sale.id == SaleItem.sale_id)
             .where(
                 Sale.created_at >= utc_start,
@@ -142,9 +147,13 @@ class ReportService:
         # (damaged/expired) keeps its original cost as a real loss --
         # nothing to reverse there, same restocked flag refund_service.py
         # already uses to decide whether to touch qty_remaining at all.
+        # Reversed using the ORIGINAL sale item's frozen unit_cost (via
+        # RefundItem.sale_item_id), not the batch's current cost -- a
+        # refund must back out exactly what the sale it's reversing
+        # actually recorded, nothing else.
         cost_reversal_result = await self.db.execute(
-            select(func.coalesce(func.sum(RefundItem.quantity * MedicineBatch.cost_price), 0.0))
-            .join(MedicineBatch, MedicineBatch.id == RefundItem.batch_id)
+            select(func.coalesce(func.sum(RefundItem.quantity * SaleItem.unit_cost), 0.0))
+            .join(SaleItem, SaleItem.id == RefundItem.sale_item_id)
             .join(Refund, Refund.id == RefundItem.refund_id)
             .where(
                 Refund.created_at >= utc_start,
@@ -292,11 +301,17 @@ class ReportService:
             shrinkage_value = 0.0
             expected_value = 0.0
             for item in stock_take.items:
-                # item.batch is lazy="selectin" on StockTakeItem, so it was
-                # already fetched in one batched query when stock_take.items
-                # loaded above -- no per-item round-trip needed here.
-                batch = item.batch
-                cost = batch.cost_price if batch else 0.0
+                # unit_cost_at_close is frozen at the moment this stock
+                # take closed (see that column's own comment) -- never
+                # a live read of batch.cost_price, which would let a
+                # cost correction made afterward silently change what
+                # an already-closed stock take's shrinkage shows the
+                # next time this report is viewed. Falls back to the
+                # batch's current cost only for a pre-migration row
+                # that predates this column existing.
+                cost = item.unit_cost_at_close
+                if cost is None:
+                    cost = item.batch.cost_price if item.batch else 0.0
                 expected_value += item.expected_qty * cost
                 if item.physical_qty is not None:
                     variance = item.physical_qty - item.expected_qty
@@ -700,16 +715,18 @@ class ReportService:
                 txn_count_by_period[row.period] += int(row.txn_count)
 
             if include_profit:
+                # SaleItem.unit_cost is frozen at sale time -- see
+                # profit_report's identical comment for why this must
+                # never join live to MedicineBatch.cost_price.
                 cost_result = await self.db.execute(
                     select(
                         bucket_expr.label("period"),
-                        func.coalesce(
-                            func.sum(SaleItem.quantity * MedicineBatch.cost_price), 0.0
-                        ).label("cost"),
+                        func.coalesce(func.sum(SaleItem.quantity * SaleItem.unit_cost), 0.0).label(
+                            "cost"
+                        ),
                     )
                     .select_from(SaleItem)
                     .join(Sale, Sale.id == SaleItem.sale_id)
-                    .join(MedicineBatch, MedicineBatch.id == SaleItem.batch_id)
                     .where(*date_filter)
                     .group_by("period")
                 )
@@ -748,18 +765,20 @@ class ReportService:
 
             if include_profit:
                 # Restocked refund lines put cost back into inventory --
-                # same reversal profit_report() applies, bucketed the
-                # same way as the cost/revenue queries above.
+                # same reversal profit_report() applies (reversed using
+                # the original sale item's frozen unit_cost, not the
+                # batch's current cost), bucketed the same way as the
+                # cost/revenue queries above.
                 cost_reversal_result = await self.db.execute(
                     select(
                         refund_bucket_expr.label("period"),
                         func.coalesce(
-                            func.sum(RefundItem.quantity * MedicineBatch.cost_price), 0.0
+                            func.sum(RefundItem.quantity * SaleItem.unit_cost), 0.0
                         ).label("cost_reversal"),
                     )
                     .select_from(RefundItem)
                     .join(Refund, Refund.id == RefundItem.refund_id)
-                    .join(MedicineBatch, MedicineBatch.id == RefundItem.batch_id)
+                    .join(SaleItem, SaleItem.id == RefundItem.sale_item_id)
                     .where(*refund_date_filter, RefundItem.restocked.is_(True))
                     .group_by("period")
                 )

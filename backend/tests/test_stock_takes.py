@@ -914,3 +914,91 @@ class TestStockTakeExcelRoundTrip:
         )
         assert r.status_code == 400
         assert "Item ID" in r.json()["detail"]
+
+
+class TestShrinkageValueIsFrozenAtClose:
+    async def test_correcting_batch_cost_after_close_does_not_change_past_shrinkage(
+        self, client, owner_user
+    ):
+        """
+        Mirrors test_products.py's
+        test_correction_never_changes_a_past_sales_recorded_profit for
+        the other place cost used to be read live: Stock Take History.
+        A shrinkage value is a permanent record of a loss that
+        happened at a specific point in time -- correcting the batch's
+        cost afterward must never change what an already-closed stock
+        take reports, no matter how many times the report is re-run.
+        """
+        product_id, batch_id = await _make_product_with_batch(qty=100, cost=4.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        create_resp = await client.post(
+            "/api/v1/stock-takes", json={"product_ids": [product_id]}, headers=headers
+        )
+        stock_take_id = create_resp.json()["id"]
+        item_id = create_resp.json()["items"][0]["id"]
+        # -2 is within self-approve threshold, keeps this a single-step test
+        await client.post(
+            f"/api/v1/stock-takes/{stock_take_id}/items/{item_id}/count",
+            json={"physical_qty": 98, "reason": "DAMAGED"},
+            headers=headers,
+        )
+        close_resp = await client.post(
+            f"/api/v1/stock-takes/{stock_take_id}/close", headers=headers
+        )
+        assert close_resp.status_code == 200, close_resp.text
+
+        history_before = await client.get("/api/v1/reports/stock-take-history", headers=headers)
+        entry_before = next(
+            e for e in history_before.json()["entries"] if e["stock_take_id"] == stock_take_id
+        )
+        assert entry_before["shrinkage_value"] == 8.0  # 2 units * 4.0 cost
+
+        correct_resp = await client.patch(
+            f"/api/v1/products/{product_id}/batches/{batch_id}/cost",
+            json={"cost_price": 50.0, "reason": "correcting cost long after this count closed"},
+            headers=headers,
+        )
+        assert correct_resp.status_code == 200, correct_resp.text
+
+        history_after = await client.get("/api/v1/reports/stock-take-history", headers=headers)
+        entry_after = next(
+            e for e in history_after.json()["entries"] if e["stock_take_id"] == stock_take_id
+        )
+        assert entry_after["shrinkage_value"] == 8.0  # unchanged by the later correction
+
+    async def test_a_stock_take_opened_after_a_cost_correction_uses_the_new_cost(
+        self, client, owner_user
+    ):
+        """The other half of the guarantee: a correction genuinely does
+        affect what happens to the remaining stock going forward -- a
+        stock take counted after the correction must price shrinkage
+        at the corrected cost, not the original one.
+        """
+        product_id, batch_id = await _make_product_with_batch(qty=100, cost=4.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        correct_resp = await client.patch(
+            f"/api/v1/products/{product_id}/batches/{batch_id}/cost",
+            json={"cost_price": 10.0, "reason": "correcting before any count happens"},
+            headers=headers,
+        )
+        assert correct_resp.status_code == 200, correct_resp.text
+
+        create_resp = await client.post(
+            "/api/v1/stock-takes", json={"product_ids": [product_id]}, headers=headers
+        )
+        stock_take_id = create_resp.json()["id"]
+        item_id = create_resp.json()["items"][0]["id"]
+        await client.post(
+            f"/api/v1/stock-takes/{stock_take_id}/items/{item_id}/count",
+            json={"physical_qty": 98, "reason": "DAMAGED"},
+            headers=headers,
+        )
+        await client.post(f"/api/v1/stock-takes/{stock_take_id}/close", headers=headers)
+
+        history = await client.get("/api/v1/reports/stock-take-history", headers=headers)
+        entry = next(e for e in history.json()["entries"] if e["stock_take_id"] == stock_take_id)
+        assert entry["shrinkage_value"] == 20.0  # 2 units * the corrected 10.0 cost

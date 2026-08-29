@@ -93,6 +93,54 @@ def _frontend_dist_dir() -> Path | None:
     return candidate if candidate.is_dir() else None
 
 
+def _frontend_shell_response(request_path: str, frontend_dist: Path) -> FileResponse:
+    """
+    Builds the actual FileResponse serve_frontend returns -- pulled out
+    as its own function so the Cache-Control behavior can be verified
+    directly (see TestFrontendShellNeverHeuristicallyCached), the same
+    way _frontend_dist_dir() above is tested as a pure function rather
+    than through a live app instance: the catch-all route below is
+    only ever mounted when a real frontend/dist exists at import time,
+    which CI's backend test job never has (frontend/dist is built by a
+    separate, later job) -- so a test going through the real app/route
+    would either silently not exercise this at all in CI, or depend on
+    incidental local build state to pass, neither of which is a real
+    guarantee. Calling this function directly with a tmp_path has
+    neither problem.
+
+    Explicit no-cache on everything this can return -- every file it
+    serves (index.html, manifest.webmanifest, sw.js, registerSW.js,
+    favicon.svg, ...) keeps the exact same URL across every build,
+    unlike the content-hashed files under /assets/ (handled by the
+    separate StaticFiles mount in app.main, correctly left alone here
+    -- those are safe to cache forever precisely because their
+    filename changes when their content does). Starlette's FileResponse
+    sets Last-Modified and an ETag but no Cache-Control at all by
+    default, which leaves the browser free to use HEURISTIC caching --
+    serving a stale copy without even asking the server first. For a
+    same-URL file like index.html, that's the exact mechanism behind a
+    real, previously-unexplained bug report: after an app update
+    replaces these files on disk, a heuristically cached old index.html
+    can keep referencing a since-deleted /assets/*.js filename, which
+    404s -- a truly blank window, invisible to every retry/health-check
+    safeguard in electron/main.js, because Chromium serves it straight
+    from cache without ever making the network request those safeguards
+    watch. "no-cache" (not "no-store") still lets the browser cache the
+    bytes, but forces a cheap revalidation request on every load --
+    effectively free on this app's actual traffic pattern (a
+    same-machine loopback request), so there's no real cost to always
+    getting the current file.
+    """
+    headers = {"Cache-Control": "no-cache"}
+    candidate = frontend_dist / request_path
+    if request_path and candidate.is_file():
+        return FileResponse(candidate, headers=headers)
+    # Anything else (/, /pos, /inventory, a hard refresh on a deep
+    # React Router route, ...) falls back to the SPA shell, which is
+    # what makes client-side routing work on a real reload.
+    return FileResponse(frontend_dist / "index.html", headers=headers)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     dispatcher_task = start_dispatcher_task(ws_manager)
@@ -229,10 +277,4 @@ if _frontend_dist is not None:
             raise HTTPException(status_code=404, detail="Not found")
 
         assert _frontend_dist is not None  # narrowed at import time; mypy can't see that here
-        candidate = _frontend_dist / full_path
-        if full_path and candidate.is_file():
-            return FileResponse(candidate)
-        # Anything else (/, /pos, /inventory, a hard refresh on a deep
-        # React Router route, ...) falls back to the SPA shell, which
-        # is what makes client-side routing work on a real reload.
-        return FileResponse(_frontend_dist / "index.html")
+        return _frontend_shell_response(full_path, _frontend_dist)

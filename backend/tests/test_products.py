@@ -712,12 +712,13 @@ class TestBatchCostCorrection:
         batches = await client.get(f"/api/v1/products/{product_id}/batches", headers=headers)
         assert batches.json()[0]["cost_price"] == 7.5
 
-    async def test_correcting_cost_after_a_sale_is_refused(self, client, owner_user):
+    async def test_correcting_cost_after_a_sale_is_allowed(self, client, owner_user):
         """
-        The core guarantee: once a real sale has drawn from a batch,
-        its recorded profit must never be silently rewritten by a
-        later cost "correction". This must fail with a 409, not
-        succeed and quietly change historical profit.
+        Correcting cost after a sale is now allowed unconditionally --
+        see test_correction_never_changes_a_past_sales_recorded_profit
+        for the guarantee that makes this safe: the sale's own profit
+        is frozen at sale time (SaleItem.unit_cost) and does not move
+        when the batch's live cost_price is corrected afterward.
         """
         token = await self._login(client, "lucy", "S3curePass!")
         headers = {"Authorization": f"Bearer {token}"}
@@ -735,93 +736,89 @@ class TestBatchCostCorrection:
 
         r = await client.patch(
             f"/api/v1/products/{product_id}/batches/{batch_id}/cost",
-            json={"cost_price": 1.0, "reason": "trying to change it after the sale"},
+            json={"cost_price": 1.0, "reason": "correcting after the sale"},
             headers=headers,
         )
-        assert r.status_code == 409
+        assert r.status_code == 200, r.text
+        assert r.json()["cost_price"] == 1.0
 
-        batches = await client.get(f"/api/v1/products/{product_id}/batches", headers=headers)
-        assert batches.json()[0]["cost_price"] == 10.0  # unchanged
+    async def test_correction_never_changes_a_past_sales_recorded_profit(self, client, owner_user):
+        """
+        The core guarantee, proven end to end rather than assumed: a
+        sale's recorded cost/profit is frozen at the moment it
+        happened (SaleItem.unit_cost) and must be completely immune to
+        a batch cost correction made afterward, no matter how large
+        the correction is. Only what's REMAINING -- valuation of
+        unsold stock, and the cost basis of the NEXT sale -- may move.
+        """
+        from app.core.business_time import business_today
+        from app.core.database import AsyncSessionLocal
 
-    async def test_correcting_cost_after_a_stock_adjustment_is_refused(self, client, owner_user):
-        """
-        Same guarantee, for the other non-sale way a batch's ledger
-        can move: a stock take / manual adjustment. A write-off or
-        variance was recorded against the cost as it stood then.
-        """
         token = await self._login(client, "lucy", "S3curePass!")
         headers = {"Authorization": f"Bearer {token}"}
         product_id, batch_id = await self._make_product_with_batch(client, headers, cost_price=10.0)
 
-        adjust = await client.post(
-            "/api/v1/inventory/adjustments",
+        sale = await client.post(
+            "/api/v1/sales",
             json={
-                "batch_id": batch_id,
-                "quantity_delta": -2,
-                "reason": "DAMAGED",
-                "notes": "two units damaged in transit",
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 30.0}],
             },
             headers=headers,
         )
-        assert adjust.status_code == 201, adjust.text
+        assert sale.status_code == 201, sale.text
 
-        r = await client.patch(
-            f"/api/v1/products/{product_id}/batches/{batch_id}/cost",
-            json={"cost_price": 1.0, "reason": "trying to change it after the write-off"},
+        async with AsyncSessionLocal() as db:
+            today = (await business_today(db)).isoformat()
+
+        before = await client.get(
+            "/api/v1/reports/profit",
+            params={"start_date": today, "end_date": today},
             headers=headers,
         )
-        assert r.status_code == 409
+        assert before.status_code == 200, before.text
+        profit_before = before.json()["total_profit"]
 
-    async def test_a_second_purchase_merge_does_not_block_correction(self, client, owner_user):
-        """
-        Merging in a second delivery of the same batch (weighted-avg
-        cost) is itself a PURCHASE movement, not a sale/adjustment --
-        it must not by itself lock out a later cost correction, since
-        nothing has actually sold or been counted out yet.
-        """
-        token = await self._login(client, "lucy", "S3curePass!")
-        headers = {"Authorization": f"Bearer {token}"}
-        product_id, batch_id = await self._make_product_with_batch(
-            client, headers, cost_price=10.0, batch_number="MERGECHECK"
+        # A large, deliberately obvious correction -- if this leaked
+        # into the already-recorded sale's profit at all, it would be
+        # impossible to miss in the assertion below.
+        correct = await client.patch(
+            f"/api/v1/products/{product_id}/batches/{batch_id}/cost",
+            json={"cost_price": 1.0, "reason": "large correction to prove isolation"},
+            headers=headers,
         )
+        assert correct.status_code == 200, correct.text
 
-        suppliers = await client.get("/api/v1/suppliers", headers=headers)
-        if not suppliers.json():
-            create_supplier = await client.post(
-                "/api/v1/suppliers", json={"name": "Merge Check Supplier"}, headers=headers
-            )
-            supplier_id = create_supplier.json()["id"]
-        else:
-            supplier_id = suppliers.json()[0]["id"]
+        after = await client.get(
+            "/api/v1/reports/profit",
+            params={"start_date": today, "end_date": today},
+            headers=headers,
+        )
+        assert after.status_code == 200, after.text
+        assert after.json()["total_profit"] == profit_before
 
-        product = await client.get(f"/api/v1/products/{product_id}", headers=headers)
-        assert product.status_code == 200
-
-        merge = await client.post(
-            "/api/v1/purchase-orders/quick-purchase",
+        # And the other half of the guarantee: a NEW sale from this
+        # same batch's remaining stock DOES use the corrected cost --
+        # the correction affects what's remaining, just never what's
+        # already sold.
+        second_sale = await client.post(
+            "/api/v1/sales",
             json={
-                "supplier_id": supplier_id,
-                "lines": [
-                    {
-                        "product_id": product_id,
-                        "batch_number": "MERGECHECK",
-                        "expiry_date": "2028-01-01",
-                        "quantity": 5,
-                        "unit_cost": 20.0,
-                    }
-                ],
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 30.0}],
             },
             headers=headers,
         )
-        assert merge.status_code == 201, merge.text
+        assert second_sale.status_code == 201, second_sale.text
 
-        r = await client.patch(
-            f"/api/v1/products/{product_id}/batches/{batch_id}/cost",
-            json={"cost_price": 8.0, "reason": "correcting after a plain restock merge"},
+        after_second_sale = await client.get(
+            "/api/v1/reports/profit",
+            params={"start_date": today, "end_date": today},
             headers=headers,
         )
-        assert r.status_code == 200, r.text
-        assert r.json()["cost_price"] == 8.0
+        # First sale: revenue 30, cost 10 -> profit 20.
+        # Second sale: revenue 30, cost 1 (corrected) -> profit 29.
+        assert after_second_sale.json()["total_profit"] == profit_before + 29.0
 
     async def test_employee_without_permission_is_forbidden(
         self, client, owner_user, employee_user

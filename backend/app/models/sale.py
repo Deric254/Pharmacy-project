@@ -65,8 +65,20 @@ class SaleItem(Base):
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), index=True)
     batch_id: Mapped[int] = mapped_column(ForeignKey("medicine_batches.id"))
     quantity: Mapped[int] = mapped_column(Integer)
-    # price at time of sale, never recomputed later
+    # price/cost at time of sale, never recomputed later -- unit_cost
+    # is the batch's cost_price at the exact moment this line was
+    # sold, copied in once and frozen forever. Without this, every
+    # profit/COGS report would have to join live to
+    # MedicineBatch.cost_price, meaning a batch's cost changing for
+    # ANY reason later (a correction, or any future feature) would
+    # silently change what a past, already-closed period's profit
+    # report shows the next time someone re-runs it. Freezing it here
+    # is what makes correcting a batch's cost_price safe to allow at
+    # any time, unconditionally: the correction only ever affects
+    # REMAINING stock (current valuation, future sales) -- it can
+    # never reach back and change a number that was already recorded.
     unit_price: Mapped[float] = mapped_column(MoneyCents)
+    unit_cost: Mapped[float] = mapped_column(MoneyCents)
     line_total: Mapped[float] = mapped_column(MoneyCents)
 
     product: Mapped[Product] = relationship(lazy="selectin")

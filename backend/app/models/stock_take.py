@@ -8,6 +8,7 @@ from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.core.money_types import MoneyCents
 
 if TYPE_CHECKING:
     from app.models.medicine_batch import MedicineBatch
@@ -63,6 +64,15 @@ class StockTakeItem(Base):
     expected_qty: Mapped[int] = mapped_column(Integer)
     physical_qty: Mapped[int | None] = mapped_column(Integer, nullable=True)
     reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The batch's cost_price at the exact moment this stock take
+    # closed -- frozen then, same principle as SaleItem.unit_cost (see
+    # that column's own comment). Null until close() sets it; a
+    # shrinkage value is a permanent record of a loss that happened at
+    # a specific point in time, so it must never be recomputed from
+    # whatever the batch's cost happens to be today -- report_service's
+    # stock_take_history() reads this column, never MedicineBatch.cost_price,
+    # for exactly that reason.
+    unit_cost_at_close: Mapped[float | None] = mapped_column(MoneyCents, nullable=True)
 
     counted_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     counted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

@@ -113,51 +113,31 @@ class BatchService:
         self, product_id: int, batch_id: int, payload: BatchCostCorrection, changed_by: User
     ) -> BatchOut:
         """
-        Fixes a mis-entered buying price -- NOT a general-purpose cost
-        editor. Allowed only before a single unit of this specific
-        batch has moved out for any reason (sale, adjustment, or
-        return-triggered movement): the moment any of those has
-        happened, downstream numbers (profit on that sale, valuation
-        snapshots, historical reports someone may have already looked
-        at or handed to someone else) were computed using the cost as
-        it stood at that moment. Changing it after the fact wouldn't
-        be a correction, it would be silently rewriting history that's
-        already been acted on.
-
-        Checks the stock movement ledger directly rather than
-        `qty_remaining == qty_received` -- that pair is a cached,
-        periodically-reconciled derived value (see StockMovement's own
-        docstring), not the source of truth, so trusting it here would
-        let a reconciliation lag be the thing standing between a cost
-        correction and silently rewriting an already-recorded sale.
+        Free to call at any time, on any batch, regardless of whether
+        anything has already sold from it -- mirrors
+        update_selling_price above exactly, and is only safe to do
+        because of a change made alongside this one: SaleItem.unit_cost
+        now freezes the batch's cost at the exact moment each sale
+        happened (see that column's own comment), and profit/COGS
+        reports read from that frozen value, never from this batch's
+        live cost_price. So a correction here can only ever change two
+        things: this batch's REMAINING valuation, and the cost basis
+        of whatever sells from it from this point forward. It can
+        never reach back and change a number a past, already-closed
+        report showed -- that's what makes an unconditional correction
+        safe rather than a loophole.
 
         A reason is required and every correction is audit-logged --
-        old price, new price, who, when -- in the same transaction as
-        the change itself, exactly like update_selling_price.
+        old price, new price, who, when, why -- in the same
+        transaction as the change itself, exactly like
+        update_selling_price. The audit trail is not optional just
+        because the eligibility check is gone: a cost correction is
+        still a real financial change worth a permanent record of who
+        made it and why.
         """
         batch = await self.db.get(MedicineBatch, batch_id)
         if batch is None or batch.product_id != product_id:
             raise HTTPException(status_code=404, detail="Batch not found")
-
-        moved_result = await self.db.execute(
-            select(StockMovement.id)
-            .where(
-                StockMovement.batch_id == batch_id,
-                StockMovement.movement_type != MovementType.PURCHASE,
-            )
-            .limit(1)
-        )
-        if moved_result.first() is not None:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "This batch already has stock movement against it (a sale, "
-                    "adjustment, or return), so its buying price can no longer be "
-                    "corrected -- doing so would silently change the profit already "
-                    "recorded on that activity. Only a batch with nothing moved out "
-                    "of it yet can have its cost corrected."
-                ),
-            )
 
         old_price = batch.cost_price
         new_price = payload.cost_price

@@ -703,20 +703,43 @@ async function startApp() {
     backendPort = await getFreePort()
     backendUrl = `http://127.0.0.1:${backendPort}`
     const spawnedBackend = await startBackend()
-    // These two are independent of each other -- clearing session
+    // These three are independent of each other -- clearing session
     // storage never depends on the backend being up, it only needs
     // Electron's own session API, which is available immediately.
-    // Running them concurrently instead of one after the other saves
+    // Running them concurrently instead of one after another saves
     // real time on every launch without changing what happens before
-    // createWindow() runs: both still fully complete first, so the
-    // window still never shows stale cached content, exactly as
+    // createWindow() runs: all three still fully complete first, so
+    // the window still never shows stale cached content, exactly as
     // before -- only the ORDER of independent work changed, not what
     // work happens or when relative to the window appearing.
+    //
+    // clearStorageData({ storages: ['serviceworkers', 'cachestorage'] })
+    // and clearCache() are NOT the same thing, despite the similar
+    // names -- the former clears the service worker's own Cache
+    // Storage API entries; the LATTER clears Chromium's separate,
+    // ordinary HTTP disk cache, which is where a plain (non-service-
+    // worker) heuristically-cached index.html would actually live.
+    // Missing this second call was the real gap behind a genuine
+    // "sometimes starts blank, login never comes" report that
+    // persisted after the service-worker clearing above was already
+    // in place: an old index.html surviving in the plain HTTP cache
+    // across an app update, referencing a since-deleted hashed JS
+    // filename -- a 404 that never touches did-fail-load at all,
+    // because Chromium serves it from cache without a network
+    // request. Backend/app/main.py's serve_frontend now also sends an
+    // explicit Cache-Control: no-cache on this same file for exactly
+    // this reason -- this call and that header are deliberately two
+    // independent layers closing the same gap, not redundant with
+    // each other: this one protects every launch regardless of what
+    // any given backend build does; that header protects any future
+    // client (a real browser hitting this backend directly) that
+    // isn't going through this Electron startup path at all.
     await Promise.all([
       waitForBackendHealthy(spawnedBackend),
       session.defaultSession.clearStorageData({
         storages: ['serviceworkers', 'cachestorage'],
       }),
+      session.defaultSession.clearCache(),
     ])
     createWindow()
   } catch (err) {

@@ -586,6 +586,7 @@ class TestKpiDashboard:
                     batch_id=1,
                     quantity=1,
                     unit_price=10.0,
+                    unit_cost=4.0,
                     line_total=10.0,
                 )
             )

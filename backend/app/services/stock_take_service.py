@@ -213,6 +213,7 @@ class StockTakeService:
             batch.locked_by_stock_take_id = None
 
             variance = (item.physical_qty or 0) - item.expected_qty
+            item.unit_cost_at_close = batch.cost_price
             expected_value += item.expected_qty * batch.cost_price
             if variance < 0:
                 shrinkage_value += abs(variance) * batch.cost_price

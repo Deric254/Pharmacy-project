@@ -137,6 +137,7 @@ class SaleService:
                         batch_id=batch.id,
                         quantity=qty,
                         unit_price=unit_price,
+                        unit_cost=batch.cost_price,
                         line_total=unit_price * qty,
                     )
                 )

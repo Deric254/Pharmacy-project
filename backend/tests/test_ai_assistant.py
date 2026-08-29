@@ -648,6 +648,7 @@ class TestBusinessContext:
                         batch_id=batch.id,
                         quantity=1,
                         unit_price=price,
+                        unit_cost=batch.cost_price,
                         line_total=price,
                     )
                 )
@@ -725,6 +726,7 @@ class TestBusinessContext:
                     batch_id=batch.id,
                     quantity=1,
                     unit_price=50.0,
+                    unit_cost=batch.cost_price,
                     line_total=50.0,
                 )
             )
@@ -979,6 +981,7 @@ class TestBusinessContext:
                     batch_id=batch.id,
                     quantity=1,
                     unit_price=99.0,
+                    unit_cost=batch.cost_price,
                     line_total=99.0,
                 )
             )

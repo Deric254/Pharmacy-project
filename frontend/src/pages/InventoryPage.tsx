@@ -350,46 +350,31 @@ function AdjustmentPanel({
   )
 }
 
-function BatchAdjustRow({
+function BatchPriceRow({
   batch,
-  onSubmit,
+  sellsNext,
   onPriceChange,
   onCostCorrect,
-  sellsNext,
   canReprice,
   canCorrectCost,
 }: {
   batch: BatchOut
   sellsNext: boolean
-  onSubmit: (
-    batchId: number,
-    delta: number,
-    reason: AdjustmentReason,
-    notes: string,
-  ) => Promise<void>
   onPriceChange: (batchId: number, sellingPrice: number) => Promise<void>
   onCostCorrect: (batchId: number, costPrice: number, reason: string) => Promise<void>
   canReprice: boolean
   canCorrectCost: boolean
 }) {
-  const [delta, setDelta] = useState(0)
-  const [reason, setReason] = useState<AdjustmentReason>('MISCOUNT')
-  const [notes, setNotes] = useState('')
-  const [submitting, setSubmitting] = useState(false)
   const [sellingPrice, setSellingPrice] = useState(batch.selling_price ?? 0)
   const [markupPercent, setMarkupPercent] = useState(
     batch.cost_price > 0 ? ((sellingPrice - batch.cost_price) / batch.cost_price) * 100 : 0,
   )
   const [savingPrice, setSavingPrice] = useState(false)
-  // Nothing has moved out of this batch yet -- the same real condition
-  // the backend enforces (via the stock movement ledger, the actual
-  // source of truth), mirrored here only as a display hint so the
-  // control isn't shown at all in the overwhelmingly common case
-  // where it would just be rejected. The backend re-checks the real
-  // ledger regardless of what this shows, so a stale/cached mismatch
-  // here can never let a correction through that shouldn't happen --
-  // it can only make this device show the control one refresh late.
-  const costCorrectable = batch.qty_remaining === batch.qty_received
+  // Free to correct at any time, on any batch -- see BatchService.
+  // correct_cost_price's own comment for why this is safe: a sale's
+  // recorded cost is frozen the moment it happens (SaleItem.unit_cost),
+  // so a correction here can only ever affect this batch's remaining
+  // valuation and future sales, never a past, already-recorded one.
   const [correctingCost, setCorrectingCost] = useState(false)
   const [costDraft, setCostDraft] = useState(batch.cost_price)
   const [costReason, setCostReason] = useState('')
@@ -407,7 +392,7 @@ function BatchAdjustRow({
           ) : null}
         </p>
         <p className="figure text-ink-soft">{batch.qty_remaining} remaining</p>
-        {canCorrectCost && costCorrectable && !correctingCost && (
+        {canCorrectCost && !correctingCost && (
           <p className="figure text-ink-soft">
             Buy {batch.cost_price.toFixed(2)}{' '}
             <button
@@ -422,7 +407,7 @@ function BatchAdjustRow({
             </button>
           </p>
         )}
-        {(!canCorrectCost || !costCorrectable) && !correctingCost && (
+        {!canCorrectCost && !correctingCost && (
           <p className="figure text-ink-soft">Buy {batch.cost_price.toFixed(2)}</p>
         )}
         {correctingCost && (
@@ -450,11 +435,7 @@ function BatchAdjustRow({
             </label>
             <div className="flex gap-1">
               <button
-                disabled={
-                  savingCost ||
-                  !costReason.trim() ||
-                  costDraft === batch.cost_price
-                }
+                disabled={savingCost || !costReason.trim() || costDraft === batch.cost_price}
                 onClick={async () => {
                   setSavingCost(true)
                   await onCostCorrect(batch.id, costDraft, costReason.trim())
@@ -480,6 +461,9 @@ function BatchAdjustRow({
             register or in reports until that batch is sold out.
           </p>
         )}
+        {sellsNext && (
+          <p className="mt-1 text-xs text-stamp-green">This batch's price is what POS charges right now.</p>
+        )}
       </div>
       <div className="flex flex-wrap items-center justify-end gap-1">
         <input
@@ -501,9 +485,7 @@ function BatchAdjustRow({
           onChange={(e) => {
             const nextMarkup = Math.max(0, Number(e.target.value) || 0)
             setMarkupPercent(nextMarkup)
-            setSellingPrice(
-              Math.round(batch.cost_price * (1 + nextMarkup / 100) * 100) / 100,
-            )
+            setSellingPrice(Math.round(batch.cost_price * (1 + nextMarkup / 100) * 100) / 100)
           }}
           className="figure w-20 border border-rule bg-paper px-2 py-1 disabled:opacity-40"
           aria-label="Batch markup percentage"
@@ -519,6 +501,49 @@ function BatchAdjustRow({
         >
           Save price
         </button>
+      </div>
+    </div>
+  )
+}
+
+function BatchAdjustRow({
+  batch,
+  onSubmit,
+  onPriceChange,
+  onCostCorrect,
+  sellsNext,
+  canReprice,
+  canCorrectCost,
+}: {
+  batch: BatchOut
+  sellsNext: boolean
+  onSubmit: (
+    batchId: number,
+    delta: number,
+    reason: AdjustmentReason,
+    notes: string,
+  ) => Promise<void>
+  onPriceChange: (batchId: number, sellingPrice: number) => Promise<void>
+  onCostCorrect: (batchId: number, costPrice: number, reason: string) => Promise<void>
+  canReprice: boolean
+  canCorrectCost: boolean
+}) {
+  const [delta, setDelta] = useState(0)
+  const [reason, setReason] = useState<AdjustmentReason>('MISCOUNT')
+  const [notes, setNotes] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  return (
+    <div className="pb-2">
+      <BatchPriceRow
+        batch={batch}
+        sellsNext={sellsNext}
+        onPriceChange={onPriceChange}
+        onCostCorrect={onCostCorrect}
+        canReprice={canReprice}
+        canCorrectCost={canCorrectCost}
+      />
+      <div className="ruled-row flex flex-wrap items-center justify-end gap-1 pb-2 pt-1 text-sm">
         <input
           type="number"
           value={delta || ''}
@@ -751,6 +776,7 @@ function ProductManagementPanel({ onChanged }: { onChanged: () => void }) {
       )}
       {editing && (
         <ProductFormModal
+          key={editing.id}
           product={editing}
           onClose={() => setEditing(null)}
           onSaved={() => {
@@ -792,6 +818,11 @@ function ProductFormModal({
   onSaved: () => void
 }) {
   const isEdit = product !== null
+  const hasPermission = useAuthStore((s) => s.hasPermission)
+  const canRepriceBatches = hasPermission('batches.reprice')
+  const canCorrectCost = hasPermission('batches.correct_cost')
+  const timezone = useConfigStore((s) => s.config?.timezone) ?? fallbackTimezone()
+  const formatCurrency = useCurrencyFormatter()
   const [name, setName] = useState(product?.name ?? '')
   const [barcode, setBarcode] = useState(product?.barcode ?? '')
   const [unit, setUnit] = useState(product?.unit ?? 'unit')
@@ -799,6 +830,42 @@ function ProductFormModal({
   const [price, setPrice] = useState(product?.default_selling_price ?? 0)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [batches, setBatches] = useState<BatchOut[] | null>(null)
+  const [batchesError, setBatchesError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!isEdit) return
+    productsApi
+      .batches(product.id)
+      .then(setBatches)
+      .catch((err) => setBatchesError(err instanceof ApiError ? err.message : 'Could not load batches.'))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEdit])
+
+  async function refreshBatches() {
+    if (!isEdit) return
+    setBatches(await productsApi.batches(product.id))
+  }
+
+  async function handleBatchPriceChange(batchId: number, sellingPrice: number) {
+    if (!isEdit) return
+    try {
+      await productsApi.updateBatch(product.id, batchId, sellingPrice)
+      await refreshBatches()
+    } catch (err) {
+      setBatchesError(err instanceof ApiError ? err.message : 'Could not update batch price.')
+    }
+  }
+
+  async function handleBatchCostCorrect(batchId: number, costPrice: number, reason: string) {
+    if (!isEdit) return
+    try {
+      await productsApi.correctBatchCost(product.id, batchId, costPrice, reason)
+      await refreshBatches()
+    } catch (err) {
+      setBatchesError(err instanceof ApiError ? err.message : 'Could not correct batch cost.')
+    }
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -879,7 +946,7 @@ function ProductFormModal({
         </div>
         <label className="block">
           <span className="block text-xs uppercase tracking-wide text-ink-soft">
-            Selling price
+            Default selling price
           </span>
           <input
             type="number"
@@ -889,6 +956,18 @@ function ProductFormModal({
               onChange={(e) => setPrice(Math.max(0, Number(e.target.value) || 0))}
             className="figure mt-1 w-full border border-rule bg-paper px-3 py-2"
           />
+          <p className="mt-1 text-xs text-ink-soft">
+            {isEdit && product.current_selling_price !== null ? (
+              <>
+                POS is charging <strong>{formatCurrency(product.current_selling_price)}</strong>{' '}
+                right now, from the batch selling next -- this field only applies as a fallback
+                on a batch that has no price of its own. Edit that batch's price below to change
+                what's actually charged.
+              </>
+            ) : (
+              "Used as the starting price for any new batch that doesn't set its own -- won't change what POS charges on stock already priced at the batch level."
+            )}
+          </p>
         </label>
 
         {isEdit && product.current_cost !== null && (
@@ -912,6 +991,46 @@ function ProductFormModal({
               <span className="text-sm text-ink-soft">% → price becomes {price.toFixed(2)}</span>
             </div>
           </label>
+        )}
+
+        {isEdit && (
+          <div className="border-t border-rule pt-3">
+            <h3 className="mb-2 text-xs uppercase tracking-wide text-ink-soft">
+              Batches -- prices save instantly, independent of "Save changes" below
+            </h3>
+            {batchesError && <p className="mb-2 text-sm text-stamp-red">{batchesError}</p>}
+            {batches === null && !batchesError && (
+              <p className="text-sm text-ink-soft">Loading batches…</p>
+            )}
+            {batches?.length === 0 && (
+              <p className="text-sm text-ink-soft">No batches for this product yet.</p>
+            )}
+            {batches && batches.length > 0 && (
+              <div className="space-y-2">
+                {(() => {
+                  // Same FEFO display-hint logic as the Adjustment
+                  // panel's batch list -- see that panel's own comment
+                  // for what this can't fully see (an active stock-take
+                  // lock).
+                  const today = businessToday(timezone)
+                  const fefoNextId = batches.find(
+                    (b) => b.qty_remaining > 0 && b.expiry_date >= today,
+                  )?.id
+                  return batches.map((batch) => (
+                    <BatchPriceRow
+                      key={`${batch.id}-${batch.selling_price ?? 'null'}-${batch.cost_price}`}
+                      batch={batch}
+                      sellsNext={batch.id === fefoNextId}
+                      onPriceChange={handleBatchPriceChange}
+                      onCostCorrect={handleBatchCostCorrect}
+                      canReprice={canRepriceBatches}
+                      canCorrectCost={canCorrectCost}
+                    />
+                  ))
+                })()}
+              </div>
+            )}
+          </div>
         )}
 
         <p className="text-xs text-ink-soft">

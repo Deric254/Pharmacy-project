@@ -142,8 +142,16 @@ def _wait_for_server_then_open_browser(port: int) -> None:
     import urllib.error
     import urllib.request
 
+    # Matches BACKEND_STARTUP_TIMEOUT_MS in electron/main.js -- see that
+    # constant's own comment for why 30s wasn't a safe margin on a
+    # freshly-installed unsigned build. This loop only matters for the
+    # non-Electron path (raw exe / `python desktop_main.py`) anyway,
+    # since under Electron waitForBackendHealthy() is the real gate;
+    # kept in sync so a person watching this console window and the
+    # Electron dialog never see two different numbers for the same wait.
+    startup_timeout_seconds = 90
     url = f"http://127.0.0.1:{port}"
-    for _ in range(30):
+    for _ in range(startup_timeout_seconds):
         try:
             with urllib.request.urlopen(f"{url}/health", timeout=1) as response:
                 if response.status == 200:
@@ -153,7 +161,10 @@ def _wait_for_server_then_open_browser(port: int) -> None:
         except (urllib.error.URLError, OSError):
             pass
         time.sleep(1)
-    print(f"[WARNING] Server did not respond after 30s. Try opening {url} manually.")
+    print(
+        f"[WARNING] Server did not respond after {startup_timeout_seconds}s. "
+        f"Try opening {url} manually."
+    )
 
 
 def _already_running_instance(port: int) -> bool:
@@ -311,6 +322,16 @@ def main() -> None:
     # loaded after migrations have already run against a schema it
     # matches.
     from app.main import app
+
+    # A real gap this log previously had: "migrations-complete" to
+    # "uvicorn-starting" used to be one silent jump that also covered
+    # this import -- app.main pulls in all 17 routers, the DB engine,
+    # and the settings singleton, and a real backend.log showed that
+    # gap alone stretching past the old 30s deadline on some launches
+    # with nothing recorded in between to explain why. Splitting it
+    # into its own stage means the next slow-startup report can show
+    # exactly whether it was this import or the uvicorn bind itself.
+    _log_stage(data_dir, "app-imported")
 
     _log_stage(data_dir, "uvicorn-starting")
     try:

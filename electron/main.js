@@ -36,7 +36,25 @@ const { spawn } = require('node:child_process')
 // every function below that needs to talk to the backend.
 let backendPort = null
 let backendUrl = null
-const BACKEND_STARTUP_TIMEOUT_MS = 30000
+// 90s, not 30s -- raised after a real report: backend.log showed
+// migration duration alone (a fixed, small set of Alembic scripts,
+// no reason to vary) ranging from 2s to 19s+ across back-to-back
+// launches on the same machine, with the gap between
+// migrations-complete and uvicorn-starting stretching further still on
+// some attempts and never being reached at all on others. That
+// signature -- the SAME code taking wildly different amounts of time
+// on each run, not a consistently slow step -- is the known fingerprint
+// of Windows Defender/SmartScreen real-time-scanning this build's
+// freshly-written, unsigned DLLs (this .spec has no codesign_identity)
+// on every access until the exe earns enough reputation/gets cached,
+// which is worst immediately after a fresh install or update and
+// tapers off on later launches. 30s was tuned for an already-trusted,
+// warm exe; it left no margin for that real, observed variance and was
+// killing genuinely-still-starting (not hung) launches. This does not
+// paper over an actual hang -- a truly crashed/exited backend is still
+// caught immediately via the 'exit' listener in waitForBackendHealthy,
+// regardless of this deadline.
+const BACKEND_STARTUP_TIMEOUT_MS = 90000
 
 // Pinned explicitly, not left to Electron's defaults. Two real,
 // Pinned explicitly, not left to Electron's default. Without this,
@@ -292,7 +310,11 @@ function waitForBackendHealthy(processToWatch = backendProcess) {
 
     function retryOrGiveUp() {
       if (Date.now() > deadline) {
-        finishReject(new Error('The backend did not become ready within 30 seconds.'))
+        finishReject(
+          new Error(
+            `The backend did not become ready within ${BACKEND_STARTUP_TIMEOUT_MS / 1000} seconds.`,
+          ),
+        )
       } else {
         // 150ms, not 500ms -- this only controls how quickly a
         // ready backend gets NOTICED, not how long we're willing to

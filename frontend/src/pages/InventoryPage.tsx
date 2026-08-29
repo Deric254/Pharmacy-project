@@ -456,13 +456,10 @@ function BatchPriceRow({
           </div>
         )}
         {!sellsNext && (
-          <p className="mt-1 max-w-xs text-xs text-ink-soft">
-            An earlier batch sells first (FEFO). A price change here won't show at the
-            register or in reports until that batch is sold out.
-          </p>
+          <p className="mt-1 max-w-xs text-xs text-ink-soft">Sells after current batch (FEFO).</p>
         )}
         {sellsNext && (
-          <p className="mt-1 text-xs text-stamp-green">This batch's price is what POS charges right now.</p>
+          <p className="mt-1 text-xs text-stamp-green">Sells next.</p>
         )}
       </div>
       <div className="flex flex-wrap items-center justify-end gap-1">
@@ -959,13 +956,10 @@ function ProductFormModal({
           <p className="mt-1 text-xs text-ink-soft">
             {isEdit && product.current_selling_price !== null ? (
               <>
-                POS is charging <strong>{formatCurrency(product.current_selling_price)}</strong>{' '}
-                right now, from the batch selling next -- this field only applies as a fallback
-                on a batch that has no price of its own. Edit that batch's price below to change
-                what's actually charged.
+                POS charging <strong>{formatCurrency(product.current_selling_price)}</strong> (current batch)
               </>
             ) : (
-              "Used as the starting price for any new batch that doesn't set its own -- won't change what POS charges on stock already priced at the batch level."
+              'Fallback price for new batches'
             )}
           </p>
         </label>
@@ -1033,11 +1027,6 @@ function ProductFormModal({
           </div>
         )}
 
-        <p className="text-xs text-ink-soft">
-          This only creates the product record. Stock is always added through Purchasing, so
-          every unit on the shelf can be traced back to a real order and supplier.
-        </p>
-
         {error && <p className="text-sm text-stamp-red">{error}</p>}
 
         <div className="flex justify-end gap-2">
@@ -1085,8 +1074,7 @@ function ConfirmDeactivateProductModal({
   return (
     <Modal title="Deactivate this product?" onClose={onClose}>
       <p className="text-sm text-ink-soft">
-        <span className="font-medium text-ink">{product.name}</span> will no longer be sellable
-        or orderable, but its full sales and stock history stays intact — nothing is deleted.
+        <span className="font-medium text-ink">{product.name}</span> — history stays intact.
       </p>
       {error && <p className="mt-3 text-sm text-stamp-red">{error}</p>}
       <div className="mt-4 flex justify-end gap-2">
@@ -1152,11 +1140,7 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
 
   return (
     <Modal title="Import products from Excel" onClose={onClose}>
-      <p className="text-sm text-ink-soft">
-        Use the template's dropdowns and number formats, and nothing here can be malformed. If
-        anything is still wrong when you upload, nothing is imported until it's fixed — never a
-        partial import.
-      </p>
+      <p className="text-sm text-ink-soft">All-or-nothing import.</p>
 
       <label className="mt-3 block">
         <span className="block text-xs uppercase tracking-wide text-ink-soft">

@@ -22,7 +22,13 @@ from app.models.ai_conversation import AIConversation, AIConversationMessage
 from app.models.ai_provider_key import AIProviderKey, AIProviderName
 from app.models.user import User
 from app.schemas.ai import AIAskRequest
-from app.services.ai.adapters import ClaudeAdapter, OpenAIAdapter
+from app.services.ai.adapters import (
+    ClaudeAdapter,
+    DeepSeekAdapter,
+    GeminiAdapter,
+    NvidiaAdapter,
+    OpenAIAdapter,
+)
 from app.services.ai.base import AIProviderError, AIResponse
 from app.services.ai_assistant_service import AIAssistantService
 from app.services.ai_conversation_service import ConversationNotFound
@@ -509,6 +515,90 @@ class TestRealAdapterRequestShape:
         assert captured["url"] == "https://api.anthropic.com/v1/messages"
         assert captured["api_key_header"] == "claude-key-456"
         assert captured["version_header"] == "2023-06-01"
+
+    async def test_gemini_adapter_builds_correct_request(self):
+        """
+        Real gap this closes: Gemini, DeepSeek, and Nvidia had zero
+        request-shape coverage despite this module's own docstring
+        saying that's how adapters are meant to be tested -- which is
+        exactly how a retired model ID (gemini-1.5-flash, shut down by
+        Google) went unnoticed until it started failing live with a
+        404. This locks in the current model ID so a future retirement
+        fails a test instead of a user's live "Ask AI" click.
+        """
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            captured["body"] = request.read()
+            return httpx.Response(
+                200,
+                json={"candidates": [{"content": {"parts": [{"text": "Hello from Gemini"}]}}]},
+            )
+
+        http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        adapter = GeminiAdapter(api_key="gemini-key-789", client=http_client)
+
+        response = await adapter.ask("What's expiring soon?", {})
+
+        assert response.text == "Hello from Gemini"
+        assert captured["url"].startswith(
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            "gemini-3.5-flash-lite:generateContent"
+        )
+        assert "key=gemini-key-789" in captured["url"]
+        assert b"What's expiring soon?" in captured["body"]
+
+    async def test_deepseek_adapter_builds_correct_request(self):
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            captured["auth_header"] = request.headers.get("authorization")
+            captured["body"] = request.read()
+            return httpx.Response(
+                200, json={"choices": [{"message": {"content": "Hello from DeepSeek"}}]}
+            )
+
+        http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        adapter = DeepSeekAdapter(api_key="deepseek-key-321", client=http_client)
+
+        response = await adapter.ask("Any low stock?", {})
+
+        assert response.text == "Hello from DeepSeek"
+        assert captured["url"] == "https://api.deepseek.com/chat/completions"
+        assert captured["auth_header"] == "Bearer deepseek-key-321"
+        assert b"deepseek-chat" in captured["body"]
+        assert b"Any low stock?" in captured["body"]
+
+    async def test_nvidia_adapter_builds_correct_request(self):
+        """
+        Real gap this closes: the previous model ID
+        (meta/llama-3.1-8b-instruct) was pulled from NVIDIA's hosted
+        inference catalog and started returning 410 Gone -- confirmed
+        against NVIDIA's own current documentation, not guessed. This
+        locks in the replacement so the same silent failure mode is
+        caught here instead of live.
+        """
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["url"] = str(request.url)
+            captured["auth_header"] = request.headers.get("authorization")
+            captured["body"] = request.read()
+            return httpx.Response(
+                200, json={"choices": [{"message": {"content": "Hello from Nvidia"}}]}
+            )
+
+        http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        adapter = NvidiaAdapter(api_key="nvidia-key-654", client=http_client)
+
+        response = await adapter.ask("Reorder suggestions?", {})
+
+        assert response.text == "Hello from Nvidia"
+        assert captured["url"] == "https://integrate.api.nvidia.com/v1/chat/completions"
+        assert captured["auth_header"] == "Bearer nvidia-key-654"
+        assert b"nvidia/nemotron-3-super-120b-a12b" in captured["body"]
 
     async def test_adapter_raises_ai_provider_error_on_http_failure(self):
         def handler(request: httpx.Request) -> httpx.Response:

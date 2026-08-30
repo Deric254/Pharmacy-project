@@ -165,7 +165,7 @@ class GeminiAdapter(AIProvider):
         try:
             response = await self._client.post(
                 "https://generativelanguage.googleapis.com/v1beta/models/"
-                f"gemini-1.5-flash:generateContent?key={self.api_key}",
+                f"gemini-3.5-flash-lite:generateContent?key={self.api_key}",
                 json={
                     "contents": [{"parts": [{"text": _build_prompt_with_context(prompt, context)}]}]
                 },
@@ -216,7 +216,7 @@ class NvidiaAdapter(AIProvider):
                 "https://integrate.api.nvidia.com/v1/chat/completions",
                 headers={"Authorization": f"Bearer {self.api_key}"},
                 json={
-                    "model": "meta/llama-3.1-8b-instruct",
+                    "model": "nvidia/nemotron-3-super-120b-a12b",
                     "messages": [
                         {"role": "user", "content": _build_prompt_with_context(prompt, context)}
                     ],

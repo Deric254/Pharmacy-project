@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { inventoryApi, productsApi } from '../api/domain'
 import { useAuthStore } from '../auth/store'
 import { useConfigStore } from '../config/store'
@@ -456,13 +456,10 @@ function BatchPriceRow({
           </div>
         )}
         {!sellsNext && (
-          <p className="mt-1 max-w-xs text-xs text-ink-soft">
-            An earlier batch sells first (FEFO). A price change here won't show at the
-            register or in reports until that batch is sold out.
-          </p>
+          <p className="mt-1 max-w-xs text-xs text-ink-soft">Sells after current batch (FEFO).</p>
         )}
         {sellsNext && (
-          <p className="mt-1 text-xs text-stamp-green">This batch's price is what POS charges right now.</p>
+          <p className="mt-1 text-xs text-stamp-green">Sells next.</p>
         )}
       </div>
       <div className="flex flex-wrap items-center justify-end gap-1">
@@ -847,6 +844,28 @@ function ProductFormModal({
     setBatches(await productsApi.batches(product.id))
   }
 
+  // Drives the "what POS charges right now" and "cost" figures below --
+  // computed live from `batches` (which refreshes after every batch
+  // price/cost save) instead of the `product` prop, which is a
+  // snapshot from when the modal opened and never updates. Using
+  // `product.current_selling_price`/`current_cost` here was the bug:
+  // saving a batch price updated the batch row but left this summary
+  // showing the pre-save figure until the modal was closed and
+  // reopened.
+  //
+  // Same FEFO display-hint logic as the Adjustment panel's batch list
+  // -- see that panel's own comment for what this can't fully see (an
+  // active stock-take lock).
+  const fefoNextBatch = useMemo(() => {
+    if (!batches || batches.length === 0) return null
+    const today = businessToday(timezone)
+    return batches.find((b) => b.qty_remaining > 0 && b.expiry_date >= today) ?? null
+  }, [batches, timezone])
+  const currentSellingPrice = fefoNextBatch
+    ? (fefoNextBatch.selling_price ?? product?.default_selling_price ?? null)
+    : null
+  const currentCost = fefoNextBatch?.cost_price ?? null
+
   async function handleBatchPriceChange(batchId: number, sellingPrice: number) {
     if (!isEdit) return
     try {
@@ -957,23 +976,20 @@ function ProductFormModal({
             className="figure mt-1 w-full border border-rule bg-paper px-3 py-2"
           />
           <p className="mt-1 text-xs text-ink-soft">
-            {isEdit && product.current_selling_price !== null ? (
+            {isEdit && currentSellingPrice !== null ? (
               <>
-                POS is charging <strong>{formatCurrency(product.current_selling_price)}</strong>{' '}
-                right now, from the batch selling next -- this field only applies as a fallback
-                on a batch that has no price of its own. Edit that batch's price below to change
-                what's actually charged.
+                POS charging <strong>{formatCurrency(currentSellingPrice)}</strong> (current batch)
               </>
             ) : (
-              "Used as the starting price for any new batch that doesn't set its own -- won't change what POS charges on stock already priced at the batch level."
+              'Fallback price for new batches'
             )}
           </p>
         </label>
 
-        {isEdit && product.current_cost !== null && (
+        {isEdit && currentCost !== null && (
           <label className="block">
             <span className="block text-xs uppercase tracking-wide text-ink-soft">
-              Or set by markup % (cost is {product.current_cost.toFixed(2)})
+              Markup % (cost {currentCost.toFixed(2)})
             </span>
             <div className="mt-1 flex items-center gap-2">
               <input
@@ -983,21 +999,18 @@ function ProductFormModal({
                 placeholder="e.g. 40"
                 onChange={(e) => {
                   const markupPercent = Number(e.target.value)
-                  const cost = product.current_cost ?? 0
-                  setPrice(Math.round(cost * (1 + markupPercent / 100) * 100) / 100)
+                  setPrice(Math.round(currentCost * (1 + markupPercent / 100) * 100) / 100)
                 }}
                 className="figure w-24 border border-rule bg-paper px-3 py-2"
               />
-              <span className="text-sm text-ink-soft">% → price becomes {price.toFixed(2)}</span>
+              <span className="text-sm text-ink-soft">→ {price.toFixed(2)}</span>
             </div>
           </label>
         )}
 
         {isEdit && (
           <div className="border-t border-rule pt-3">
-            <h3 className="mb-2 text-xs uppercase tracking-wide text-ink-soft">
-              Batches -- prices save instantly, independent of "Save changes" below
-            </h3>
+            <h3 className="mb-2 text-xs uppercase tracking-wide text-ink-soft">Batches</h3>
             {batchesError && <p className="mb-2 text-sm text-stamp-red">{batchesError}</p>}
             {batches === null && !batchesError && (
               <p className="text-sm text-ink-soft">Loading batches…</p>
@@ -1007,36 +1020,21 @@ function ProductFormModal({
             )}
             {batches && batches.length > 0 && (
               <div className="space-y-2">
-                {(() => {
-                  // Same FEFO display-hint logic as the Adjustment
-                  // panel's batch list -- see that panel's own comment
-                  // for what this can't fully see (an active stock-take
-                  // lock).
-                  const today = businessToday(timezone)
-                  const fefoNextId = batches.find(
-                    (b) => b.qty_remaining > 0 && b.expiry_date >= today,
-                  )?.id
-                  return batches.map((batch) => (
-                    <BatchPriceRow
-                      key={`${batch.id}-${batch.selling_price ?? 'null'}-${batch.cost_price}`}
-                      batch={batch}
-                      sellsNext={batch.id === fefoNextId}
-                      onPriceChange={handleBatchPriceChange}
-                      onCostCorrect={handleBatchCostCorrect}
-                      canReprice={canRepriceBatches}
-                      canCorrectCost={canCorrectCost}
-                    />
-                  ))
-                })()}
+                {batches.map((batch) => (
+                  <BatchPriceRow
+                    key={`${batch.id}-${batch.selling_price ?? 'null'}-${batch.cost_price}`}
+                    batch={batch}
+                    sellsNext={batch.id === fefoNextBatch?.id}
+                    onPriceChange={handleBatchPriceChange}
+                    onCostCorrect={handleBatchCostCorrect}
+                    canReprice={canRepriceBatches}
+                    canCorrectCost={canCorrectCost}
+                  />
+                ))}
               </div>
             )}
           </div>
         )}
-
-        <p className="text-xs text-ink-soft">
-          This only creates the product record. Stock is always added through Purchasing, so
-          every unit on the shelf can be traced back to a real order and supplier.
-        </p>
 
         {error && <p className="text-sm text-stamp-red">{error}</p>}
 
@@ -1085,8 +1083,7 @@ function ConfirmDeactivateProductModal({
   return (
     <Modal title="Deactivate this product?" onClose={onClose}>
       <p className="text-sm text-ink-soft">
-        <span className="font-medium text-ink">{product.name}</span> will no longer be sellable
-        or orderable, but its full sales and stock history stays intact — nothing is deleted.
+        <span className="font-medium text-ink">{product.name}</span> — history stays intact.
       </p>
       {error && <p className="mt-3 text-sm text-stamp-red">{error}</p>}
       <div className="mt-4 flex justify-end gap-2">
@@ -1152,11 +1149,7 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
 
   return (
     <Modal title="Import products from Excel" onClose={onClose}>
-      <p className="text-sm text-ink-soft">
-        Use the template's dropdowns and number formats, and nothing here can be malformed. If
-        anything is still wrong when you upload, nothing is imported until it's fixed — never a
-        partial import.
-      </p>
+      <p className="text-sm text-ink-soft">All-or-nothing import.</p>
 
       <label className="mt-3 block">
         <span className="block text-xs uppercase tracking-wide text-ink-soft">

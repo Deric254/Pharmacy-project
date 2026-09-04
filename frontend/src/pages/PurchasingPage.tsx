@@ -501,7 +501,11 @@ interface QuickPurchaseLineDraft {
   expiryDate: string
   unitCost: number
   sellingPrice: number
-  markupPercent: number
+  // markupPercent is intentionally NOT stored here -- it's derived from
+  // unitCost/sellingPrice at render time (see markupFor() below). Storing
+  // it separately let it go stale the moment Unit cost or Selling price
+  // was edited directly, which is the same desync bug fixed in
+  // InventoryPage.tsx's BatchPriceRow.
   // True only once the person actually edits the Selling price or
   // Markup % field for this line -- as opposed to `sellingPrice`
   // simply holding the product's current default because that's what
@@ -548,7 +552,6 @@ function QuickPurchaseModal({
       expiryDate: '',
       unitCost: 0,
       sellingPrice: 0,
-      markupPercent: 0,
       sellingPriceTouched: false,
     },
   ])
@@ -585,10 +588,13 @@ function QuickPurchaseModal({
         expiryDate: '',
         unitCost: 0,
         sellingPrice: 0,
-        markupPercent: 0,
         sellingPriceTouched: false,
       },
     ])
+  }
+
+  function markupFor(line: QuickPurchaseLineDraft): number {
+    return line.unitCost > 0 ? ((line.sellingPrice - line.unitCost) / line.unitCost) * 100 : 0
   }
 
   function removeLine(index: number) {
@@ -685,7 +691,6 @@ function QuickPurchaseModal({
                             productId: p.id,
                             productName: p.name,
                             sellingPrice: p.default_selling_price,
-                            markupPercent: 0,
                           })
                           setActiveSearchIndex(null)
                           setProductResults([])
@@ -739,9 +744,13 @@ function QuickPurchaseModal({
                 <input
                   type="number"
                   min={0}
-                  step={0.01}
+                  step="any"
                   value={line.unitCost}
-                  onChange={(e) => updateLine(index, { unitCost: Number(e.target.value) })}
+                  onChange={(e) =>
+                    updateLine(index, {
+                      unitCost: Math.round((Math.max(0, Number(e.target.value) || 0)) * 100) / 100,
+                    })
+                  }
                   className="figure mt-1 w-full border border-rule bg-paper px-2 py-1.5 text-sm"
                 />
               </label>
@@ -752,11 +761,11 @@ function QuickPurchaseModal({
                 <input
                   type="number"
                   min={0}
-                  step={0.01}
+                  step="any"
                   value={line.sellingPrice}
                   onChange={(e) =>
                     updateLine(index, {
-                      sellingPrice: Number(e.target.value),
+                      sellingPrice: Math.round((Math.max(0, Number(e.target.value) || 0)) * 100) / 100,
                       sellingPriceTouched: true,
                     })
                   }
@@ -769,14 +778,17 @@ function QuickPurchaseModal({
                 </span>
                 <input
                   type="number"
-                  min={0}
-                  step={0.01}
-                  value={line.markupPercent || ''}
+                  step="any"
+                  value={Math.round(markupFor(line) * 100) / 100 || ''}
                   onChange={(e) => {
-                    const markupPercent = Math.max(0, Number(e.target.value) || 0)
+                    // Not clamped to >= 0: matches InventoryPage's
+                    // BatchPriceRow -- below-cost pricing is a real,
+                    // permitted case, not something to silently block here
+                    // while allowing it to display elsewhere.
+                    const markupPercent = Number(e.target.value) || 0
                     const sellingPrice =
                       Math.round(line.unitCost * (1 + markupPercent / 100) * 100) / 100
-                    updateLine(index, { markupPercent, sellingPrice, sellingPriceTouched: true })
+                    updateLine(index, { sellingPrice, sellingPriceTouched: true })
                   }}
                   className="figure mt-1 w-full border border-rule bg-paper px-2 py-1.5 text-sm"
                 />

@@ -366,9 +366,14 @@ function BatchPriceRow({
   canCorrectCost: boolean
 }) {
   const [sellingPrice, setSellingPrice] = useState(batch.selling_price ?? 0)
-  const [markupPercent, setMarkupPercent] = useState(
-    batch.cost_price > 0 ? ((sellingPrice - batch.cost_price) / batch.cost_price) * 100 : 0,
-  )
+  // Markup is *derived* from sellingPrice on every render, never stored as
+  // its own state. Two numbers that represent the same fact (price vs.
+  // markup %) drift apart the moment one of them updates without the
+  // other -- that's what produced the stale/impossible markup values.
+  // A single source of truth (sellingPrice) makes that class of bug
+  // impossible instead of merely unlikely.
+  const markupPercent =
+    batch.cost_price > 0 ? ((sellingPrice - batch.cost_price) / batch.cost_price) * 100 : 0
   const [savingPrice, setSavingPrice] = useState(false)
   // Free to correct at any time, on any batch -- see BatchService.
   // correct_cost_price's own comment for why this is safe: a sale's
@@ -466,22 +471,35 @@ function BatchPriceRow({
         <input
           type="number"
           min={0}
-          step={0.01}
+          // step="any" instead of a decimal step: browsers' native
+          // stepMismatch check does its arithmetic in floating point, and
+          // 0.01 isn't exactly representable in binary -- for larger
+          // values that check accumulates enough error to reject valid
+          // input and suggest nonsense "nearest" values (e.g. typing
+          // 545456 gets flagged with a suggested fix of 354.54). Real
+          // 2dp rounding is already enforced below and by MoneyCents
+          // server-side, so the browser doesn't need to gatekeep it too.
+          step="any"
           value={sellingPrice}
           disabled={!canReprice}
-          onChange={(e) => setSellingPrice(Math.max(0, Number(e.target.value) || 0))}
+          onChange={(e) => {
+            const next = Math.max(0, Number(e.target.value) || 0)
+            setSellingPrice(Math.round(next * 100) / 100)
+          }}
           className="figure w-20 border border-rule bg-paper px-2 py-1 disabled:opacity-40"
           aria-label="Batch selling price"
         />
         <input
           type="number"
-          min={0}
-          step={0.01}
-          value={markupPercent || ''}
+          step="any"
+          value={Number.isFinite(markupPercent) ? Math.round(markupPercent * 100) / 100 : 0}
           disabled={!canReprice}
           onChange={(e) => {
-            const nextMarkup = Math.max(0, Number(e.target.value) || 0)
-            setMarkupPercent(nextMarkup)
+            // Markup can legitimately go negative (clearance / loss-leader
+            // pricing on a batch nearing expiry) -- it isn't clamped to 0
+            // here, since that would silently contradict what the field
+            // shows for an already-below-cost batch on load.
+            const nextMarkup = Number(e.target.value) || 0
             setSellingPrice(Math.round(batch.cost_price * (1 + nextMarkup / 100) * 100) / 100)
           }}
           className="figure w-20 border border-rule bg-paper px-2 py-1 disabled:opacity-40"

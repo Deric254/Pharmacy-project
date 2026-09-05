@@ -142,7 +142,18 @@ class ClaudeAdapter(AIProvider):
                     "anthropic-version": "2023-06-01",
                 },
                 json={
-                    "model": "claude-3-5-sonnet-20241022",
+                    # claude-3-5-sonnet-20241022 (the previous value here)
+                    # was retired by Anthropic on January 5, 2026 -- every
+                    # request through this adapter has been hitting a dead
+                    # model ID and failing since before that date,
+                    # regardless of how new or valid the API key added is.
+                    # claude-sonnet-5 is the current Claude API model ID as
+                    # of September 2026. Model IDs get retired on a
+                    # schedule (see https://platform.claude.com/docs/en/about-claude/models/model-ids-and-versions) --
+                    # whoever maintains this file should check that page
+                    # periodically rather than assuming a hardcoded ID
+                    # stays valid indefinitely.
+                    "model": "claude-sonnet-5",
                     "max_tokens": 1000,
                     "messages": [
                         {"role": "user", "content": _build_prompt_with_context(prompt, context)}
@@ -165,7 +176,17 @@ class GeminiAdapter(AIProvider):
         try:
             response = await self._client.post(
                 "https://generativelanguage.googleapis.com/v1beta/models/"
-                f"gemini-3.5-flash-lite:generateContent?key={self.api_key}",
+                "gemini-3.5-flash-lite:generateContent",
+                # Header, not a ?key=... query parameter (the previous
+                # form here). A key in the URL ends up wherever URLs end
+                # up: proxy logs, this app's own error messages (an
+                # httpx.HTTPStatusError's string form includes the full
+                # request URL), and browser/network-tool history if this
+                # were ever called client-side. None of those are places
+                # a live API key should be able to leak to. Google's own
+                # current API reference documents this header as the way
+                # to authenticate -- not a workaround, the normal path.
+                headers={"x-goog-api-key": self.api_key},
                 json={
                     "contents": [{"parts": [{"text": _build_prompt_with_context(prompt, context)}]}]
                 },

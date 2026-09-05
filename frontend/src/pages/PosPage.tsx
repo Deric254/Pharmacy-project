@@ -600,7 +600,7 @@ export function PosPage() {
             <input
               type="number"
               min={0}
-              step={0.01}
+              step="any"
               value={discount}
               onChange={(e) => setDiscount(Math.max(0, Number(e.target.value) || 0))}
               className="mt-1 w-full border border-rule bg-paper px-2 py-1 figure"

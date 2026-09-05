@@ -280,7 +280,7 @@ function SuppliersModal({
                 <input
                   type="number"
                   min={0.01}
-                  step={0.01}
+                  step="any"
                   value={paymentAmounts[s.id] ?? ''}
                   onChange={(e) =>
                     setPaymentAmounts((prev) => ({ ...prev, [s.id]: e.target.value }))

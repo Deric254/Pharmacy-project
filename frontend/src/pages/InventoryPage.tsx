@@ -422,7 +422,7 @@ function BatchPriceRow({
               <input
                 type="number"
                 min={0}
-                step={0.01}
+                step="any"
                 value={costDraft}
                 onChange={(e) => setCostDraft(Math.max(0, Number(e.target.value) || 0))}
                 className="figure mt-0.5 w-24 border border-rule bg-paper px-2 py-1"
@@ -988,7 +988,7 @@ function ProductFormModal({
           <input
             type="number"
             min={0}
-            step={0.01}
+            step="any"
             value={price}
               onChange={(e) => setPrice(Math.max(0, Number(e.target.value) || 0))}
             className="figure mt-1 w-full border border-rule bg-paper px-3 py-2"

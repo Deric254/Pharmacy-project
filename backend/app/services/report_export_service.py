@@ -29,6 +29,33 @@ ExportFormat = Literal["json", "excel", "pdf"]
 
 _EXCEL_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _PDF_MEDIA_TYPE = "application/pdf"
+# Leading characters Excel (and Sheets/LibreOffice) treat as "this cell
+# is a formula" rather than literal text.
+_FORMULA_TRIGGER_CHARS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _excel_safe_cell(value: object) -> object:
+    """
+    Neutralizes CSV/formula injection (OWASP-recognized): report rows
+    routinely contain data someone else typed in elsewhere in this app
+    -- a customer name, a supplier name, a product name -- none of it
+    vetted as "safe to become a spreadsheet formula" at entry, because
+    at entry it's just a name. A value like '=HYPERLINK("http://evil"
+    ,"click")' or a DDE-launch payload sits inert in this app's own UI,
+    but the moment it's exported and the pharmacy owner opens the
+    file in Excel, a leading =/+/-/@ makes Excel evaluate it as a
+    formula instead of displaying it as text -- turning an ordinary
+    "view my report" click into arbitrary formula/command execution on
+    the owner's machine. Prefixing a leading trigger character with a
+    single quote is the standard mitigation: Excel then renders the
+    cell as the literal text (quote included in older Excel, stripped
+    in newer versions -- either way, never evaluated), which is a
+    one-character cost against a real attack surface. Only strings are
+    at risk here -- numbers, dates, and None can't carry a formula.
+    """
+    if isinstance(value, str) and value.startswith(_FORMULA_TRIGGER_CHARS):
+        return "'" + value
+    return value
 
 
 def export_to_excel(
@@ -44,7 +71,7 @@ def export_to_excel(
         cell.font = Font(bold=True)
 
     for row in rows:
-        sheet.append(row)
+        sheet.append([_excel_safe_cell(cell) for cell in row])
 
     column_count = len(headers)
     for col_index in range(1, column_count + 1):

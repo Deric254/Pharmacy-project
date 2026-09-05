@@ -15,8 +15,20 @@ route translates that into a 404.
 fallback chain (first fails -> tries second -> succeeds, or all fail ->
 graceful message) using fake adapters, without making real calls to
 paid third-party APIs in CI. Production code uses the real default map.
+
+Every per-provider failure is logged here (see the `except` blocks in
+`ask()` below) precisely because the user-facing message is, and
+should stay, generic ("please try again"). Without the log line, a
+real, fixable cause -- a retired model ID, an expired key, a rate
+limit -- was completely unrecoverable after the fact: previously
+nothing recorded which provider failed or why, so a genuine bug (a
+hardcoded model ID going dead) could hide behind the same
+generic-sounding failure indefinitely, indistinguishable from a
+transient network blip. The fix is a log line, not a UI change --
+the person using the AI panel still just sees "try again shortly".
 """
 
+import logging
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 
@@ -28,6 +40,8 @@ from app.core.security import decrypt_secret
 from app.models.ai_conversation import AIConversation, AIConversationMessage
 from app.models.ai_provider_key import AIProviderKey, AIProviderName
 from app.models.user import User
+
+logger = logging.getLogger(__name__)
 from app.schemas.ai import AIAskRequest, AIAskResponse
 from app.services.ai.adapters import (
     ClaudeAdapter,
@@ -246,9 +260,18 @@ class AIAssistantService:
                     decrypted_key = decrypt_secret(key_row.encrypted_key)
                     adapter = self.adapter_factory(key_row.provider, decrypted_key)
                     response = await adapter.ask(payload.prompt, full_context)
-                except AIProviderError:
+                except AIProviderError as exc:
+                    # Never the API key itself -- str(exc) here is the
+                    # adapter's own wrapped message (HTTP status, body
+                    # snippet), which does not include the raw key.
+                    logger.warning(
+                        "AI provider %s failed, trying next: %s", key_row.provider.value, exc
+                    )
                     continue  # try the next provider in priority order
-                except Exception:  # noqa: BLE001 - adapter failure must fall through, never crash the panel
+                except Exception as exc:  # noqa: BLE001 - adapter failure must fall through, never crash the panel
+                    logger.exception(
+                        "AI provider %s raised an unexpected error", key_row.provider.value
+                    )
                     continue
 
                 key_row.last_used_at = datetime.now(UTC)

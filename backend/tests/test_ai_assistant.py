@@ -498,12 +498,23 @@ class TestRealAdapterRequestShape:
         assert b"never invent" in captured_body.lower() or b"never state" in captured_body.lower()
 
     async def test_claude_adapter_builds_correct_request(self):
+        """
+        Real gap this closes: unlike the Gemini/DeepSeek/NVIDIA tests
+        below, this test never asserted which model ID was actually in
+        the request body -- so when claude-3-5-sonnet-20241022 (the
+        model ID that used to be here) was retired by Anthropic, this
+        test kept passing right through it, exactly the same silent-
+        failure mode already documented and closed for the other three
+        providers. Asserting the model string in the body is what
+        makes a future retirement fail here instead of live.
+        """
         captured = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
             captured["url"] = str(request.url)
             captured["api_key_header"] = request.headers.get("x-api-key")
             captured["version_header"] = request.headers.get("anthropic-version")
+            captured["body"] = request.read()
             return httpx.Response(200, json={"content": [{"text": "Hello from Claude"}]})
 
         http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -515,6 +526,7 @@ class TestRealAdapterRequestShape:
         assert captured["url"] == "https://api.anthropic.com/v1/messages"
         assert captured["api_key_header"] == "claude-key-456"
         assert captured["version_header"] == "2023-06-01"
+        assert b"claude-sonnet-5" in captured["body"]
 
     async def test_gemini_adapter_builds_correct_request(self):
         """
@@ -530,6 +542,7 @@ class TestRealAdapterRequestShape:
 
         def handler(request: httpx.Request) -> httpx.Response:
             captured["url"] = str(request.url)
+            captured["api_key_header"] = request.headers.get("x-goog-api-key")
             captured["body"] = request.read()
             return httpx.Response(
                 200,
@@ -542,11 +555,17 @@ class TestRealAdapterRequestShape:
         response = await adapter.ask("What's expiring soon?", {})
 
         assert response.text == "Hello from Gemini"
-        assert captured["url"].startswith(
+        assert captured["url"] == (
             "https://generativelanguage.googleapis.com/v1beta/models/"
             "gemini-3.5-flash-lite:generateContent"
         )
-        assert "key=gemini-key-789" in captured["url"]
+        # Header, not a ?key=... query param -- a key in the URL ends up
+        # in proxy logs, error message strings, and (previously) this
+        # exact test's own assertion history. See adapters.py's comment
+        # on this same header for why that's a real leakage path, not
+        # just a style preference.
+        assert captured["api_key_header"] == "gemini-key-789"
+        assert "key=" not in captured["url"]
         assert b"What's expiring soon?" in captured["body"]
 
     async def test_deepseek_adapter_builds_correct_request(self):

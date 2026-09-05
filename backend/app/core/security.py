@@ -117,21 +117,24 @@ def decrypt_bytes(stored_value: bytes) -> bytes:
     return aesgcm.decrypt(nonce, ciphertext, associated_data=None)
 
 
-# A fixed, non-secret salt -- safe here because the passphrase itself
-# supplies the real entropy, and PBKDF2's purpose for a fixed salt is
-# just to make the derived key different from a plain hash of the
-# passphrase, not to add secrecy of its own. Using a fixed salt
-# (rather than one generated per-backup and stored alongside it) is
-# what lets a person derive the exact same key on a completely fresh
-# device using nothing but the passphrase they remember -- there's no
-# salt to also carry over or look up.
-_BACKUP_KDF_SALT = b"pharmacy-erp-backup-passphrase-v1"
+# The salt is randomly generated per encryption and stored alongside
+# the ciphertext (see encrypt_bytes_with_passphrase) -- NOT fixed.
+# A fixed, shared salt was used here previously; the problem with that
+# wasn't restore portability (a random salt travels in the file just
+# like the nonce always did, so a fresh device restoring with only the
+# remembered passphrase is unaffected either way) -- it was that every
+# installation of this software sharing one hardcoded salt means a
+# single precomputed cracking table works against every customer's
+# backup file, not just one. A random salt per backup removes that
+# shared attack surface entirely; the passphrase's own strength is
+# what protects any individual file either way.
+_BACKUP_KDF_SALT_LENGTH = 16
 _BACKUP_KDF_ITERATIONS = 390_000
 
 
-def _derive_backup_key(passphrase: str) -> bytes:
+def _derive_backup_key(passphrase: str, salt: bytes) -> bytes:
     return hashlib.pbkdf2_hmac(
-        "sha256", passphrase.encode(), _BACKUP_KDF_SALT, _BACKUP_KDF_ITERATIONS, dklen=32
+        "sha256", passphrase.encode(), salt, _BACKUP_KDF_ITERATIONS, dklen=32
     )
 
 
@@ -143,10 +146,18 @@ def encrypt_bytes_with_passphrase(plaintext: bytes, passphrase: str) -> bytes:
     one thing that makes restoring on a different, brand-new device
     possible: nothing about the old machine needs to be reachable,
     only the passphrase the person carries in their own memory.
+
+    Returns salt || nonce || ciphertext. The salt travels with the
+    file for the same reason the nonce always has -- restoring needs
+    both, and neither is secret, so shipping them alongside the
+    ciphertext costs nothing while letting each backup use its own
+    unique salt (see _BACKUP_KDF_SALT_LENGTH above for why that
+    matters).
     """
-    aesgcm = AESGCM(_derive_backup_key(passphrase))
+    salt = os.urandom(_BACKUP_KDF_SALT_LENGTH)
+    aesgcm = AESGCM(_derive_backup_key(passphrase, salt))
     nonce = os.urandom(12)
-    return nonce + aesgcm.encrypt(nonce, plaintext, associated_data=None)
+    return salt + nonce + aesgcm.encrypt(nonce, plaintext, associated_data=None)
 
 
 def decrypt_bytes_with_passphrase(stored_value: bytes, passphrase: str) -> bytes:
@@ -155,8 +166,10 @@ def decrypt_bytes_with_passphrase(stored_value: bytes, passphrase: str) -> bytes
     expected to turn that into a clear "wrong passphrase or corrupted
     file" message, never a raw crash.
     """
-    aesgcm = AESGCM(_derive_backup_key(passphrase))
-    nonce, ciphertext = stored_value[:12], stored_value[12:]
+    salt = stored_value[:_BACKUP_KDF_SALT_LENGTH]
+    nonce = stored_value[_BACKUP_KDF_SALT_LENGTH : _BACKUP_KDF_SALT_LENGTH + 12]
+    ciphertext = stored_value[_BACKUP_KDF_SALT_LENGTH + 12 :]
+    aesgcm = AESGCM(_derive_backup_key(passphrase, salt))
     return aesgcm.decrypt(nonce, ciphertext, associated_data=None)
 
 

@@ -149,10 +149,10 @@ class ClaudeAdapter(AIProvider):
                     # regardless of how new or valid the API key added is.
                     # claude-sonnet-5 is the current Claude API model ID as
                     # of September 2026. Model IDs get retired on a
-                    # schedule (see https://platform.claude.com/docs/en/about-claude/models/model-ids-and-versions) --
-                    # whoever maintains this file should check that page
-                    # periodically rather than assuming a hardcoded ID
-                    # stays valid indefinitely.
+                    # schedule (see the "model-ids-and-versions" page in the
+                    # Claude API docs) -- whoever maintains this file should
+                    # check that page periodically rather than assuming a
+                    # hardcoded ID stays valid indefinitely.
                     "model": "claude-sonnet-5",
                     "max_tokens": 1000,
                     "messages": [

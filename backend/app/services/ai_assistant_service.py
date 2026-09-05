@@ -40,8 +40,6 @@ from app.core.security import decrypt_secret
 from app.models.ai_conversation import AIConversation, AIConversationMessage
 from app.models.ai_provider_key import AIProviderKey, AIProviderName
 from app.models.user import User
-
-logger = logging.getLogger(__name__)
 from app.schemas.ai import AIAskRequest, AIAskResponse
 from app.services.ai.adapters import (
     ClaudeAdapter,
@@ -54,6 +52,8 @@ from app.services.ai.base import AIProvider, AIProviderError
 from app.services.ai_conversation_service import AIConversationService, ConversationNotFound
 from app.services.business_config_service import BusinessConfigService
 from app.services.report_service import ReportService
+
+logger = logging.getLogger(__name__)
 
 AdapterFactory = Callable[[AIProviderName, str], AIProvider]
 
@@ -268,7 +268,7 @@ class AIAssistantService:
                         "AI provider %s failed, trying next: %s", key_row.provider.value, exc
                     )
                     continue  # try the next provider in priority order
-                except Exception as exc:  # noqa: BLE001 - adapter failure must fall through, never crash the panel
+                except Exception:  # noqa: BLE001 - adapter failure must fall through, never crash the panel
                     logger.exception(
                         "AI provider %s raised an unexpected error", key_row.provider.value
                     )

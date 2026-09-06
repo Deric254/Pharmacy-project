@@ -8,12 +8,14 @@ from app.models.role import Role
 from app.models.setup_lock import SetupLock
 from app.models.user import User
 from app.schemas.backup import RestoreResult
+from app.schemas.business_config import BusinessConfigUpdate
 from app.schemas.setup import FirstUserCreate, SetupStatusOut
 from app.services.backup.dump_restore import (
     compute_manifest,
     deserialize_dump,
     restore_all_tables,
 )
+from app.services.business_config_service import BusinessConfigService
 
 FIRST_USER_ROLE = "ChemistOwner"
 
@@ -54,16 +56,15 @@ class SetupService:
         # stock_selection_service.py's docstring for the fuller
         # explanation of that specific limitation).
         self.db.add(SetupLock(id=1))
-        self.db.add(
-            User(
-                full_name=payload.full_name,
-                username=payload.username,
-                hashed_password=hash_password(payload.password),
-                role_id=role.id,
-                security_question=payload.security_question,
-                security_answer_hash=hash_password(payload.security_answer),
-            )
+        new_owner = User(
+            full_name=payload.full_name,
+            username=payload.username,
+            hashed_password=hash_password(payload.password),
+            role_id=role.id,
+            security_question=payload.security_question,
+            security_answer_hash=hash_password(payload.security_answer),
         )
+        self.db.add(new_owner)
         try:
             await self.db.commit()
         except IntegrityError as exc:
@@ -72,6 +73,25 @@ class SetupService:
                 status_code=409,
                 detail="Setup has already been completed. Log in instead.",
             ) from exc
+
+        if payload.timezone:
+            # Best-effort, deliberately separate from the critical
+            # section above: the ChemistOwner account is already real
+            # and committed by this point, so a bad or unrecognized
+            # timezone string must never turn into a failed setup.
+            # Worst case on a bad value: BusinessConfigService's own
+            # existing UTC fallback (get_business_timezone) applies
+            # until corrected in Settings -- same as any other
+            # already-invalid saved value, never a 500 here. `admin`
+            # here is just this same account, already committed and
+            # real -- there is no one else it could sensibly be
+            # attributed to at this exact moment.
+            try:
+                await BusinessConfigService(self.db).update(
+                    new_owner, BusinessConfigUpdate(timezone=payload.timezone)
+                )
+            except Exception:  # noqa: BLE001 - see comment above; setup must not fail on this
+                await self.db.rollback()
 
     async def _any_user_exists(self) -> bool:
         count = await self.db.scalar(select(func.count()).select_from(User))

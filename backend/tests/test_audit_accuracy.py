@@ -8,10 +8,11 @@ module-level accuracy tests (e.g. Reports' two-batch profit test) with
 messier, more realistic multi-batch/discount/boundary scenarios.
 """
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from app.core.business_time import business_today
 from app.core.database import AsyncSessionLocal
+from app.models.audit_log import AuditLog
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
 
@@ -225,3 +226,73 @@ class TestValuationAccuracy:
         )
         assert r.status_code == 200
         assert round(r.json()["total_value"], 2) == 269.88
+
+
+class TestAuditLogDateFilterTimezoneAccuracy:
+    """
+    audit_log_service.py used to compare AuditLog.created_at (stored
+    in UTC) directly against datetime.combine(local_date, time.min/
+    max) -- a naive local-date-as-if-UTC comparison. For a business
+    ahead of UTC (Africa/Nairobi, UTC+3 -- this app's primary market),
+    an entry that happened in the first few hours of true local
+    "today" is stored with a UTC timestamp still on "yesterday", and a
+    filter for local "today" silently excluded it. sale_service.py's
+    own listing already handles this correctly via
+    local_day_bounds_utc; this proves audit log filtering now matches.
+    """
+
+    async def test_entry_just_after_local_midnight_is_found_under_the_correct_local_date(
+        self, client, owner_user
+    ):
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        await client.patch("/api/v1/config", json={"timezone": "Africa/Nairobi"}, headers=headers)
+
+        # 2027-01-14 22:00 UTC = 2027-01-15 01:00 in Africa/Nairobi
+        # (UTC+3) -- truly local-Jan-15, even though the raw UTC
+        # timestamp is still on Jan 14. This is exactly the boundary
+        # case a naive comparison gets wrong.
+        entry_utc = datetime(2027, 1, 14, 22, 0, 0)
+        async with AsyncSessionLocal() as db:
+            db.add(
+                AuditLog(
+                    action="config.updated",
+                    entity_type="business_config",
+                    entity_id="1",
+                )
+            )
+            await db.commit()
+
+        async with AsyncSessionLocal() as db:
+            from sqlalchemy import select, update
+
+            latest = (
+                await db.execute(select(AuditLog).order_by(AuditLog.id.desc()).limit(1))
+            ).scalar_one()
+            await db.execute(
+                update(AuditLog).where(AuditLog.id == latest.id).values(created_at=entry_utc)
+            )
+            await db.commit()
+
+        # Filtering for 2027-01-14 (the raw UTC date) must NOT find it --
+        r_wrong_day = await client.get(
+            "/api/v1/audit-logs?start_date=2027-01-14&end_date=2027-01-14",
+            headers=headers,
+        )
+        ids_wrong_day = [e["id"] for e in r_wrong_day.json()["entries"]]
+        assert latest.id not in ids_wrong_day, (
+            "Entry stored at 2027-01-14 22:00 UTC (= local Jan 15 01:00 in "
+            "Africa/Nairobi) should not appear under the UTC calendar date."
+        )
+
+        # -- filtering for 2027-01-15 (the true local date) must find it.
+        r_right_day = await client.get(
+            "/api/v1/audit-logs?start_date=2027-01-15&end_date=2027-01-15",
+            headers=headers,
+        )
+        ids_right_day = [e["id"] for e in r_right_day.json()["entries"]]
+        assert latest.id in ids_right_day, (
+            "TIMEZONE BUG: entry at 2027-01-14 22:00 UTC is local Jan 15 01:00 "
+            "in Africa/Nairobi (UTC+3) but was not found under that local date."
+        )

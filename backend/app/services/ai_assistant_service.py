@@ -54,7 +54,6 @@ from app.services.business_config_service import BusinessConfigService
 from app.services.report_service import ReportService
 
 logger = logging.getLogger(__name__)
-
 AdapterFactory = Callable[[AIProviderName, str], AIProvider]
 
 _DEFAULT_ADAPTER_CLASSES: dict[AIProviderName, type[AIProvider]] = {
@@ -269,6 +268,9 @@ class AIAssistantService:
                     )
                     continue  # try the next provider in priority order
                 except Exception:  # noqa: BLE001 - adapter failure must fall through, never crash the panel
+                    # logger.exception() reads the current exception
+                    # from sys.exc_info() automatically -- no need to
+                    # bind `as exc` just to reference it explicitly.
                     logger.exception(
                         "AI provider %s raised an unexpected error", key_row.provider.value
                     )

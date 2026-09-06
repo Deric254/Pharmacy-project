@@ -34,6 +34,7 @@ export function InventoryPage() {
   const canManageProducts = hasPermission('products.manage')
   const canRepriceBatches = hasPermission('batches.reprice')
   const canCorrectCost = hasPermission('batches.correct_cost')
+  const canCorrectExpiry = hasPermission('batches.correct_expiry')
   const formatCurrency = useCurrencyFormatter()
 
   const [lowStock, setLowStock] = useState<LowStockProductOut[]>([])
@@ -42,6 +43,8 @@ export function InventoryPage() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [reloadKey, setReloadKey] = useState(0)
+  const [writingOffBatchId, setWritingOffBatchId] = useState<number | null>(null)
+  const [writingOffAll, setWritingOffAll] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -108,6 +111,7 @@ export function InventoryPage() {
           onAdjusted={() => setReloadKey((k) => k + 1)}
           canReprice={canRepriceBatches}
           canCorrectCost={canCorrectCost}
+          canCorrectExpiry={canCorrectExpiry}
         />
       )}
 
@@ -134,18 +138,78 @@ export function InventoryPage() {
         </section>
 
         <section>
-          <h2 className="mb-2 text-xs uppercase tracking-wide text-ink-soft">
-            Expiring within 60 days ({expiring.length})
-          </h2>
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="text-xs uppercase tracking-wide text-ink-soft">
+              Expiring within 60 days ({expiring.length})
+            </h2>
+            {canAdjust && expiring.some((item) => item.days_remaining <= 0) && (
+              <button
+                disabled={writingOffAll}
+                onClick={async () => {
+                  setWritingOffAll(true)
+                  setError(null)
+                  try {
+                    await inventoryApi.writeOffAllExpired()
+                    setReloadKey((k) => k + 1)
+                  } catch (err) {
+                    setError(
+                      err instanceof ApiError ? err.message : 'Could not write off expired stock.',
+                    )
+                  } finally {
+                    setWritingOffAll(false)
+                  }
+                }}
+                className="border border-stamp-red bg-stamp-red px-2 py-1 text-xs text-paper disabled:opacity-40"
+              >
+                {writingOffAll ? 'Writing off…' : 'Write off all expired'}
+              </button>
+            )}
+          </div>
           <div className="ledger-panel divide-y divide-rule">
-            {expiring.map((item) => (
-              <div key={item.batch_id} className="flex justify-between px-3 py-2 text-sm">
-                <span className="truncate pr-2">
-                  {item.product_name} <span className="text-ink-soft">· {item.batch_number}</span>
-                </span>
-                <span className="figure shrink-0 text-stamp-red">{item.days_remaining}d</span>
-              </div>
-            ))}
+            {expiring.map((item) => {
+              const isExpired = item.days_remaining <= 0
+              return (
+                <div key={item.batch_id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
+                  <span className="truncate pr-2">
+                    {item.product_name}{' '}
+                    <span className="text-ink-soft">· {item.batch_number}</span>
+                  </span>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {isExpired ? (
+                      <span className="border border-stamp-red-soft bg-stamp-red-soft/40 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-stamp-red">
+                        Expired
+                      </span>
+                    ) : (
+                      <span className="figure text-stamp-red">{item.days_remaining}d</span>
+                    )}
+                    {isExpired && canAdjust && (
+                      <button
+                        disabled={writingOffBatchId === item.batch_id}
+                        onClick={async () => {
+                          setWritingOffBatchId(item.batch_id)
+                          setError(null)
+                          try {
+                            await inventoryApi.writeOffExpired(item.batch_id)
+                            setReloadKey((k) => k + 1)
+                          } catch (err) {
+                            setError(
+                              err instanceof ApiError
+                                ? err.message
+                                : 'Could not write off this batch.',
+                            )
+                          } finally {
+                            setWritingOffBatchId(null)
+                          }
+                        }}
+                        className="border border-rule px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-ink-soft hover:border-brass disabled:opacity-40"
+                      >
+                        Write off
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
             {expiring.length === 0 && !loading && (
               <p className="px-3 py-3 text-sm text-ink-soft">Nothing expiring soon.</p>
             )}
@@ -160,10 +224,12 @@ function AdjustmentPanel({
   onAdjusted,
   canReprice,
   canCorrectCost,
+  canCorrectExpiry,
 }: {
   onAdjusted: () => void
   canReprice: boolean
   canCorrectCost: boolean
+  canCorrectExpiry: boolean
 }) {
   const timezone = useConfigStore((s) => s.config?.timezone) ?? fallbackTimezone()
   const [query, setQuery] = useState('')
@@ -240,6 +306,35 @@ function AdjustmentPanel({
       onAdjusted()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not correct batch cost.')
+    }
+  }
+
+  async function correctBatchExpiry(batchId: number, newExpiryDate: string, reason: string) {
+    if (!selectedProduct) return
+    setError(null)
+    try {
+      await productsApi.correctBatchExpiry(selectedProduct.id, batchId, {
+        new_expiry_date: newExpiryDate,
+        reason,
+      })
+      setBatches(await productsApi.batches(selectedProduct.id))
+      onAdjusted()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not correct batch expiry date.')
+    }
+  }
+
+  async function writeOffBatch(batchId: number) {
+    if (!selectedProduct) return
+    setError(null)
+    setSuccess(null)
+    try {
+      const result = await inventoryApi.writeOffExpired(batchId)
+      setSuccess(`Batch ${batchId} written off (${result.quantity_written_off} units).`)
+      setBatches(await productsApi.batches(selectedProduct.id))
+      onAdjusted()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not write off this batch.')
     }
   }
 
@@ -334,9 +429,13 @@ function AdjustmentPanel({
                   onSubmit={submitAdjustment}
                   onPriceChange={updateBatchPrice}
                   onCostCorrect={correctBatchCost}
+                  onExpiryCorrect={correctBatchExpiry}
+                  onWriteOff={writeOffBatch}
+                  isExpired={batch.expiry_date < today}
                   sellsNext={batch.id === fefoNextId}
                   canReprice={canReprice}
                   canCorrectCost={canCorrectCost}
+                  canCorrectExpiry={canCorrectExpiry}
                 />
               ))
             })()}
@@ -355,15 +454,19 @@ function BatchPriceRow({
   sellsNext,
   onPriceChange,
   onCostCorrect,
+  onExpiryCorrect,
   canReprice,
   canCorrectCost,
+  canCorrectExpiry,
 }: {
   batch: BatchOut
   sellsNext: boolean
   onPriceChange: (batchId: number, sellingPrice: number) => Promise<void>
   onCostCorrect: (batchId: number, costPrice: number, reason: string) => Promise<void>
+  onExpiryCorrect: (batchId: number, newExpiryDate: string, reason: string) => Promise<void>
   canReprice: boolean
   canCorrectCost: boolean
+  canCorrectExpiry: boolean
 }) {
   const [sellingPrice, setSellingPrice] = useState(batch.selling_price ?? 0)
   // Markup is *derived* from sellingPrice on every render, never stored as
@@ -384,18 +487,85 @@ function BatchPriceRow({
   const [costDraft, setCostDraft] = useState(batch.cost_price)
   const [costReason, setCostReason] = useState('')
   const [savingCost, setSavingCost] = useState(false)
+  // Its own permission, not bundled with cost correction -- see
+  // migration 0035's reasoning: this one can make an expired batch
+  // sellable again, which cost correction can never do.
+  const [correctingExpiry, setCorrectingExpiry] = useState(false)
+  const [expiryDraft, setExpiryDraft] = useState(batch.expiry_date)
+  const [expiryReason, setExpiryReason] = useState('')
+  const [savingExpiry, setSavingExpiry] = useState(false)
 
   return (
     <div className="ruled-row grid grid-cols-[1fr_auto] items-center gap-2 pb-2 text-sm">
       <div>
         <p>
-          {batch.batch_number} <span className="text-ink-soft">· exp {batch.expiry_date}</span>
+          {batch.batch_number}{' '}
+          {!correctingExpiry && (
+            <span className="text-ink-soft">
+              · exp {batch.expiry_date}
+              {canCorrectExpiry && (
+                <button
+                  onClick={() => {
+                    setExpiryDraft(batch.expiry_date)
+                    setExpiryReason('')
+                    setCorrectingExpiry(true)
+                  }}
+                  className="ml-1 text-[10px] uppercase tracking-wide text-ink-soft underline"
+                >
+                  Correct
+                </button>
+              )}
+            </span>
+          )}
           {sellsNext ? (
             <span className="ml-2 border border-stamp-green-soft bg-stamp-green-soft/40 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-stamp-green">
               Sells next
             </span>
           ) : null}
         </p>
+        {correctingExpiry && (
+          <div className="mt-1 flex flex-col gap-1 border border-rule bg-paper p-2">
+            <label className="text-[10px] uppercase tracking-wide text-ink-soft">
+              Correct expiry date
+              <input
+                type="date"
+                value={expiryDraft}
+                onChange={(e) => setExpiryDraft(e.target.value)}
+                className="mt-0.5 w-full border border-rule bg-paper px-2 py-1 text-xs"
+                aria-label="Corrected expiry date"
+              />
+            </label>
+            <label className="text-[10px] uppercase tracking-wide text-ink-soft">
+              Reason (required)
+              <input
+                value={expiryReason}
+                onChange={(e) => setExpiryReason(e.target.value)}
+                placeholder="e.g. mistyped year on receiving"
+                className="mt-0.5 w-full border border-rule bg-paper px-2 py-1 text-xs"
+              />
+            </label>
+            <div className="flex gap-1">
+              <button
+                disabled={savingExpiry || !expiryReason.trim() || expiryDraft === batch.expiry_date}
+                onClick={async () => {
+                  setSavingExpiry(true)
+                  await onExpiryCorrect(batch.id, expiryDraft, expiryReason.trim())
+                  setSavingExpiry(false)
+                  setCorrectingExpiry(false)
+                }}
+                className="border border-ink bg-ink px-2 py-1 text-xs text-paper disabled:opacity-40"
+              >
+                Save correction
+              </button>
+              <button
+                onClick={() => setCorrectingExpiry(false)}
+                className="border border-rule px-2 py-1 text-xs"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
         <p className="figure text-ink-soft">{batch.qty_remaining} remaining</p>
         {canCorrectCost && !correctingCost && (
           <p className="figure text-ink-soft">
@@ -526,12 +696,17 @@ function BatchAdjustRow({
   onSubmit,
   onPriceChange,
   onCostCorrect,
+  onExpiryCorrect,
+  onWriteOff,
+  isExpired,
   sellsNext,
   canReprice,
   canCorrectCost,
+  canCorrectExpiry,
 }: {
   batch: BatchOut
   sellsNext: boolean
+  isExpired: boolean
   onSubmit: (
     batchId: number,
     delta: number,
@@ -540,13 +715,17 @@ function BatchAdjustRow({
   ) => Promise<void>
   onPriceChange: (batchId: number, sellingPrice: number) => Promise<void>
   onCostCorrect: (batchId: number, costPrice: number, reason: string) => Promise<void>
+  onExpiryCorrect: (batchId: number, newExpiryDate: string, reason: string) => Promise<void>
+  onWriteOff: (batchId: number) => Promise<void>
   canReprice: boolean
   canCorrectCost: boolean
+  canCorrectExpiry: boolean
 }) {
   const [delta, setDelta] = useState(0)
   const [reason, setReason] = useState<AdjustmentReason>('MISCOUNT')
   const [notes, setNotes] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [writingOff, setWritingOff] = useState(false)
 
   return (
     <div className="pb-2">
@@ -555,9 +734,29 @@ function BatchAdjustRow({
         sellsNext={sellsNext}
         onPriceChange={onPriceChange}
         onCostCorrect={onCostCorrect}
+        onExpiryCorrect={onExpiryCorrect}
         canReprice={canReprice}
         canCorrectCost={canCorrectCost}
+        canCorrectExpiry={canCorrectExpiry}
       />
+      {isExpired && batch.qty_remaining > 0 && (
+        <div className="ruled-row flex items-center justify-between gap-2 pb-2 pt-1 text-sm">
+          <span className="border border-stamp-red-soft bg-stamp-red-soft/40 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-stamp-red">
+            Expired
+          </span>
+          <button
+            disabled={writingOff}
+            onClick={async () => {
+              setWritingOff(true)
+              await onWriteOff(batch.id)
+              setWritingOff(false)
+            }}
+            className="border border-stamp-red bg-stamp-red px-2 py-1 text-xs text-paper disabled:opacity-40"
+          >
+            {writingOff ? 'Writing off…' : 'Write off expired stock'}
+          </button>
+        </div>
+      )}
       <div className="ruled-row flex flex-wrap items-center justify-end gap-1 pb-2 pt-1 text-sm">
         <input
           type="number"
@@ -836,6 +1035,7 @@ function ProductFormModal({
   const hasPermission = useAuthStore((s) => s.hasPermission)
   const canRepriceBatches = hasPermission('batches.reprice')
   const canCorrectCost = hasPermission('batches.correct_cost')
+  const canCorrectExpiry = hasPermission('batches.correct_expiry')
   const timezone = useConfigStore((s) => s.config?.timezone) ?? fallbackTimezone()
   const formatCurrency = useCurrencyFormatter()
   const [name, setName] = useState(product?.name ?? '')
@@ -901,6 +1101,21 @@ function ProductFormModal({
       await refreshBatches()
     } catch (err) {
       setBatchesError(err instanceof ApiError ? err.message : 'Could not correct batch cost.')
+    }
+  }
+
+  async function handleBatchExpiryCorrect(batchId: number, newExpiryDate: string, reason: string) {
+    if (!isEdit) return
+    try {
+      await productsApi.correctBatchExpiry(product.id, batchId, {
+        new_expiry_date: newExpiryDate,
+        reason,
+      })
+      await refreshBatches()
+    } catch (err) {
+      setBatchesError(
+        err instanceof ApiError ? err.message : 'Could not correct batch expiry date.',
+      )
     }
   }
 
@@ -1045,8 +1260,10 @@ function ProductFormModal({
                     sellsNext={batch.id === fefoNextBatch?.id}
                     onPriceChange={handleBatchPriceChange}
                     onCostCorrect={handleBatchCostCorrect}
+                    onExpiryCorrect={handleBatchExpiryCorrect}
                     canReprice={canRepriceBatches}
                     canCorrectCost={canCorrectCost}
+                    canCorrectExpiry={canCorrectExpiry}
                   />
                 ))}
               </div>

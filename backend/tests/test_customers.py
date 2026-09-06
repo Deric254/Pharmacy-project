@@ -95,6 +95,34 @@ class TestCustomerCRUD:
         )
         assert r.status_code == 409
 
+    async def test_two_concurrent_creates_with_the_same_new_phone_number(
+        self, client, employee_user
+    ):
+        """
+        Same theoretical race SaleService's idempotency-key check
+        documents: both requests can pass the pre-commit SELECT before
+        either commits. customers.phone has a real UNIQUE index at the
+        database level, so a genuine race can't create two customers
+        with the same phone -- what this actually proves is that the
+        loser gets the same clean 409 the sequential case above does,
+        not an unhandled IntegrityError surfacing as a raw 500.
+        """
+        token = await _login(client, "joe", "pass1234")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        async def create(name: str):
+            return await client.post(
+                "/api/v1/customers",
+                json={"name": name, "phone": "0700000099"},
+                headers=headers,
+            )
+
+        results = await asyncio.gather(create("Alpha"), create("Beta"), return_exceptions=True)
+        exceptions = [r for r in results if isinstance(r, Exception)]
+        assert not exceptions, f"Unhandled exceptions under concurrency: {exceptions}"
+        status_codes = sorted(r.status_code for r in results)
+        assert status_codes == [201, 409], status_codes
+
     async def test_lookup_by_phone(self, client, employee_user):
         token = await _login(client, "joe", "pass1234")
         headers = {"Authorization": f"Bearer {token}"}

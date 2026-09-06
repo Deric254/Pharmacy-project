@@ -4,6 +4,7 @@ import { configApi } from '../api/config'
 import { ApiError } from '../api/client'
 import { THEMES, applyTheme } from '../theme/themes'
 import { useUpdateCheck } from '../lib/updateCheck'
+import { TIMEZONE_GROUPS, timezoneLabel } from '../lib/timezones'
 
 export function SettingsPage() {
   const config = useConfigStore((s) => s.config)
@@ -17,6 +18,7 @@ export function SettingsPage() {
   )
   const [logoError, setLogoError] = useState<string | null>(null)
   const [currency, setCurrency] = useState(config?.currency ?? 'USD')
+  const [timezone, setTimezone] = useState(config?.timezone ?? 'Africa/Nairobi')
   const [selectedTheme, setSelectedTheme] = useState(config?.theme_name ?? 'ledger')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -72,6 +74,7 @@ export function SettingsPage() {
         slogan,
         logo_url: logoUrl || null,
         currency,
+        timezone,
         theme_name: selectedTheme,
         local_backup_dir_override: localBackupDirOverride.trim() || null,
       })
@@ -168,6 +171,39 @@ export function SettingsPage() {
               placeholder="USD, KES, NGN..."
               className="w-32 border border-rule bg-paper px-3 py-2 uppercase outline-none focus-visible:border-brass"
             />
+          </Field>
+          <Field label="Timezone">
+            <select
+              value={timezone}
+              onChange={(e) => setTimezone(e.target.value)}
+              required
+              className="w-full border border-rule bg-paper px-3 py-2 outline-none focus-visible:border-brass"
+            >
+              {/* If the currently saved value isn't one of the curated
+                  cities below (an older install, or set some other
+                  way), it still needs its own matching option here --
+                  otherwise the <select> would silently fall back to
+                  showing the first option as "selected" without that
+                  actually being true, and saving the form would quietly
+                  overwrite the real value with whatever that first
+                  option happens to be. */}
+              {!TIMEZONE_GROUPS.some((group) =>
+                group.options.some((opt) => opt.timezone === timezone),
+              ) && <option value={timezone}>{timezoneLabel(timezone)}</option>}
+              {TIMEZONE_GROUPS.map((group) => (
+                <optgroup key={group.region} label={group.region}>
+                  {group.options.map((opt) => (
+                    <option key={opt.timezone} value={opt.timezone}>
+                      {opt.city}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-ink-soft">
+              Used to decide what counts as "today" for expiry checks, reports, and the audit
+              log -- always your own local day, not the server's.
+            </p>
           </Field>
         </section>
 

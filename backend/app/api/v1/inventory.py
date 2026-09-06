@@ -9,10 +9,12 @@ from app.models.user import User
 from app.schemas.inventory import (
     AdjustmentOut,
     AdjustmentRequest,
+    BulkWriteOffResult,
     ExpiringBatchOut,
     LowStockProductOut,
     ReconciliationIssueOut,
     StockValuationOut,
+    WriteOffResult,
 )
 from app.services.inventory_service import InventoryService
 
@@ -56,6 +58,23 @@ async def create_adjustment(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> AdjustmentOut:
     return await InventoryService(db).adjust_stock(payload, user)
+
+
+@router.post("/batches/{batch_id}/write-off-expired", response_model=WriteOffResult)
+async def write_off_expired_batch(
+    batch_id: int,
+    user: Annotated[User, Depends(require_permission("inventory.adjust"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> WriteOffResult:
+    return await InventoryService(db).write_off_expired_batch(batch_id, user)
+
+
+@router.post("/write-off-all-expired", response_model=BulkWriteOffResult)
+async def write_off_all_expired(
+    user: Annotated[User, Depends(require_permission("inventory.adjust"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> BulkWriteOffResult:
+    return await InventoryService(db).write_off_all_expired(user)
 
 
 @router.get(

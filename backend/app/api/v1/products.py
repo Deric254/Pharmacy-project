@@ -7,7 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.rbac import require_permission
 from app.models.user import User
-from app.schemas.batch import BatchCostCorrection, BatchCreate, BatchOut, BatchUpdate
+from app.schemas.batch import (
+    BatchCostCorrection,
+    BatchCreate,
+    BatchExpiryCorrection,
+    BatchOut,
+    BatchUpdate,
+)
 from app.schemas.product import BulkImportResult, ProductCreate, ProductOut, ProductUpdate
 from app.services.batch_service import BatchService
 from app.services.product_import_service import bulk_import, generate_import_template
@@ -189,5 +195,18 @@ async def correct_batch_cost(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> BatchOut:
     return await BatchService(db).correct_cost_price(
+        product_id, batch_id, payload, changed_by=current_user
+    )
+
+
+@router.patch("/{product_id}/batches/{batch_id}/expiry", response_model=BatchOut)
+async def correct_batch_expiry(
+    product_id: int,
+    batch_id: int,
+    payload: BatchExpiryCorrection,
+    current_user: Annotated[User, Depends(require_permission("batches.correct_expiry"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> BatchOut:
+    return await BatchService(db).correct_expiry_date(
         product_id, batch_id, payload, changed_by=current_user
     )

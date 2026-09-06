@@ -2,7 +2,9 @@ import { api, downloadFile, fetchBlob, uploadFile } from './client'
 import type {
   AdjustmentOut,
   AdjustmentRequest,
+  BatchExpiryCorrection,
   BatchOut,
+  BulkWriteOffResult,
   CountSubmit,
   CustomerCreate,
   CustomerLifetimeValueOut,
@@ -30,6 +32,7 @@ import type {
   StockValuationOut,
   SupplierCreate,
   SupplierOut,
+  WriteOffResult,
 } from '../types/api'
 
 export const productsApi = {
@@ -41,6 +44,8 @@ export const productsApi = {
     api.patch<BatchOut>(`/products/${productId}/batches/${batchId}`, { selling_price }),
   correctBatchCost: (productId: number, batchId: number, cost_price: number, reason: string) =>
     api.patch<BatchOut>(`/products/${productId}/batches/${batchId}/cost`, { cost_price, reason }),
+  correctBatchExpiry: (productId: number, batchId: number, payload: BatchExpiryCorrection) =>
+    api.patch<BatchOut>(`/products/${productId}/batches/${batchId}/expiry`, payload),
   create: (payload: ProductCreate) => api.post<ProductOut>('/products', payload),
   update: (productId: number, payload: ProductUpdate) =>
     api.patch<ProductOut>(`/products/${productId}`, payload),
@@ -70,6 +75,9 @@ export const inventoryApi = {
   valuation: () => api.get<StockValuationOut>('/inventory/valuation'),
   adjust: (payload: AdjustmentRequest) => api.post<AdjustmentOut>('/inventory/adjustments', payload),
   reconcile: () => api.get<ReconciliationIssueOut[]>('/inventory/reconcile'),
+  writeOffExpired: (batchId: number) =>
+    api.post<WriteOffResult>(`/inventory/batches/${batchId}/write-off-expired`),
+  writeOffAllExpired: () => api.post<BulkWriteOffResult>('/inventory/write-off-all-expired'),
 }
 
 export const suppliersApi = {

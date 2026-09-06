@@ -18,6 +18,7 @@ from typing import Any, cast
 from fastapi import HTTPException
 from sqlalchemy import func, select, update
 from sqlalchemy.engine import CursorResult
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business_config import BusinessConfig
@@ -47,7 +48,20 @@ class CustomerService:
 
         customer = Customer(**payload.model_dump())
         self.db.add(customer)
-        await self.db.commit()
+        try:
+            await self.db.commit()
+        except IntegrityError as exc:
+            # The check above has the same theoretical race
+            # SaleService's idempotency-key check documents: two
+            # requests for the same new phone number can both pass it
+            # before either commits. customers.phone has a real UNIQUE
+            # index at the database level (see the model), so a
+            # genuine race can't create a duplicate row -- but without
+            # this handler, the loser got a raw, unhandled
+            # IntegrityError (effectively a 500) instead of the same
+            # clean 409 the sequential case above already returns.
+            await self.db.rollback()
+            raise HTTPException(status_code=409, detail="Phone number already registered") from exc
         await self.db.refresh(customer)
         return CustomerOut.model_validate(customer)
 

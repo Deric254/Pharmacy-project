@@ -24,6 +24,7 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 from pydantic import ValidationError
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
@@ -331,6 +332,26 @@ async def bulk_import(db: AsyncSession, file_bytes: bytes) -> BulkImportResult:
 
     for candidate in candidates:
         db.add(Product(**candidate.model_dump()))
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        # Same theoretical race ProductService.create documents for a
+        # single product, here for a whole batch at once: the
+        # existing-catalog duplicate checks above are a pre-commit
+        # SELECT, not atomic with this INSERT, so two overlapping
+        # imports (or an import racing a single product creation)
+        # could both pass those checks before either commits. Real
+        # name/barcode UNIQUE constraints at the database level are
+        # what actually stop a duplicate from landing; without this
+        # handler, the loser of that race got an unhandled 500 across
+        # its entire batch instead of a clean, actionable error.
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "One or more of these products were just created by someone else. "
+                "Please re-check the file and try again."
+            ),
+        ) from exc
 
     return BulkImportResult(created=len(candidates))

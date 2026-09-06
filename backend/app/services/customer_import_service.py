@@ -13,6 +13,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 from pydantic import ValidationError
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
@@ -207,6 +208,21 @@ async def bulk_import_customers(db: AsyncSession, file_bytes: bytes) -> BulkImpo
 
     for candidate in candidates:
         db.add(Customer(**candidate.model_dump()))
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        # Same race CustomerService.create documents for a single
+        # customer, here for a whole batch: the pre-commit duplicate-
+        # phone check above isn't atomic with this INSERT. Without
+        # this handler, the loser of that race got an unhandled 500
+        # across the whole batch instead of a clean, actionable error.
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "One or more of these phone numbers were just registered by someone else. "
+                "Please re-check the file and try again."
+            ),
+        ) from exc
 
     return BulkImportResult(created=len(candidates))

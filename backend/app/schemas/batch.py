@@ -22,6 +22,11 @@ class BatchCostCorrection(BaseModel):
     reason: str = Field(min_length=1, max_length=255)
 
 
+class BatchExpiryCorrection(BaseModel):
+    new_expiry_date: date
+    reason: str = Field(min_length=1, max_length=255)
+
+
 class BatchOut(BaseModel):
     id: int
     product_id: int

@@ -1,26 +1,25 @@
 """
 Concurrency regression test for refund over-refund protection.
 
-The over-refund guard in RefundService._already_refunded_quantity
-reads prior RefundItem rows with a plain SELECT, computes `remaining`
-in Python, and only then inserts -- unlike apply_allocations() and
-_restock_batch(), which enforce their invariant with an atomic
-`UPDATE ... WHERE <condition>` evaluated against the row's real state
-at write time. Two refund requests against the SAME sale_item running
-concurrently could, in principle, both complete that SELECT before
-either commits its INSERT -- each seeing zero (or partial) prior
-refunds, both passing the `line.quantity > remaining` check, both
-committing. Nothing at the database level stops that: no unique
-constraint, no CHECK, no atomic conditional update on refund_items.
+The over-refund guard in RefundService._reserve_refund_quantity is an
+atomic `UPDATE sale_items SET qty_refunded = qty_refunded + :n WHERE
+id = :id AND qty_refunded + :n <= quantity`, checked against the row's
+real state at the moment it runs -- the same proven pattern already
+used by apply_allocations() and _restock_batch() elsewhere in this
+codebase. Two refund requests against the SAME sale_item racing here
+can genuinely only have one of them win the UPDATE; the other's
+rowcount comes back 0 and it gets a clean 409, never a silent
+overwrite.
 
-In practice this doesn't happen, because the refund header row's own
-early `db.flush()` acquires SQLite's single-writer lock before the
-over-refund check ever runs, serializing concurrent requests. But that
-protection is incidental to timing, not an explicit guarantee -- a
-future refactor that reorders these steps could silently remove it
-with nothing here to catch that. This test exists to make sure any
-such regression is caught immediately rather than surfacing as a real
-over-refund in production.
+This used to be true only by an incidental accident of statement
+ordering (a plain SELECT/sum, made safe in practice only because the
+refund header row's own earlier db.flush() happened to acquire
+SQLite's single-writer lock first) -- see migration
+0034_sale_item_qty_refunded for the full history. This test predates
+that fix and is kept as-is deliberately: it doesn't know or care which
+mechanism is protecting the invariant, only that the invariant holds
+under real concurrent load, so it keeps working as a regression check
+no matter how the protection underneath it is implemented.
 """
 
 import asyncio

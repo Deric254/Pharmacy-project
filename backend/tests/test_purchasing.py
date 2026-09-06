@@ -18,6 +18,7 @@ import asyncio
 from app.core.database import AsyncSessionLocal
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
+from app.models.stock_take import StockTake
 from app.models.supplier import Supplier
 
 
@@ -606,18 +607,22 @@ class TestQuickPurchase:
 class TestQuickPurchaseConcurrency:
     """
     quick_purchase merges a repeat delivery of the same physical batch
-    (same product, batch number, expiry) into the existing row via
-    `existing_batch.qty_remaining = combined_qty` -- a Python-side
-    read-then-write, not an atomic UPDATE ... WHERE like the guard
-    already used for stock decrement, loyalty points, and stock-take
-    close elsewhere in this codebase. Two deliveries of the same batch
-    landing at the same moment (a real possibility: someone importing
-    a purchase-order spreadsheet while someone else quick-purchases
-    the same item that just physically arrived) could, in principle,
-    both read the same starting quantity and the second write could
-    silently overwrite the first's addition instead of compounding.
-    This proves whether that's actually exploitable or not, rather
-    than assuming either way.
+    (same product, batch number, expiry) into the existing row.
+    qty_remaining/qty_received/cost_price are applied via SQL
+    column-relative expressions in a single atomic UPDATE (see
+    PurchasingService.quick_purchase), the same proven pattern already
+    used for stock decrement, loyalty points, and stock-take close
+    elsewhere in this codebase -- not a Python read-then-write of
+    values fetched earlier, which would let a second concurrent
+    receipt of the same batch silently overwrite the first's addition
+    instead of compounding.
+
+    This test predates that fix and is kept as-is deliberately: it
+    doesn't know or care which mechanism protects the invariant, only
+    that receiving the same batch concurrently from multiple directions
+    (a real scenario: someone importing a purchase-order spreadsheet
+    while someone else quick-purchases the same item that just
+    physically arrived) never loses a delivery.
     """
 
     async def test_two_concurrent_receipts_of_the_same_batch_both_count(self, client, owner_user):
@@ -710,3 +715,80 @@ class TestQuickPurchaseConcurrency:
             f"LOST UPDATE under 5-way concurrency: expected 50 (5 x 10), "
             f"got {product.json()['total_qty_available']}"
         )
+
+
+class TestQuickPurchaseRespectsStockTakeLock:
+    """
+    Mirrors RefundService._restock_batch's own lock-respect test: a
+    batch locked for an active physical count must not have
+    qty_remaining/cost_price move underneath the counter mid-count,
+    whether that write would come from a refund restock or (this case)
+    receiving more stock against the same existing batch.
+    """
+
+    async def test_receiving_into_a_locked_batch_is_rejected(self, client, owner_user):
+        product_id = await _make_product("Locked Batch Product")
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        supplier = await client.post(
+            "/api/v1/suppliers", json={"name": "Lock Test Supplier"}, headers=headers
+        )
+        supplier_id = supplier.json()["id"]
+
+        first = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": supplier_id,
+                "lines": [
+                    {
+                        "product_id": product_id,
+                        "quantity": 20,
+                        "batch_number": "LOCK-BATCH-1",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 10.0,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert first.status_code == 201, first.text
+        batch_id = first.json()["items"][0]["batch_id"]
+
+        # Simulate what StockTakeService.initiate() does to a batch it
+        # claims: lock it. Going through the real stock-take endpoints
+        # would work equally well but adds nothing this test needs --
+        # the thing under test is quick_purchase's own respect for the
+        # lock column, not how the lock gets set.
+        async with AsyncSessionLocal() as db:
+            stock_take = StockTake(initiated_by_user_id=owner_user.id)
+            db.add(stock_take)
+            await db.flush()
+            batch = await db.get(MedicineBatch, batch_id)
+            batch.locked_by_stock_take_id = stock_take.id
+            await db.commit()
+
+        second = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": supplier_id,
+                "lines": [
+                    {
+                        "product_id": product_id,
+                        "quantity": 5,
+                        "batch_number": "LOCK-BATCH-1",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 10.0,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert second.status_code == 409, second.text
+
+        async with AsyncSessionLocal() as db:
+            batch = await db.get(MedicineBatch, batch_id)
+            # Rejected cleanly, not partially applied: the count this
+            # batch is locked for must still see exactly what it
+            # snapshotted, not 20 + 5.
+            assert batch.qty_remaining == 20

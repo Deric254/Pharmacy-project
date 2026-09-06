@@ -67,6 +67,18 @@ class AdjustmentOut(BaseModel):
     reason: AdjustmentReason
 
 
+class WriteOffResult(BaseModel):
+    batch_id: int
+    quantity_written_off: int
+    qty_remaining_after: int
+
+
+class BulkWriteOffResult(BaseModel):
+    batches_written_off: int
+    total_quantity_written_off: int
+    details: list[WriteOffResult]
+
+
 class ReconciliationIssueOut(BaseModel):
     batch_id: int
     batch_number: str

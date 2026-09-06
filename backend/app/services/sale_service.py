@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.business_time import local_day_bounds_utc
 from app.core.events import SaleCompletedEvent, publish
+from app.models.audit_log import AuditLog
 from app.models.customer import Customer
 from app.models.product import Product
 from app.models.sale import Payment, Sale, SaleItem
@@ -159,6 +160,24 @@ class SaleService:
                         reference=payment.reference,
                     )
                 )
+
+            # Sales were never actually logged here despite the
+            # AuditLog model's own docstring using "sale" as its
+            # example entity_type -- every other money-moving action
+            # (refunds, batch cost corrections) already does this; a
+            # sale, the single highest-volume money-moving action in
+            # the app, was the one gap. Matches refund_service.py's
+            # AuditLog shape exactly for consistency.
+            self.db.add(
+                AuditLog(
+                    user_id=cashier.id,
+                    user_name_snapshot=cashier.full_name,
+                    action="sale.created",
+                    entity_type="sale",
+                    entity_id=str(sale.id),
+                    new_value=f"total_amount={total_amount:.2f} items={len(all_allocations)}",
+                )
+            )
 
             await self.db.commit()
         except InsufficientStockError as exc:

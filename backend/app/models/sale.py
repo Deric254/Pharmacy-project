@@ -80,6 +80,19 @@ class SaleItem(Base):
     unit_price: Mapped[float] = mapped_column(MoneyCents)
     unit_cost: Mapped[float] = mapped_column(MoneyCents)
     line_total: Mapped[float] = mapped_column(MoneyCents)
+    # Running total of units refunded against this line, maintained
+    # only via the atomic conditional UPDATE in RefundService's
+    # over-refund guard (see that service for why: a plain read-count-
+    # then-write check on RefundItem rows was only safe by an
+    # incidental side effect of statement ordering, not by anything
+    # the database itself enforced -- the same class of gap already
+    # closed for stock decrements via apply_allocations() and for
+    # restocking via _restock_batch()). This column, and the atomic
+    # `UPDATE ... WHERE qty_refunded + :n <= quantity` that maintains
+    # it, is what makes over-refund prevention actually load-bearing
+    # at the database level instead of dependent on code staying in a
+    # particular order.
+    qty_refunded: Mapped[int] = mapped_column(Integer, default=0)
 
     product: Mapped[Product] = relationship(lazy="selectin")
 

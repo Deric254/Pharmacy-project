@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 from app.schemas._money import Money
 from app.schemas._text import NonBlankName
+from app.schemas._timezone import ValidTimezone
 
 BUILT_IN_THEMES = ("ledger", "clinical", "midnight", "sunrise")
 ThemeName = Literal["ledger", "clinical", "midnight", "sunrise"]
@@ -57,7 +58,7 @@ class BusinessConfigUpdate(BaseModel):
     contact_email: str | None = Field(default=None, max_length=120)
     address: str | None = Field(default=None, max_length=255)
     default_language: str | None = Field(default=None, max_length=10)
-    timezone: str | None = Field(default=None, max_length=50)
+    timezone: ValidTimezone | None = Field(default=None, max_length=50)
     low_stock_threshold_default: int | None = Field(default=None, ge=0)
     expiry_alert_days: list[int] | None = None
     loyalty_program_enabled: bool | None = None

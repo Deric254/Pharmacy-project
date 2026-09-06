@@ -20,6 +20,7 @@ from app.core.redis_client import redis_client
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
 from app.models.stock_movement import MovementType, StockMovement
+from app.models.stock_take import StockTake
 
 
 async def _login(client, username: str, password: str) -> str:
@@ -416,3 +417,214 @@ class TestSaleTriggeredLowStockEvent:
         assert (
             found_stock_low
         ), "Expected a stock.low event after the sale dropped below reorder point"
+
+
+class TestExpiredStockWriteOff:
+    """
+    The properties that matter:
+      1. Only genuinely expired batches (server-verified against
+         business_today(), never trusted from the caller) can be
+         written off this way -- not "expiring soon", not anything
+         still sellable.
+      2. Every write-off is atomic, respects an active stock-take
+         lock exactly like every other stock-mutating action in this
+         app, and leaves the StockMovement ledger and qty_remaining
+         in agreement (reconcile() must never flag it).
+      3. Every write-off is audit logged.
+      4. Bulk write-off only touches what's actually expired, and
+         summarizes in one audit entry rather than one per batch.
+    """
+
+    async def test_writing_off_an_expired_batch_zeroes_it_and_logs_both_ledgers(
+        self, client, owner_user
+    ):
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id = await _make_product("Expired Write-off Product")
+        batch_id = await _add_batch(product_id, qty=15, expiry="2020-01-01", batch_number="WO1")
+
+        r = await client.post(
+            f"/api/v1/inventory/batches/{batch_id}/write-off-expired", headers=headers
+        )
+        assert r.status_code == 200, r.text
+        assert r.json() == {
+            "batch_id": batch_id,
+            "quantity_written_off": 15,
+            "qty_remaining_after": 0,
+        }
+
+        async with AsyncSessionLocal() as db:
+            batch = await db.get(MedicineBatch, batch_id)
+            assert batch.qty_remaining == 0
+
+        reconcile = await client.get("/api/v1/inventory/reconcile", headers=headers)
+        assert reconcile.json() == [], "Ledger must still agree with qty_remaining after write-off"
+
+        logs = await client.get(
+            "/api/v1/audit-logs",
+            params={"action": "batch.written_off_expired"},
+            headers=headers,
+        )
+        matching = [e for e in logs.json()["entries"] if e["entity_id"] == str(batch_id)]
+        assert len(matching) == 1
+        assert matching[0]["old_value"] == "qty_remaining=15"
+        assert matching[0]["new_value"] == "qty_remaining=0"
+
+    async def test_a_batch_that_has_not_expired_yet_is_rejected(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id = await _make_product("Not Yet Expired Product")
+        batch_id = await _add_batch(product_id, qty=10, expiry="2029-01-01", batch_number="WO2")
+
+        r = await client.post(
+            f"/api/v1/inventory/batches/{batch_id}/write-off-expired", headers=headers
+        )
+        assert r.status_code == 400, r.text
+
+        async with AsyncSessionLocal() as db:
+            batch = await db.get(MedicineBatch, batch_id)
+            assert batch.qty_remaining == 10, "Rejected write-off must not touch quantity at all"
+
+    async def test_a_batch_locked_by_an_open_stock_take_is_rejected(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id = await _make_product("Locked Expired Product")
+        batch_id = await _add_batch(product_id, qty=8, expiry="2020-01-01", batch_number="WO3")
+
+        async with AsyncSessionLocal() as db:
+            stock_take = StockTake(initiated_by_user_id=owner_user.id)
+            db.add(stock_take)
+            await db.flush()
+            batch = await db.get(MedicineBatch, batch_id)
+            batch.locked_by_stock_take_id = stock_take.id
+            await db.commit()
+
+        r = await client.post(
+            f"/api/v1/inventory/batches/{batch_id}/write-off-expired", headers=headers
+        )
+        assert r.status_code == 409, r.text
+
+        async with AsyncSessionLocal() as db:
+            batch = await db.get(MedicineBatch, batch_id)
+            assert batch.qty_remaining == 8
+
+    async def test_a_batch_already_at_zero_is_rejected(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id = await _make_product("Already Zero Product")
+        batch_id = await _add_batch(product_id, qty=5, expiry="2020-01-01", batch_number="WO4")
+
+        first = await client.post(
+            f"/api/v1/inventory/batches/{batch_id}/write-off-expired", headers=headers
+        )
+        assert first.status_code == 200, first.text
+
+        second = await client.post(
+            f"/api/v1/inventory/batches/{batch_id}/write-off-expired", headers=headers
+        )
+        assert second.status_code == 400, second.text
+
+    async def test_employee_without_permission_is_forbidden(
+        self, client, owner_user, employee_user
+    ):
+        product_id = await _make_product("Permission Test Product")
+        batch_id = await _add_batch(product_id, qty=5, expiry="2020-01-01", batch_number="WO5")
+
+        token = await _login(client, "joe", "pass1234")
+        r = await client.post(
+            f"/api/v1/inventory/batches/{batch_id}/write-off-expired",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 403
+
+    async def test_bulk_write_off_only_touches_genuinely_expired_batches(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id = await _make_product("Bulk Write-off Product")
+        expired_1 = await _add_batch(product_id, qty=10, expiry="2020-01-01", batch_number="BULK1")
+        expired_2 = await _add_batch(product_id, qty=6, expiry="2021-06-15", batch_number="BULK2")
+        still_good = await _add_batch(product_id, qty=20, expiry="2029-01-01", batch_number="BULK3")
+
+        r = await client.post("/api/v1/inventory/write-off-all-expired", headers=headers)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["batches_written_off"] == 2
+        assert body["total_quantity_written_off"] == 16
+        assert {d["batch_id"] for d in body["details"]} == {expired_1, expired_2}
+
+        async with AsyncSessionLocal() as db:
+            assert (await db.get(MedicineBatch, expired_1)).qty_remaining == 0
+            assert (await db.get(MedicineBatch, expired_2)).qty_remaining == 0
+            assert (await db.get(MedicineBatch, still_good)).qty_remaining == 20
+
+        reconcile = await client.get("/api/v1/inventory/reconcile", headers=headers)
+        assert reconcile.json() == []
+
+        logs = await client.get(
+            "/api/v1/audit-logs",
+            params={"action": "batch.bulk_written_off_expired"},
+            headers=headers,
+        )
+        entries = logs.json()["entries"]
+        assert len(entries) == 1
+        assert "batches=2" in entries[0]["new_value"]
+        assert "total_quantity=16" in entries[0]["new_value"]
+
+    async def test_bulk_write_off_with_nothing_expired_is_a_clean_no_op(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id = await _make_product("Nothing Expired Product")
+        await _add_batch(product_id, qty=10, expiry="2029-01-01", batch_number="NOEXP")
+
+        r = await client.post("/api/v1/inventory/write-off-all-expired", headers=headers)
+        assert r.status_code == 200, r.text
+        assert r.json() == {
+            "batches_written_off": 0,
+            "total_quantity_written_off": 0,
+            "details": [],
+        }
+
+    async def test_two_concurrent_write_offs_of_the_same_batch_never_double_log(
+        self, client, owner_user
+    ):
+        """
+        Proves the compare-and-swap guard, not just asserts it. Two
+        requests racing to write off the exact same batch must result
+        in exactly one success (quantity_written_off == the real
+        original amount) and one clean rejection -- never two
+        "successes" that would double-count the same stock as removed
+        twice in the ledger.
+        """
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id = await _make_product("Concurrent Write-off Product")
+        batch_id = await _add_batch(product_id, qty=12, expiry="2020-01-01", batch_number="RACE1")
+
+        async def write_off():
+            return await client.post(
+                f"/api/v1/inventory/batches/{batch_id}/write-off-expired", headers=headers
+            )
+
+        results = await asyncio.gather(write_off(), write_off(), return_exceptions=True)
+        exceptions = [r for r in results if isinstance(r, Exception)]
+        assert not exceptions, f"Unhandled exceptions under concurrency: {exceptions}"
+
+        status_codes = sorted(r.status_code for r in results)
+        # The loser already passed its own "not yet zero" pre-check
+        # before the race resolved, so it lands on the compare-and-
+        # swap failure branch (409: "changed just now, please retry")
+        # rather than the early-bailout branch a genuinely later,
+        # non-racing request would hit (400: "already zero") -- both
+        # are correct rejections, this is just which one a true race
+        # actually produces.
+        assert status_codes == [200, 409], status_codes
+
+        succeeded = next(r for r in results if r.status_code == 200)
+        assert succeeded.json()["quantity_written_off"] == 12
+
+        async with AsyncSessionLocal() as db:
+            batch = await db.get(MedicineBatch, batch_id)
+            assert batch.qty_remaining == 0
+
+        reconcile = await client.get("/api/v1/inventory/reconcile", headers=headers)
+        assert reconcile.json() == [], "Two racing write-offs must never double-count in the ledger"

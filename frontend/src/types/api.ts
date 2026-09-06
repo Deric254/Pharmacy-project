@@ -89,6 +89,23 @@ export interface AdjustmentOut {
   reason: AdjustmentReason
 }
 
+export interface WriteOffResult {
+  batch_id: number
+  quantity_written_off: number
+  qty_remaining_after: number
+}
+
+export interface BulkWriteOffResult {
+  batches_written_off: number
+  total_quantity_written_off: number
+  details: WriteOffResult[]
+}
+
+export interface BatchExpiryCorrection {
+  new_expiry_date: string
+  reason: string
+}
+
 export interface ReconciliationIssueOut {
   batch_id: number
   batch_number: string
@@ -666,6 +683,7 @@ export interface FirstUserCreate {
   password: string
   security_question: string
   security_answer: string
+  timezone?: string
 }
 
 export interface AuditLogOut {

@@ -3,6 +3,7 @@ import { setupApi } from '../api/setup'
 import { useConfigStore } from '../config/store'
 import { ApiError } from '../api/client'
 import { Logo } from '../components/Logo'
+import { detectBrowserTimezone } from '../lib/timezones'
 
 export function SetupPage({ onComplete }: { onComplete: () => void }) {
   const config = useConfigStore((s) => s.config)
@@ -61,6 +62,11 @@ export function SetupPage({ onComplete }: { onComplete: () => void }) {
         password,
         security_question: securityQuestion,
         security_answer: securityAnswer,
+        // Best-effort: the backend applies this after the account
+        // itself is already created, so a detection failure or an
+        // unrecognized zone here can never block finishing setup --
+        // see SetupService.create_first_user.
+        timezone: detectBrowserTimezone(),
       })
       onComplete()
     } catch (err) {

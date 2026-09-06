@@ -57,6 +57,56 @@ class TestCreateFirstUser:
         )
         assert me.json()["role_name"] == "ChemistOwner"
 
+    async def test_detected_timezone_is_applied_to_business_config(self, client, seeded_roles):
+        """
+        The point of sending this at all: a fresh install must default
+        to wherever the person actually is, not a hardcoded value that
+        happens to match wherever this software's primary market is.
+        """
+        r = await client.post(
+            "/api/v1/setup/first-user",
+            json={
+                "full_name": "Lucy Kangai",
+                "username": "lucy",
+                "password": "S3curePass!",
+                "security_question": "Test question?",
+                "security_answer": "Test answer",
+                "timezone": "America/New_York",
+            },
+        )
+        assert r.status_code == 204
+
+        config = await client.get(
+            "/api/v1/config",
+        )
+        assert config.json()["timezone"] == "America/New_York"
+
+    async def test_an_invalid_detected_timezone_never_blocks_setup(self, client, seeded_roles):
+        """
+        This field is meant to be filled in automatically from the
+        browser, not typed by hand -- but if it's ever garbage for any
+        reason, creating the actual account must still succeed. The
+        account is the part that matters; the timezone is a nice-to-
+        have applied best-effort right after.
+        """
+        r = await client.post(
+            "/api/v1/setup/first-user",
+            json={
+                "full_name": "Lucy Kangai",
+                "username": "lucy",
+                "password": "S3curePass!",
+                "security_question": "Test question?",
+                "security_answer": "Test answer",
+                "timezone": "Not/A/Real/Zone",
+            },
+        )
+        assert r.status_code == 204
+
+        login = await client.post(
+            "/api/v1/auth/login", json={"username": "lucy", "password": "S3curePass!"}
+        )
+        assert login.status_code == 200
+
     async def test_status_flips_to_false_after_creation(self, client, seeded_roles):
         await client.post(
             "/api/v1/setup/first-user",

@@ -9,8 +9,11 @@ implementation would miss:
 
 1. Over-refund prevention: the sum of quantities refunded against a
    given SaleItem across ALL refunds (not just this one) can never
-   exceed what was originally sold on that line. Without summing
-   prior refunds, the same 3 units could be "returned" five times.
+   exceed what was originally sold on that line. Enforced atomically
+   via sale_items.qty_refunded (see _reserve_refund_quantity) -- not
+   by a read-then-check-then-write count of prior RefundItem rows,
+   which would let two concurrent refunds each pass a check against
+   the same stale count.
 
 2. Stock-take lock respect: restocking a batch currently locked for a
    physical count would change the count out from under the counter,
@@ -30,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.audit_log import AuditLog
 from app.models.medicine_batch import MedicineBatch
 from app.models.refund import Refund, RefundItem
-from app.models.sale import Sale
+from app.models.sale import Sale, SaleItem
 from app.models.stock_movement import MovementType, StockMovement
 from app.models.user import User
 from app.schemas.refund import RefundOut, RefundRequest
@@ -80,18 +83,6 @@ class RefundService:
                     detail=f"Sale item {line.sale_item_id} does not belong to sale {sale_id}",
                 )
 
-            already_refunded = await self._already_refunded_quantity(sale_item.id)
-            remaining = sale_item.quantity - already_refunded
-            if line.quantity > remaining:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        f"Cannot refund {line.quantity} of sale item {sale_item.id}: "
-                        f"only {remaining} unit(s) remain refundable "
-                        f"({already_refunded} already refunded of {sale_item.quantity} sold)"
-                    ),
-                )
-
             # unit_price stays the original, undiscounted sale price --
             # same historical-traceability rule as SaleItem itself (see
             # Refund's own docstring). line_total is what actually goes
@@ -100,6 +91,15 @@ class RefundService:
             # summed from.
             line_total = sale_item.unit_price * line.quantity * discount_ratio
             total_amount += line_total
+
+            # Atomic reserve-then-fail, not read-then-check-then-write:
+            # see _reserve_refund_quantity's own docstring for why the
+            # previous version of this check (a plain SELECT/sum, same
+            # shape as _already_refunded_quantity below) was only safe
+            # from a genuine over-refund race by incidental statement
+            # ordering elsewhere in this method, not by anything the
+            # database enforced.
+            await self._reserve_refund_quantity(sale_item, line.quantity)
 
             if line.restock:
                 await self._restock_batch(
@@ -148,11 +148,58 @@ class RefundService:
             raise HTTPException(status_code=404, detail="Sale not found")
         return sale
 
-    async def _already_refunded_quantity(self, sale_item_id: int) -> int:
-        result = await self.db.execute(
-            select(RefundItem).where(RefundItem.sale_item_id == sale_item_id)
+    async def _reserve_refund_quantity(self, sale_item: SaleItem, quantity: int) -> None:
+        """
+        Atomic reserve-then-fail against sale_items.qty_refunded (see
+        that column's own comment on the model, and migration
+        0034_sale_item_qty_refunded for the full history of why this
+        replaced a plain SELECT/sum check). The WHERE clause re-checks
+        the row's real, current state at the exact moment this UPDATE
+        runs -- not a value read earlier in this request -- so two
+        concurrent refunds against the same sale_item can never both
+        succeed past what was actually sold, regardless of statement
+        ordering elsewhere in create_refund(). Same proven shape as
+        _restock_batch below and apply_allocations() in
+        stock_selection_service.py: SQLite has no usable row-locking
+        (SELECT ... FOR UPDATE is silently a no-op), so the invariant
+        has to live in the UPDATE's WHERE clause itself.
+        """
+        result = cast(
+            "CursorResult[Any]",
+            await self.db.execute(
+                update(SaleItem)
+                .where(
+                    SaleItem.id == sale_item.id,
+                    SaleItem.qty_refunded + quantity <= SaleItem.quantity,
+                )
+                .values(qty_refunded=SaleItem.qty_refunded + quantity)
+            ),
         )
-        return sum(item.quantity for item in result.scalars().all())
+        if result.rowcount == 0:
+            await self.db.refresh(sale_item)
+            remaining = sale_item.quantity - sale_item.qty_refunded
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Cannot refund {quantity} of sale item {sale_item.id}: "
+                    f"only {remaining} unit(s) remain refundable "
+                    f"({sale_item.qty_refunded} already refunded of {sale_item.quantity} sold)"
+                ),
+            )
+        # Deliberately NOT also doing sale_item.qty_refunded += quantity
+        # here: the UPDATE statement's default synchronize_session=
+        # "evaluate" already applies this same increment to the
+        # in-memory object as a side effect of running it. Adding it
+        # again would double-apply the increment in Python, and that
+        # wrong doubled value would then get written back to the row a
+        # second time whenever this session's unit-of-work next
+        # flushes anything else dirty on it -- silently overwriting
+        # the correct value the atomic UPDATE just committed, with no
+        # error anywhere to reveal it happened. Confirmed by hand: this
+        # exact line caused sale_item 0+3+3=6 in memory after a single
+        # +3 UPDATE, corrupting the real refundable count. Nothing
+        # later in create_refund reads qty_refunded again, so there is
+        # nothing to keep in sync here.
 
     async def _restock_batch(
         self, batch_id: int, quantity: int, refund_id: int, created_by_user_id: int

@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from app.core.database import AsyncSessionLocal
 from app.core.security import hash_password
+from app.models.audit_log import AuditLog
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
 from app.models.role import Role
@@ -107,6 +108,41 @@ class TestCreateSale:
             ledger_rows = ledger_result.scalars().all()
             assert len(ledger_rows) == 1
             assert ledger_rows[0].quantity_delta == -5
+
+    async def test_successful_sale_is_captured_in_the_audit_log(self, client, employee_user):
+        """
+        Sales were never actually written to the audit log despite the
+        AuditLog model's own docstring using "sale" as its example
+        entity_type -- every other money-moving action (refunds, batch
+        cost corrections) already did, but the single highest-volume
+        one didn't. This proves the gap is closed, not just that the
+        code compiles.
+        """
+        product_id = await _make_product_with_batch(price=10.0, qty=20)
+        token = await _login(client, "joe", "pass1234")
+
+        r = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 5}],
+                "payments": [{"method": "CASH", "amount": 50.0}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 201, r.text
+        sale_id = r.json()["id"]
+
+        async with AsyncSessionLocal() as db:
+            entry = (
+                await db.execute(
+                    select(AuditLog).where(
+                        AuditLog.entity_type == "sale", AuditLog.entity_id == str(sale_id)
+                    )
+                )
+            ).scalar_one()
+            assert entry.action == "sale.created"
+            assert entry.user_name_snapshot == "Cashier Joe"
+            assert "50.00" in entry.new_value
 
     async def test_insufficient_stock_rolls_back_completely(self, client, employee_user):
         product_id = await _make_product_with_batch(price=10.0, qty=3)

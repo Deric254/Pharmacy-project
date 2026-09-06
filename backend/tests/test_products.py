@@ -869,3 +869,158 @@ class TestBatchCostCorrection:
         assert matching[0]["old_value"] == "10.00"
         assert "6.50" in matching[0]["new_value"]
         assert "supplier invoice was actually 6.50" in matching[0]["new_value"]
+
+
+class TestBatchExpiryCorrection:
+    """
+    Mirrors TestBatchCostCorrection exactly, one test at a time, since
+    correct_expiry_date is deliberately built the same way as
+    correct_cost_price -- same shape of permission gate, same shape of
+    audit trail, same "always allowed once granted, no business-rule
+    blocking" philosophy. The one behavior worth testing that cost
+    correction doesn't need: correcting an expired batch's date to the
+    future makes it sellable again -- that's the exact risk migration
+    0035's own docstring names as the reason this needed its own
+    permission, so it's proven here rather than just asserted in a
+    comment.
+    """
+
+    async def _login(self, client, username: str, password: str) -> str:
+        r = await client.post(
+            "/api/v1/auth/login", json={"username": username, "password": password}
+        )
+        assert r.status_code == 200, r.text
+        return str(r.json()["access_token"])
+
+    async def _make_product_with_batch(
+        self,
+        client,
+        headers,
+        expiry_date: str = "2028-01-01",
+        batch_number: str = "EXP1",
+        qty: int = 10,
+    ) -> tuple[int, int]:
+        product = await client.post(
+            "/api/v1/products",
+            json={
+                "name": f"Expiry Correction Product {batch_number}",
+                "default_selling_price": 30.0,
+            },
+            headers=headers,
+        )
+        product_id = product.json()["id"]
+        batch = await client.post(
+            f"/api/v1/products/{product_id}/batches",
+            json={
+                "batch_number": batch_number,
+                "expiry_date": expiry_date,
+                "qty_received": qty,
+                "cost_price": 10.0,
+                "selling_price": 30.0,
+            },
+            headers=headers,
+        )
+        return product_id, batch.json()["id"]
+
+    async def test_correcting_expiry_on_a_batch_succeeds(self, client, owner_user):
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id, batch_id = await self._make_product_with_batch(client, headers)
+
+        r = await client.patch(
+            f"/api/v1/products/{product_id}/batches/{batch_id}/expiry",
+            json={"new_expiry_date": "2029-06-30", "reason": "mistyped year on receiving"},
+            headers=headers,
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["expiry_date"] == "2029-06-30"
+
+        batches = await client.get(f"/api/v1/products/{product_id}/batches", headers=headers)
+        assert batches.json()[0]["expiry_date"] == "2029-06-30"
+
+    async def test_correcting_an_expired_batch_to_the_future_makes_it_sellable_again(
+        self, client, owner_user
+    ):
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id, batch_id = await self._make_product_with_batch(
+            client, headers, expiry_date="2020-01-01", qty=5
+        )
+
+        # Genuinely expired -- FEFO must refuse to sell it as-is.
+        blocked = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 30.0}],
+            },
+            headers=headers,
+        )
+        assert blocked.status_code == 409, blocked.text
+
+        corrected = await client.patch(
+            f"/api/v1/products/{product_id}/batches/{batch_id}/expiry",
+            json={"new_expiry_date": "2029-01-01", "reason": "expiry was entered incorrectly"},
+            headers=headers,
+        )
+        assert corrected.status_code == 200, corrected.text
+
+        allowed = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 30.0}],
+            },
+            headers=headers,
+        )
+        assert allowed.status_code == 201, allowed.text
+
+    async def test_employee_without_permission_is_forbidden(
+        self, client, owner_user, employee_user
+    ):
+        owner_token = await self._login(client, "lucy", "S3curePass!")
+        owner_headers = {"Authorization": f"Bearer {owner_token}"}
+        product_id, batch_id = await self._make_product_with_batch(client, owner_headers)
+
+        employee_token = await self._login(client, "joe", "pass1234")
+        r = await client.patch(
+            f"/api/v1/products/{product_id}/batches/{batch_id}/expiry",
+            json={"new_expiry_date": "2029-01-01", "reason": "should not be allowed"},
+            headers={"Authorization": f"Bearer {employee_token}"},
+        )
+        assert r.status_code == 403
+
+    async def test_a_blank_reason_is_rejected(self, client, owner_user):
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id, batch_id = await self._make_product_with_batch(client, headers)
+
+        r = await client.patch(
+            f"/api/v1/products/{product_id}/batches/{batch_id}/expiry",
+            json={"new_expiry_date": "2029-01-01", "reason": ""},
+            headers=headers,
+        )
+        assert r.status_code == 422
+
+    async def test_correction_is_audit_logged(self, client, owner_user):
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id, batch_id = await self._make_product_with_batch(client, headers)
+
+        r = await client.patch(
+            f"/api/v1/products/{product_id}/batches/{batch_id}/expiry",
+            json={"new_expiry_date": "2029-06-30", "reason": "supplier packaging showed 2029"},
+            headers=headers,
+        )
+        assert r.status_code == 200, r.text
+
+        logs = await client.get(
+            "/api/v1/audit-logs", params={"action": "batch.expiry_corrected"}, headers=headers
+        )
+        assert logs.status_code == 200, logs.text
+        entries = logs.json()["entries"]
+        matching = [e for e in entries if e["entity_id"] == str(batch_id)]
+        assert len(matching) == 1
+        assert matching[0]["old_value"] == "2028-01-01"
+        assert "2029-06-30" in matching[0]["new_value"]
+        assert "supplier packaging showed 2029" in matching[0]["new_value"]

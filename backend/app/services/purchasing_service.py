@@ -14,9 +14,11 @@ for the next person who might wire a button up to it.
 """
 
 from datetime import UTC, datetime
+from typing import Any, cast
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.medicine_batch import MedicineBatch
@@ -87,12 +89,45 @@ class PurchasingService:
             )
             existing_batch = existing_result.scalar_one_or_none()
 
+            if existing_batch is not None and existing_batch.locked_by_stock_take_id is not None:
+                # Same invariant RefundService._restock_batch already
+                # enforces for restocking, applied here for receiving:
+                # a batch locked for an active physical count must not
+                # have its qty_remaining/cost_price move underneath the
+                # counter mid-count. Rejecting cleanly (rather than
+                # silently creating a second, separate batch row with
+                # the same product/batch_number/expiry, which would
+                # break the "always merge, never duplicate" invariant
+                # this method's own docstring describes) keeps this
+                # consistent with how the rest of the app already
+                # treats a locked batch.
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Batch {line.batch_number} for this product is locked by an open "
+                        "stock take and cannot receive new stock right now. Retry once the "
+                        "count closes."
+                    ),
+                )
+
             if existing_batch is not None:
-                combined_qty = existing_batch.qty_remaining + line.quantity
-                existing_batch.cost_price = (
-                    existing_batch.qty_remaining * existing_batch.cost_price
-                    + line.quantity * line.unit_cost
-                ) / combined_qty
+                # Selling-price conflict is a business-rule decision,
+                # not a race-safety one -- it has to read the row first
+                # to decide 409 vs apply vs leave-alone, so this part
+                # keeps the same shape as before. What changes below is
+                # qty_remaining/qty_received/cost_price: those are
+                # applied via SQL column-relative expressions in a
+                # single UPDATE rather than computed in Python from
+                # values read here, so the actual persisted numbers
+                # stay correct under concurrent receipts of the same
+                # batch regardless of how stale this particular read
+                # turns out to be by the time that UPDATE runs -- see
+                # TestQuickPurchaseConcurrency in tests/test_purchasing.py
+                # for the exact race this closes (previously passing
+                # only by the same incidental single-writer-lock
+                # ordering already found and hardened in
+                # RefundService._reserve_refund_quantity, not by
+                # anything this method itself guaranteed).
                 # Only ever compare/apply a price the purchaser actually
                 # typed on THIS line (line.selling_price, still None when
                 # left blank) -- never the resolved default. Two real bugs
@@ -119,8 +154,45 @@ class PurchasingService:
                             ),
                         )
                     existing_batch.selling_price = line.selling_price
-                existing_batch.qty_received += line.quantity
-                existing_batch.qty_remaining = combined_qty
+                # session.execute() autoflushes pending changes first
+                # (the selling_price assignment just above, if any) --
+                # so that reaches the row before this statement runs,
+                # and refresh() below reads back the true combined
+                # state of both changes together, not just this one.
+                # locked_by_stock_take_id.is_(None) here closes the
+                # narrow window between the read above and this write:
+                # a stock take could have locked this exact batch in
+                # between. rowcount==0 with a still-existing row means
+                # exactly that race happened.
+                merge_result = cast(
+                    "CursorResult[Any]",
+                    await self.db.execute(
+                        update(MedicineBatch)
+                        .where(
+                            MedicineBatch.id == existing_batch.id,
+                            MedicineBatch.locked_by_stock_take_id.is_(None),
+                        )
+                        .values(
+                            cost_price=(
+                                MedicineBatch.qty_remaining * MedicineBatch.cost_price
+                                + line.quantity * line.unit_cost
+                            )
+                            / (MedicineBatch.qty_remaining + line.quantity),
+                            qty_received=MedicineBatch.qty_received + line.quantity,
+                            qty_remaining=MedicineBatch.qty_remaining + line.quantity,
+                        )
+                    ),
+                )
+                if merge_result.rowcount == 0:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"Batch {line.batch_number} for this product was just locked by "
+                            "an open stock take and cannot receive new stock right now. "
+                            "Retry once the count closes."
+                        ),
+                    )
+                await self.db.refresh(existing_batch)
                 batch = existing_batch
             else:
                 batch = MedicineBatch(

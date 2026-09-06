@@ -7,7 +7,13 @@ from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
 from app.models.stock_movement import MovementType, StockMovement
 from app.models.user import User
-from app.schemas.batch import BatchCostCorrection, BatchCreate, BatchOut, BatchUpdate
+from app.schemas.batch import (
+    BatchCostCorrection,
+    BatchCreate,
+    BatchExpiryCorrection,
+    BatchOut,
+    BatchUpdate,
+)
 
 
 class BatchService:
@@ -155,6 +161,50 @@ class BatchService:
                         f"{new_price:.2f} (product_id={batch.product_id}, "
                         f"batch={batch.batch_number}, exp={batch.expiry_date.isoformat()}, "
                         f"reason={payload.reason})"
+                    ),
+                )
+            )
+        await self.db.commit()
+        await self.db.refresh(batch)
+        return BatchOut.model_validate(batch)
+
+    async def correct_expiry_date(
+        self, product_id: int, batch_id: int, payload: BatchExpiryCorrection, changed_by: User
+    ) -> BatchOut:
+        """
+        Gated by its own `batches.correct_expiry` permission -- not
+        `batches.correct_cost`, not general `inventory.adjust` -- for
+        a reason distinct from the usual "keep scopes narrow"
+        principle: this one can specifically make an already-expired
+        batch look valid again, letting it back into FEFO sale
+        selection (see stock_selection_service.py's `expiry_date >=
+        today` filter). A cost correction can only ever misstate
+        money; this one, misused, is a route to selling expired
+        medicine. See migration 0035's own docstring for the full
+        reasoning. Every correction is still unconditionally allowed
+        once granted -- the permission boundary and the audit trail
+        are the safeguards here, not a business-rule restriction on
+        when this can be called (mirrors correct_cost_price above).
+        """
+        batch = await self.db.get(MedicineBatch, batch_id)
+        if batch is None or batch.product_id != product_id:
+            raise HTTPException(status_code=404, detail="Batch not found")
+
+        old_date = batch.expiry_date
+        new_date = payload.new_expiry_date
+        if old_date != new_date:
+            batch.expiry_date = new_date
+            self.db.add(
+                AuditLog(
+                    user_id=changed_by.id,
+                    user_name_snapshot=changed_by.full_name,
+                    action="batch.expiry_corrected",
+                    entity_type="medicine_batch",
+                    entity_id=str(batch.id),
+                    old_value=old_date.isoformat(),
+                    new_value=(
+                        f"{new_date.isoformat()} (product_id={batch.product_id}, "
+                        f"batch={batch.batch_number}, reason={payload.reason})"
                     ),
                 )
             )

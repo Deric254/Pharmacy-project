@@ -1,9 +1,10 @@
-from datetime import date, datetime, time
+from datetime import date
 from typing import Any
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.business_time import local_day_bounds_utc
 from app.models.audit_log import AuditLog
 from app.schemas.audit_log import AuditLogOut, AuditLogPage
 
@@ -22,7 +23,7 @@ class AuditLogService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    def _apply_filters(
+    async def _apply_filters(
         self,
         query: Select[Any],
         *,
@@ -35,10 +36,25 @@ class AuditLogService:
             query = query.where(AuditLog.entity_type == entity_type)
         if action is not None:
             query = query.where(AuditLog.action == action)
+        # Local midnight of each date, converted to the matching UTC
+        # instant using THAT date's own DST/offset rule -- AuditLog.
+        # created_at is stored in UTC (server_default=func.now()), so
+        # the naive `datetime.combine(start_date, time.min)` this
+        # replaced was comparing a local calendar date directly
+        # against a UTC timestamp column: for a business ahead of UTC
+        # (Kenya, UTC+3, is exactly this app's primary market), a
+        # filter for "today" silently excluded the last few hours of
+        # true local today and included the first few hours of true
+        # local yesterday instead. sale_service.py and report_service.
+        # py both already use this same local_day_bounds_utc helper for
+        # exactly this reason -- this was the one remaining place still
+        # doing the naive comparison it exists to replace.
         if start_date is not None:
-            query = query.where(AuditLog.created_at >= datetime.combine(start_date, time.min))
+            utc_start, _ = await local_day_bounds_utc(self.db, start_date)
+            query = query.where(AuditLog.created_at >= utc_start)
         if end_date is not None:
-            query = query.where(AuditLog.created_at <= datetime.combine(end_date, time.max))
+            _, utc_end_exclusive = await local_day_bounds_utc(self.db, end_date)
+            query = query.where(AuditLog.created_at < utc_end_exclusive)
         return query
 
     async def list_entries(
@@ -53,14 +69,14 @@ class AuditLogService:
     ) -> AuditLogPage:
         limit = min(limit, MAX_PAGE_SIZE)
 
-        query = self._apply_filters(
+        query = await self._apply_filters(
             select(AuditLog),
             entity_type=entity_type,
             action=action,
             start_date=start_date,
             end_date=end_date,
         )
-        count_query = self._apply_filters(
+        count_query = await self._apply_filters(
             select(func.count()).select_from(AuditLog),
             entity_type=entity_type,
             action=action,
@@ -94,12 +110,13 @@ class AuditLogService:
         capped at the same 200-row page limit as the on-screen list
         would be a real accuracy gap, not a UI nicety.
         """
-        query = self._apply_filters(
+        query = await self._apply_filters(
             select(AuditLog),
             entity_type=entity_type,
             action=action,
             start_date=start_date,
             end_date=end_date,
-        ).order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+        )
+        query = query.order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
         result = await self.db.execute(query)
         return [AuditLogOut.model_validate(row) for row in result.scalars().all()]

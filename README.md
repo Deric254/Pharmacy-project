@@ -25,7 +25,7 @@ the source code itself.
 
 ### Path A — local dev, fastest way to see it running
 
-Needs: Python 3.12+, Node 20+. That's it — no separate database server,
+Needs: Python 3.12+, Node 22+. That's it — no separate database server,
 no separate Redis install. This app only ever uses SQLite (one file) and
 an in-process in-memory stand-in for Redis, matching exactly what the
 shipped desktop app uses.

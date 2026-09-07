@@ -82,6 +82,7 @@ export function DashboardPage() {
   useEffect(() => {
     if (!canSeeReports) return
     let cancelled = false
+    setError(null)
     reportsApi
       .kpiDashboard(range.start, range.end)
       .then((data) => {

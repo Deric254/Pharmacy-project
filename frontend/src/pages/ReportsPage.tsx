@@ -156,6 +156,7 @@ function SalesReport() {
   const salesVersion = useSaleCompletedRefresh(true)
 
   useEffect(() => {
+    setError(null)
     reportsApi
       .salesSummary(start, end, groupBy)
       .then(setData)
@@ -220,6 +221,7 @@ function ProfitReport() {
   const salesVersion = useSaleCompletedRefresh(true)
 
   useEffect(() => {
+    setError(null)
     reportsApi
       .profit(start, end)
       .then(setData)
@@ -313,6 +315,7 @@ function MoversReport() {
   const salesVersion = useSaleCompletedRefresh(true)
 
   useEffect(() => {
+    setError(null)
     reportsApi
       .fastSlowMovers(days, 10)
       .then(setData)

@@ -10,6 +10,7 @@ one place to audit, one place to rotate algorithms later without hunting
 through every module.
 """
 
+import asyncio
 import base64
 import hashlib
 import os
@@ -28,17 +29,34 @@ _hasher = PasswordHasher()  # argon2id, library defaults are current best-practi
 
 
 # ---- Passwords ----------------------------------------------------------
+#
+# argon2id is deliberately slow -- that's the whole point, it's what
+# makes brute-forcing a stolen hash expensive. Measured directly against
+# this library's actual defaults: ~200ms per hash/verify call. Calling
+# that synchronously from an async def (as this used to) blocks this
+# process's single asyncio event loop for the full 200ms on every
+# login, password change, and user creation -- freezing every OTHER
+# request the app is handling at that moment (another cashier's
+# in-progress sale, a dashboard load, anything) until it finishes. Same
+# failure mode receipt_service's PDF generation already had to be
+# fixed for (see sales.py's run_in_threadpool comment) -- asyncio.to_thread
+# is the same fix, applied here once so every current and future caller
+# gets it for free, matching this module's own "one place to audit"
+# principle above.
 
 
-def hash_password(plain_password: str) -> str:
-    return _hasher.hash(plain_password)
+async def hash_password(plain_password: str) -> str:
+    return await asyncio.to_thread(_hasher.hash, plain_password)
 
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    try:
-        return _hasher.verify(hashed_password, plain_password)
-    except VerifyMismatchError:
-        return False
+async def verify_password(plain_password: str, hashed_password: str) -> bool:
+    def _verify() -> bool:
+        try:
+            return _hasher.verify(hashed_password, plain_password)
+        except VerifyMismatchError:
+            return False
+
+    return await asyncio.to_thread(_verify)
 
 
 # ---- JWT tokens -----------------------------------------------------------

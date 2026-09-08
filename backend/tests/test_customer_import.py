@@ -140,10 +140,10 @@ class TestCustomerBulkImport:
                 User(
                     full_name="No Perm",
                     username="noperm_cust",
-                    hashed_password=hash_password("pass1234"),
+                    hashed_password=await hash_password("pass1234"),
                     role_id=role.id,
                     security_question="Q?",
-                    security_answer_hash=hash_password("A"),
+                    security_answer_hash=await hash_password("A"),
                     is_active=True,
                 )
             )

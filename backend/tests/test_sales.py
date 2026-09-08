@@ -62,7 +62,7 @@ class TestCreateSale:
             u = User(
                 full_name="No Permission",
                 username="noperm",
-                hashed_password=hash_password("pass1234"),
+                hashed_password=await hash_password("pass1234"),
                 role_id=role.id,
             )
             db.add(u)

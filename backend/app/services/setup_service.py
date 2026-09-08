@@ -59,10 +59,10 @@ class SetupService:
         new_owner = User(
             full_name=payload.full_name,
             username=payload.username,
-            hashed_password=hash_password(payload.password),
+            hashed_password=await hash_password(payload.password),
             role_id=role.id,
             security_question=payload.security_question,
-            security_answer_hash=hash_password(payload.security_answer),
+            security_answer_hash=await hash_password(payload.security_answer),
         )
         self.db.add(new_owner)
         try:

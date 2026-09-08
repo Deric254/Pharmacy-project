@@ -373,10 +373,10 @@ class TestMigrationExportAndRestore:
                 User(
                     full_name="Cross Device Owner",
                     username="crossdeviceowner",
-                    hashed_password=hash_password("RealOriginalPassword123"),
+                    hashed_password=await hash_password("RealOriginalPassword123"),
                     role_id=role.id,
                     security_question="Q",
-                    security_answer_hash=hash_password("A"),
+                    security_answer_hash=await hash_password("A"),
                 )
             )
             product_result = await db.execute(

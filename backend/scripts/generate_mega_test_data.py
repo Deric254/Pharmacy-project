@@ -39,9 +39,9 @@ async def main() -> None:
                 "VALUES ('Mega Owner', 'megaowner', :pw, :role_id, 1, 0, 'Q?', :ans)"
             ),
             {
-                "pw": hash_password("MegaPass123"),
+                "pw": await hash_password("MegaPass123"),
                 "role_id": role_id,
-                "ans": hash_password("A"),
+                "ans": await hash_password("A"),
             },
         )
         await db.commit()

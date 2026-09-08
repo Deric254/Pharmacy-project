@@ -219,10 +219,10 @@ class TestForgotPassword:
             u = User(
                 full_name="Has A Question",
                 username="hasq",
-                hashed_password=hash_password("pass12345"),
+                hashed_password=await hash_password("pass12345"),
                 role_id=seeded_roles["Employee"],
                 security_question="What was your first pet's name?",
-                security_answer_hash=hash_password("Rex"),
+                security_answer_hash=await hash_password("Rex"),
             )
             db.add(u)
             await db.commit()
@@ -259,10 +259,10 @@ class TestForgotPassword:
             u = User(
                 full_name="Has A Question",
                 username="hasq",
-                hashed_password=hash_password("pass12345"),
+                hashed_password=await hash_password("pass12345"),
                 role_id=seeded_roles["Employee"],
                 security_question="What was your first pet's name?",
-                security_answer_hash=hash_password("Rex"),
+                security_answer_hash=await hash_password("Rex"),
             )
             db.add(u)
             await db.commit()
@@ -296,10 +296,10 @@ class TestForgotPassword:
             u = User(
                 full_name="Has A Question",
                 username="hasq",
-                hashed_password=hash_password("oldpass123"),
+                hashed_password=await hash_password("oldpass123"),
                 role_id=seeded_roles["Employee"],
                 security_question="What was your first pet's name?",
-                security_answer_hash=hash_password("Rex"),
+                security_answer_hash=await hash_password("Rex"),
             )
             db.add(u)
             await db.commit()
@@ -374,7 +374,7 @@ class TestHierarchicalPasswordReset:
             other_admin = User(
                 full_name="Other Admin",
                 username="pat",
-                hashed_password=hash_password("AdminPass2"),
+                hashed_password=await hash_password("AdminPass2"),
                 role_id=seeded_roles["Administrator"],
             )
             db.add(other_admin)

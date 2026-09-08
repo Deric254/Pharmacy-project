@@ -148,7 +148,7 @@ async def owner_user(seeded_roles):
         u = User(
             full_name="Lucy Kangai",
             username="lucy",
-            hashed_password=hash_password("S3curePass!"),
+            hashed_password=await hash_password("S3curePass!"),
             role_id=seeded_roles["ChemistOwner"],
         )
         db.add(u)
@@ -163,7 +163,7 @@ async def administrator_user(seeded_roles):
         u = User(
             full_name="Sam Admin",
             username="sam",
-            hashed_password=hash_password("AdminPass1"),
+            hashed_password=await hash_password("AdminPass1"),
             role_id=seeded_roles["Administrator"],
         )
         db.add(u)
@@ -178,7 +178,7 @@ async def employee_user(seeded_roles):
         u = User(
             full_name="Cashier Joe",
             username="joe",
-            hashed_password=hash_password("pass1234"),
+            hashed_password=await hash_password("pass1234"),
             role_id=seeded_roles["Employee"],
         )
         db.add(u)

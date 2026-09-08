@@ -67,7 +67,7 @@ async def create_first_user(
         user = User(
             full_name=full_name,
             username=username,
-            hashed_password=hash_password(password),
+            hashed_password=await hash_password(password),
             role_id=role.id,
             security_question=security_question,
             # Stripped for the same reason UserCreate.security_answer
@@ -76,7 +76,7 @@ async def create_first_user(
             # hash the same normalized value, or reset_password_via_
             # security_question's own .strip() on the recovery input
             # would only match one of the two.
-            security_answer_hash=hash_password(security_answer.strip()),
+            security_answer_hash=await hash_password(security_answer.strip()),
         )
         db.add(user)
         await db.commit()

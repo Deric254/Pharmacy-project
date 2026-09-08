@@ -56,7 +56,7 @@ async def main(num_sales: int) -> None:
         user = User(
             username="loadtest",
             full_name="Load Test",
-            hashed_password=hash_password("x"),
+            hashed_password=await hash_password("x"),
             role_id=role.id,
             must_change_password=False,
         )

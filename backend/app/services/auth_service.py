@@ -56,7 +56,7 @@ class AuthService:
         )
         user = result.scalar_one_or_none()
 
-        if user is None or not verify_password(password, user.hashed_password):
+        if user is None or not await verify_password(password, user.hashed_password):
             await self._record_failed_attempt(rate_limit_key)
             await self._record_failed_attempt(ip_rate_limit_key)
             # Log failed attempts too — repeated failures are a security signal.
@@ -250,10 +250,10 @@ class AuthService:
         # user who happens to type a stray leading/trailing space at
         # recovery time (easy to do, invisible on screen) would be
         # told their correct answer is wrong.
-        if not verify_password(security_answer.strip(), user.security_answer_hash):
+        if not await verify_password(security_answer.strip(), user.security_answer_hash):
             raise generic_error
 
-        user.hashed_password = hash_password(new_password)
+        user.hashed_password = await hash_password(new_password)
         user.must_change_password = False
         await self._revoke_active_sessions(user.id)
         self.db.add(
@@ -289,7 +289,7 @@ class AuthService:
             )
 
         temp_password = self.generate_temp_password()
-        user.hashed_password = hash_password(temp_password)
+        user.hashed_password = await hash_password(temp_password)
         user.must_change_password = True
         await self._revoke_active_sessions(user.id)
         self.db.add(
@@ -333,10 +333,10 @@ class AuthService:
     async def change_own_password(
         self, user: User, current_password: str, new_password: str
     ) -> None:
-        if not verify_password(current_password, user.hashed_password):
+        if not await verify_password(current_password, user.hashed_password):
             raise HTTPException(status_code=400, detail="Current password is incorrect")
 
-        user.hashed_password = hash_password(new_password)
+        user.hashed_password = await hash_password(new_password)
         user.must_change_password = False
         await self._revoke_active_sessions(user.id)
         self.db.add(

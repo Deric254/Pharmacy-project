@@ -10,6 +10,7 @@ from app.core.database import get_db
 from app.core.rbac import get_current_user, require_permission
 from app.models.user import User
 from app.schemas.reports import (
+    CashierSalesOut,
     FastSlowMoversOut,
     KpiDashboardOut,
     ProfitReportOut,
@@ -205,6 +206,23 @@ async def top_customers(
     limit: int = 20,
 ) -> TopCustomersOut:
     return await ReportService(db).top_customers(start_date, end_date, limit)
+
+
+@router.get(
+    "/sales-by-cashier",
+    response_model=CashierSalesOut,
+    # Owner-level visibility, same tier as reports.view_profit: ranking
+    # individual staff by output is more sensitive than aggregate
+    # revenue, and reusing this existing permission avoids adding a new
+    # one for a single new report.
+    dependencies=[Depends(require_permission("reports.view_profit"))],
+)
+async def sales_by_cashier(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    start_date: date,
+    end_date: date,
+) -> CashierSalesOut:
+    return await ReportService(db).sales_by_cashier(start_date, end_date)
 
 
 @router.get(

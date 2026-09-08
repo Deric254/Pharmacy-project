@@ -109,6 +109,23 @@ class TopCustomersOut(BaseModel):
     total_revenue: float
 
 
+class CashierSalesEntry(BaseModel):
+    cashier_user_id: int
+    cashier_name: str
+    sale_count: int
+    # Net of refunds against that cashier's sales in the period, same
+    # netting rule as TopCustomerEntry.revenue above -- a refunded sale
+    # doesn't count as full revenue just because it happened before
+    # the refund did.
+    revenue: float
+
+
+class CashierSalesOut(BaseModel):
+    start_date: date
+    end_date: date
+    entries: list[CashierSalesEntry]
+
+
 class KpiDashboardOut(BaseModel):
     start_date: date
     end_date: date

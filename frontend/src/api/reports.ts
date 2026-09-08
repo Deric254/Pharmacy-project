@@ -1,5 +1,6 @@
 import { api, downloadExport } from './client'
 import type {
+  CashierSalesOut,
   ExpiredStockReportOut,
   FastSlowMoversOut,
   KpiDashboardOut,
@@ -8,6 +9,7 @@ import type {
   RevenuePotentialOut,
   RevenueTrendOut,
   SalesSummaryOut,
+  StockRunwayOut,
   StockTakeHistoryOut,
   TopCustomersOut,
 } from '../types/api'
@@ -44,6 +46,13 @@ export const reportsApi = {
   receivingDiscrepancies: () =>
     api.get<ReceivingDiscrepancyReportOut>('/reports/receiving-discrepancies'),
   stockTakeHistory: () => api.get<StockTakeHistoryOut>('/reports/stock-take-history'),
+  stockRunway: (lookbackDays = 30) =>
+    api.get<StockRunwayOut>('/reports/stock-runway', { lookback_days: lookbackDays }),
+  salesByCashier: (startDate: string, endDate: string) =>
+    api.get<CashierSalesOut>('/reports/sales-by-cashier', {
+      start_date: startDate,
+      end_date: endDate,
+    }),
 }
 
 // Kept under its original name here so ReportsPage.tsx's existing

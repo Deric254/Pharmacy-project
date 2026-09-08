@@ -33,7 +33,10 @@ from app.models.purchase_order import PurchaseOrderItem
 from app.models.refund import Refund, RefundItem
 from app.models.sale import Sale, SaleItem
 from app.models.stock_take import StockTake, StockTakeStatus
+from app.models.user import User
 from app.schemas.reports import (
+    CashierSalesEntry,
+    CashierSalesOut,
     ExpiredStockEntry,
     ExpiredStockReportOut,
     FastSlowMoversOut,
@@ -571,6 +574,60 @@ class ReportService:
                 )
             )
         return TopCustomersOut(entries=entries, total_revenue=total_revenue)
+
+    async def sales_by_cashier(self, start_date: date, end_date: date) -> CashierSalesOut:
+        """
+        Ranked by real net revenue per cashier over the period -- same
+        netting rule as top_customers: a refund is attributed to the
+        cashier whose ORIGINAL sale it's against (not whoever happened
+        to process the refund), and counted in the period the refund
+        itself happened in, not the period of the sale it's against.
+        """
+        sales = await self._sales_in_range(start_date, end_date)
+        sale_ids = [s.id for s in sales]
+        if not sale_ids:
+            return CashierSalesOut(start_date=start_date, end_date=end_date, entries=[])
+
+        result = await self.db.execute(
+            select(
+                Sale.cashier_user_id,
+                User.full_name,
+                func.count(Sale.id).label("sale_count"),
+                func.sum(Sale.total_amount).label("revenue"),
+            )
+            .join(User, User.id == Sale.cashier_user_id)
+            .where(Sale.id.in_(sale_ids))
+            .group_by(Sale.cashier_user_id)
+        )
+        rows = result.all()
+
+        # Refunds netted against the cashier of the ORIGINAL sale, via
+        # the same join top_customers uses for customer_id -- see that
+        # method's comment for why refund.created_at (not the sale's)
+        # is the right bucket for "real money leaving in this window".
+        utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
+        refund_result = await self.db.execute(
+            select(Sale.cashier_user_id, func.coalesce(func.sum(Refund.total_amount), 0.0))
+            .join(Refund, Refund.sale_id == Sale.id)
+            .where(
+                Refund.created_at >= utc_start,
+                Refund.created_at < utc_end,
+            )
+            .group_by(Sale.cashier_user_id)
+        )
+        refund_by_cashier = {cashier_id: float(total) for cashier_id, total in refund_result.all()}
+
+        entries = [
+            CashierSalesEntry(
+                cashier_user_id=cashier_user_id,
+                cashier_name=full_name,
+                sale_count=sale_count,
+                revenue=revenue - refund_by_cashier.get(cashier_user_id, 0.0),
+            )
+            for cashier_user_id, full_name, sale_count, revenue in rows
+        ]
+        entries.sort(key=lambda e: e.revenue, reverse=True)
+        return CashierSalesOut(start_date=start_date, end_date=end_date, entries=entries)
 
     async def revenue_potential(self) -> RevenuePotentialOut:
         """

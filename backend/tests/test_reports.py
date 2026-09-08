@@ -1035,6 +1035,83 @@ class TestTopCustomers:
         assert entry["cumulative_percent"] == 100.0
 
 
+class TestSalesByCashier:
+    """
+    Ranked by real net revenue per cashier. The properties that matter:
+    a refund nets against the cashier of the ORIGINAL sale (same rule
+    top_customers uses for customer_id), and this is gated behind
+    reports.view_profit -- ranking individual staff by output is
+    owner-level visibility, same tier as profit itself.
+    """
+
+    async def test_revenue_nets_out_refunds(self, client, owner_user):
+        """
+        Same "refund happens, money remains" property top_customers is
+        tested for: a cashier who rang up 100 and had 40 refunded
+        against one of their sales should show as a real 60, not 100.
+        """
+        product_id, _ = await _make_product_with_batch(price=20.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        sale_resp = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 5}],
+                "payments": [{"method": "CASH", "amount": 100.0}],
+            },
+            headers=headers,
+        )
+        assert sale_resp.status_code == 201, sale_resp.text
+        sale = sale_resp.json()
+        sale_item = sale["items"][0]
+
+        refund_resp = await client.post(
+            f"/api/v1/sales/{sale['id']}/refunds",
+            json={
+                "reason": "CUSTOMER_RETURN",
+                "method": "CASH",
+                "items": [{"sale_item_id": sale_item["id"], "quantity": 2, "restock": True}],
+            },
+            headers=headers,
+        )
+        assert refund_resp.status_code == 201, refund_resp.text
+        assert refund_resp.json()["total_amount"] == 40.0
+
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/sales-by-cashier",
+            params={"start_date": today, "end_date": today},
+            headers=headers,
+        )
+        assert r.status_code == 200
+        body = r.json()
+        entry = next(e for e in body["entries"] if e["cashier_name"] == "Lucy Kangai")
+        assert entry["revenue"] == 60.0  # 100 rung up - 40 refunded
+        assert entry["sale_count"] == 1
+
+    async def test_requires_view_profit_permission(self, client, administrator_user):
+        token = await _login(client, "sam", "AdminPass1")
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/sales-by-cashier",
+            params={"start_date": today, "end_date": today},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 403
+
+    async def test_no_sales_returns_empty_not_an_error(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        today = date.today().isoformat()
+        r = await client.get(
+            "/api/v1/reports/sales-by-cashier",
+            params={"start_date": today, "end_date": today},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200
+        assert r.json()["entries"] == []
+
+
 class TestRevenuePotential:
     """
     An honest hypothetical, not a forecast: exactly what selling every

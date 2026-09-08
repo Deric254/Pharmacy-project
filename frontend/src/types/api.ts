@@ -442,6 +442,34 @@ export interface TopCustomersOut {
   total_revenue: number
 }
 
+export interface CashierSalesEntry {
+  cashier_user_id: number
+  cashier_name: string
+  sale_count: number
+  revenue: number
+}
+
+export interface CashierSalesOut {
+  start_date: string
+  end_date: string
+  entries: CashierSalesEntry[]
+}
+
+export interface StockRunwayEntry {
+  product_id: number
+  name: string
+  qty_on_hand: number
+  units_sold_in_window: number
+  avg_daily_sales: number
+  days_remaining: number | null
+}
+
+export interface StockRunwayOut {
+  lookback_days: number
+  entries: StockRunwayEntry[]
+  caveat: string
+}
+
 export interface RevenueTrendPoint {
   period_label: string
   revenue: number

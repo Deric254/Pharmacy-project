@@ -9,11 +9,15 @@ import { businessToday, fallbackTimezone, startOfMonth, subtractDays } from '../
 import { useViewedRangeStore } from '../lib/viewedRangeStore'
 import { useSaleCompletedRefresh } from '../lib/useSaleCompletedRefresh'
 import type {
+  CashierSalesEntry,
+  ExpiredStockReportOut,
   ExpiringBatchOut,
+  FastSlowMoversOut,
   KpiDashboardOut,
   LowStockProductOut,
   RevenuePotentialOut,
   RevenueTrendOut,
+  StockRunwayOut,
   StockValuationOut,
   TopCustomerEntry,
 } from '../types/api'
@@ -71,6 +75,10 @@ export function DashboardPage() {
   const [revenuePotential, setRevenuePotential] = useState<RevenuePotentialOut | null>(null)
   const [revenueTrend, setRevenueTrend] = useState<RevenueTrendOut | null>(null)
   const [topCustomers, setTopCustomers] = useState<TopCustomerEntry[] | null>(null)
+  const [fastMovers, setFastMovers] = useState<FastSlowMoversOut | null>(null)
+  const [stockRunway, setStockRunway] = useState<StockRunwayOut | null>(null)
+  const [expiredStock, setExpiredStock] = useState<ExpiredStockReportOut | null>(null)
+  const [cashierSales, setCashierSales] = useState<CashierSalesEntry[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const salesVersion = useSaleCompletedRefresh(canSeeReports)
 
@@ -133,6 +141,63 @@ export function DashboardPage() {
       cancelled = true
     }
   }, [canSeeProfit])
+
+  useEffect(() => {
+    if (!canSeeProfit) return
+    let cancelled = false
+    reportsApi
+      .salesByCashier(range.start, range.end)
+      .then((data) => {
+        if (!cancelled) setCashierSales(data.entries)
+      })
+      .catch(() => {
+        // Same reasoning as revenuePotential above -- supplementary,
+        // not worth surfacing an error banner for.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [canSeeProfit, range, salesVersion])
+
+  useEffect(() => {
+    // Fixed lookback windows, same as the Reports page uses for these
+    // same two endpoints -- NOT tied to the KPI date-range picker
+    // above, since stock-runway and fast-movers are rolling "last N
+    // days from now" calculations on the backend, not calendar-range
+    // queries. Wiring them to `range` would either silently ignore a
+    // custom range or misrepresent what's actually being shown.
+    if (!canSeeReports) return
+    let cancelled = false
+    Promise.all([reportsApi.stockRunway(30), reportsApi.fastSlowMovers(30, 5)])
+      .then(([runway, movers]) => {
+        if (cancelled) return
+        setStockRunway(runway)
+        setFastMovers(movers)
+      })
+      .catch(() => {
+        // Supplementary to the KPI figures above -- omit rather than
+        // surface an error banner for secondary cards.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [canSeeReports, salesVersion])
+
+  useEffect(() => {
+    if (!canSeeReports) return
+    let cancelled = false
+    reportsApi
+      .expiredStock()
+      .then((data) => {
+        if (!cancelled) setExpiredStock(data)
+      })
+      .catch(() => {
+        // Same reasoning as the other supplementary cards above.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [canSeeReports, salesVersion])
 
   useEffect(() => {
     if (!canSeeInventory) return
@@ -325,6 +390,65 @@ export function DashboardPage() {
         </div>
       )}
 
+      {canSeeReports && fastMovers && fastMovers.fast_movers.length > 0 && (
+        <div className="mb-6 ledger-panel p-4">
+          <h2 className="mb-2 text-xs uppercase tracking-wide text-ink-soft">
+            Fastest movers, last {fastMovers.period_days} days
+          </h2>
+          <ul className="divide-y divide-rule">
+            {fastMovers.fast_movers.map((p) => (
+              <li key={p.product_id} className="flex justify-between py-1.5 text-sm">
+                <span className="truncate pr-2">{p.name}</span>
+                <span className="figure text-ink-soft">{p.quantity_sold} sold</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {canSeeReports && stockRunway && stockRunway.entries.length > 0 && (
+        <div className="mb-6 ledger-panel p-4">
+          <h2 className="text-xs uppercase tracking-wide text-ink-soft">
+            Stock runway, last {stockRunway.lookback_days} days
+          </h2>
+          <p className="mb-2 mt-1 text-xs text-ink-soft">{stockRunway.caveat}</p>
+          <ul className="divide-y divide-rule">
+            {stockRunway.entries.slice(0, 5).map((e) => (
+              <li key={e.product_id} className="flex justify-between py-1.5 text-sm">
+                <span className="truncate pr-2">{e.name}</span>
+                <span
+                  className={`figure ${
+                    e.days_remaining !== null && e.days_remaining <= 7
+                      ? 'text-stamp-red'
+                      : 'text-ink-soft'
+                  }`}
+                >
+                  {e.days_remaining !== null ? `${e.days_remaining}d left` : 'no recent sales'}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {canSeeReports && expiredStock && expiredStock.entries.length > 0 && (
+        <div className="mb-6 ledger-panel p-4">
+          <h2 className="text-xs uppercase tracking-wide text-ink-soft">Expired stock</h2>
+          <div className="mt-2 grid grid-cols-2 gap-4">
+            <div>
+              <p className="text-xs text-ink-soft">Value at cost</p>
+              <p className="figure text-xl text-stamp-red">
+                {formatCurrency(expiredStock.total_value)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-ink-soft">Batches</p>
+              <p className="figure text-xl text-ink">{expiredStock.entries.length}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {canSeeProfit && revenuePotential && revenuePotential.by_product.length > 0 && (
         <div className="mb-6 ledger-panel p-4">
           <h2 className="text-xs uppercase tracking-wide text-ink-soft">
@@ -352,6 +476,24 @@ export function DashboardPage() {
               </p>
             </div>
           </div>
+        </div>
+      )}
+
+      {canSeeProfit && cashierSales && cashierSales.length > 0 && (
+        <div className="mb-6 ledger-panel p-4">
+          <h2 className="mb-2 text-xs uppercase tracking-wide text-ink-soft">
+            Sales by cashier
+          </h2>
+          <ul className="divide-y divide-rule">
+            {cashierSales.map((c) => (
+              <li key={c.cashier_user_id} className="flex justify-between py-1.5 text-sm">
+                <span className="truncate pr-2">{c.cashier_name}</span>
+                <span className="figure text-ink-soft">
+                  {c.sale_count} sales · {formatCurrency(c.revenue)}
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

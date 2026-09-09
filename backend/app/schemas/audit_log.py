@@ -23,3 +23,15 @@ class AuditLogPage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class AuditLogFilterOptionsOut(BaseModel):
+    """
+    The real, currently-used values for entity_type and action -- read
+    from the data itself, not a hand-maintained list, so a filter
+    dropdown built from this can never offer a value that returns zero
+    results, and never misses a real one either.
+    """
+
+    entity_types: list[str]
+    actions: list[str]

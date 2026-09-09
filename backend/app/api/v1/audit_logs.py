@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.rbac import require_permission
-from app.schemas.audit_log import AuditLogPage
+from app.schemas.audit_log import AuditLogFilterOptionsOut, AuditLogPage
 from app.services.audit_log_service import AuditLogService
 from app.services.report_export_service import ExportFormat, build_export_response
 
@@ -53,3 +53,10 @@ async def list_audit_logs(
         offset=offset,
     )
     return page
+
+
+@router.get("/audit-logs/filter-options", response_model=AuditLogFilterOptionsOut)
+async def audit_log_filter_options(
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> AuditLogFilterOptionsOut:
+    return await AuditLogService(db).filter_options()

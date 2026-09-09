@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.business_time import local_day_bounds_utc
 from app.models.audit_log import AuditLog
-from app.schemas.audit_log import AuditLogOut, AuditLogPage
+from app.schemas.audit_log import AuditLogFilterOptionsOut, AuditLogOut, AuditLogPage
 
 MAX_PAGE_SIZE = 200
 
@@ -120,3 +120,10 @@ class AuditLogService:
         query = query.order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
         result = await self.db.execute(query)
         return [AuditLogOut.model_validate(row) for row in result.scalars().all()]
+
+    async def filter_options(self) -> AuditLogFilterOptionsOut:
+        entity_type_query = select(AuditLog.entity_type).distinct().order_by(AuditLog.entity_type)
+        action_query = select(AuditLog.action).distinct().order_by(AuditLog.action)
+        entity_types = (await self.db.execute(entity_type_query)).scalars().all()
+        actions = (await self.db.execute(action_query)).scalars().all()
+        return AuditLogFilterOptionsOut(entity_types=list(entity_types), actions=list(actions))

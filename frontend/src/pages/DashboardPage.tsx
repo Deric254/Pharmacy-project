@@ -360,7 +360,7 @@ export function DashboardPage() {
       {canSeeReports && topCustomers && topCustomers.length > 0 && (
         <div className="mb-6 ledger-panel p-4">
           <h2 className="mb-2 text-xs uppercase tracking-wide text-ink-soft">
-            Customer revenue (Pareto)
+            Customer revenue
           </h2>
           <Suspense fallback={<p className="text-sm text-ink-soft">Loading chart…</p>}>
             <CustomerParetoChart data={topCustomers} />

@@ -1,5 +1,5 @@
 import { api } from './client'
-import type { AuditLogPage } from '../types/api'
+import type { AuditLogFilterOptionsOut, AuditLogPage } from '../types/api'
 
 export interface AuditLogFilters {
   entity_type?: string
@@ -13,4 +13,5 @@ export interface AuditLogFilters {
 export const auditLogsApi = {
   list: (filters: AuditLogFilters = {}) =>
     api.get<AuditLogPage>('/audit-logs', filters as Record<string, string | number | undefined>),
+  filterOptions: () => api.get<AuditLogFilterOptionsOut>('/audit-logs/filter-options'),
 }

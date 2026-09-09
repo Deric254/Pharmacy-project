@@ -152,3 +152,51 @@ class TestPagination:
         first_ids = {e["id"] for e in first_page.json()["entries"]}
         second_ids = {e["id"] for e in second_page.json()["entries"]}
         assert first_ids.isdisjoint(second_ids)
+
+
+class TestFilterOptions:
+    """
+    The whole reason this endpoint exists: entity_type/action filters
+    are exact-match against internal codes like "role" and
+    "login.success", not free text. A dropdown built from real data
+    guarantees every option offered actually returns something --
+    proven here by checking a real value both appears in the list AND
+    successfully filters when used.
+    """
+
+    async def test_returns_real_values_that_actually_filter(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        # The login above itself already wrote a "login.success" /
+        # "user" audit entry -- no extra setup needed to have real data.
+        options = await client.get("/api/v1/audit-logs/filter-options", headers=headers)
+        assert options.status_code == 200
+        body = options.json()
+        assert "login.success" in body["actions"]
+        assert "user" in body["entity_types"]
+
+        filtered = await client.get(
+            "/api/v1/audit-logs",
+            params={"action": "login.success"},
+            headers=headers,
+        )
+        assert filtered.status_code == 200
+        assert filtered.json()["total"] >= 1
+
+    async def test_values_are_deduplicated(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        for _ in range(3):
+            await client.post(
+                "/api/v1/auth/login", json={"username": "lucy", "password": "S3curePass!"}
+            )
+        options = await client.get("/api/v1/audit-logs/filter-options", headers=headers)
+        actions = options.json()["actions"]
+        assert actions.count("login.success") == 1
+
+    async def test_requires_audit_view_permission(self, client, administrator_user):
+        token = await _login(client, "sam", "AdminPass1")
+        r = await client.get(
+            "/api/v1/audit-logs/filter-options", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 403

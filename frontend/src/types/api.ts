@@ -734,6 +734,11 @@ export interface AuditLogPage {
   offset: number
 }
 
+export interface AuditLogFilterOptionsOut {
+  entity_types: string[]
+  actions: string[]
+}
+
 export interface ImportRowError {
   row: number
   field: string

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { auditLogsApi } from '../api/audit'
 import { ApiError, downloadExport } from '../api/client'
-import type { AuditLogOut } from '../types/api'
+import type { AuditLogFilterOptionsOut, AuditLogOut } from '../types/api'
 
 const PAGE_SIZE = 25
 
@@ -13,8 +13,26 @@ export function AuditLogPage() {
   const [action, setAction] = useState('')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
+  const [filterOptions, setFilterOptions] = useState<AuditLogFilterOptionsOut | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    auditLogsApi
+      .filterOptions()
+      .then((options) => {
+        if (!cancelled) setFilterOptions(options)
+      })
+      .catch(() => {
+        // Non-critical: the dropdowns just fall back to "All" only if
+        // this fails, the rest of the page (list, dates, pagination,
+        // export) works exactly the same either way.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -82,21 +100,33 @@ export function AuditLogPage() {
           <span className="block text-xs uppercase tracking-wide text-ink-soft">
             Entity type
           </span>
-          <input
+          <select
             value={entityType}
             onChange={(e) => applyFilter(setEntityType, e.target.value)}
-            placeholder="e.g. user, role"
             className="mt-1 w-full border border-rule bg-paper px-3 py-2 text-sm"
-          />
+          >
+            <option value="">All</option>
+            {filterOptions?.entity_types.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="block">
           <span className="block text-xs uppercase tracking-wide text-ink-soft">Action</span>
-          <input
+          <select
             value={action}
             onChange={(e) => applyFilter(setAction, e.target.value)}
-            placeholder="e.g. login.failed"
             className="mt-1 w-full border border-rule bg-paper px-3 py-2 text-sm"
-          />
+          >
+            <option value="">All</option>
+            {filterOptions?.actions.map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="block">
           <span className="block text-xs uppercase tracking-wide text-ink-soft">From</span>

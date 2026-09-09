@@ -332,11 +332,6 @@ function CustomerImportModal({
 
   return (
     <Modal title="Import customers from Excel" onClose={onClose}>
-      <p className="text-sm text-ink-soft">
-        Use the template's columns for name, phone, and email. If anything is wrong when you
-        upload, nothing is imported until it's fixed — never a partial import.
-      </p>
-
       <label className="mt-3 block">
         <span className="block text-xs uppercase tracking-wide text-ink-soft">Choose file</span>
         <input

@@ -47,10 +47,6 @@ export function RolesPage() {
           New role
         </button>
       </header>
-      <p className="mb-6 text-sm text-ink-soft">
-        Nothing here is fixed in code. Rename a role, change what it can do, or define a
-        brand-new one -- it takes effect immediately for everyone who has it.
-      </p>
 
       {error && (
         <p role="alert" className="mb-4 border border-stamp-red-soft bg-stamp-red-soft/40 px-3 py-2 text-sm text-stamp-red">

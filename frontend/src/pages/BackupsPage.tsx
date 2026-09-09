@@ -75,12 +75,6 @@ export function BackupsPage() {
           </button>
         </div>
       </header>
-      <p className="mb-6 text-sm text-ink-soft">
-        Every sale, every batch, every coin recorded in this system lives in one database. A
-        backup is the only thing standing between a hard-drive failure and losing all of it.
-        "Back up now" saves a copy on this computer immediately — no setup, no internet needed.
-        Connecting Google Drive is entirely optional, for anyone who also wants an off-site copy.
-      </p>
 
       {error && (
         <p role="alert" className="mb-4 border border-stamp-red-soft bg-stamp-red-soft/40 px-3 py-2 text-sm text-stamp-red">
@@ -185,13 +179,6 @@ function ExportForMigrationModal({ onClose }: { onClose: () => void }) {
         </div>
       ) : (
         <form onSubmit={handleSubmit} className="space-y-3">
-          <p className="text-sm text-ink-soft">
-            Creates a file with everything in this system right now — every product, sale,
-            customer, and account — for moving to a different computer. Unlike "Back up now" (for
-            restoring on this same computer), this file is protected by a passphrase you choose
-            here, not anything stored on this machine, so it can be opened on hardware that has
-            never seen this data before.
-          </p>
           <label className="block">
             <span className="block text-xs uppercase tracking-wide text-ink-soft">
               Passphrase (at least 8 characters)
@@ -365,10 +352,7 @@ function ConnectGoogleDriveModal({
   return (
     <Modal title="Connect Google Drive" onClose={onClose}>
       <p className="mb-3 text-sm text-ink-soft">
-        Backups upload to a Google Drive folder this account controls. This needs a Google OAuth
-        refresh token with Drive access, obtained once and pasted in below — the same
-        bring-your-own-credential pattern as the AI Assistant's provider keys. Whoever set up
-        this deployment's Google OAuth client ID/secret should have this, or can generate one via{' '}
+        Paste a Google OAuth refresh token with Drive access below, or generate one via{' '}
         <a
           href="https://developers.google.com/oauthplayground/"
           target="_blank"

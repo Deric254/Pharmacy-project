@@ -231,9 +231,6 @@ function ProfitReport() {
   return (
     <div>
       <DateRangeControls start={start} end={end} onChange={(s, e) => setRange({ start: s, end: e })} />
-      <p className="mb-4 text-xs text-ink-soft">
-        Not exportable, by design -- profit never leaves an audit trail as a downloadable file.
-      </p>
       {error && <p className="text-sm text-stamp-red">{error}</p>}
       {data && (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">

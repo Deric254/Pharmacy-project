@@ -359,13 +359,9 @@ export function DashboardPage() {
 
       {canSeeReports && topCustomers && topCustomers.length > 0 && (
         <div className="mb-6 ledger-panel p-4">
-          <h2 className="mb-1 text-xs uppercase tracking-wide text-ink-soft">
+          <h2 className="mb-2 text-xs uppercase tracking-wide text-ink-soft">
             Customer revenue (Pareto)
           </h2>
-          <p className="mb-2 text-xs text-ink-soft">
-            Bars show each customer's revenue; the red line is the running share of total
-            revenue, so you can see at a glance how much comes from how few customers.
-          </p>
           <Suspense fallback={<p className="text-sm text-ink-soft">Loading chart…</p>}>
             <CustomerParetoChart data={topCustomers} />
           </Suspense>
@@ -408,10 +404,9 @@ export function DashboardPage() {
 
       {canSeeReports && stockRunway && stockRunway.entries.length > 0 && (
         <div className="mb-6 ledger-panel p-4">
-          <h2 className="text-xs uppercase tracking-wide text-ink-soft">
+          <h2 className="mb-2 text-xs uppercase tracking-wide text-ink-soft">
             Stock runway, last {stockRunway.lookback_days} days
           </h2>
-          <p className="mb-2 mt-1 text-xs text-ink-soft">{stockRunway.caveat}</p>
           <ul className="divide-y divide-rule">
             {stockRunway.entries.slice(0, 5).map((e) => (
               <li key={e.product_id} className="flex justify-between py-1.5 text-sm">

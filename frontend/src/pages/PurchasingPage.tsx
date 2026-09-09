@@ -413,12 +413,6 @@ function ImportPOModal({
 
   return (
     <Modal title="Receive stock from Excel" onClose={onClose}>
-      <p className="text-sm text-ink-soft">
-        Product names must match your catalog exactly (not case-sensitive). Everything in the
-        file lands in your inventory immediately — if anything doesn't match or is invalid,
-        nothing is received at all, never a partial delivery.
-      </p>
-
       <label className="mt-3 block">
         <span className="block text-xs uppercase tracking-wide text-ink-soft">Supplier</span>
         <select
@@ -642,11 +636,6 @@ function QuickPurchaseModal({
 
   return (
     <Modal title="Receive stock" onClose={onClose}>
-      <p className="mb-3 text-sm text-ink-soft">
-        For stock that's already here — no advance order, no ceremony. Enter what arrived and
-        it's in your inventory immediately.
-      </p>
-
       <label className="mb-3 block">
         <span className="block text-xs uppercase tracking-wide text-ink-soft">Supplier</span>
         <select

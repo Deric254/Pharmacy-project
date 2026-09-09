@@ -27,11 +27,7 @@ export function HelpPage() {
 
   return (
     <div className="p-6">
-      <h1 className="mb-1 font-display text-2xl text-ink">Help</h1>
-      <p className="mb-6 text-sm text-ink-soft">
-        Something not working right, or not sure how to do something? Describe it below, then
-        send it however's easiest for you.
-      </p>
+      <h1 className="mb-6 font-display text-2xl text-ink">Help</h1>
 
       <div className="ledger-panel max-w-xl p-4">
         <label className="block">
@@ -70,12 +66,6 @@ export function HelpPage() {
             {copied ? 'Copied!' : 'Copy to share elsewhere'}
           </button>
         </div>
-
-        <p className="mt-3 text-xs text-ink-soft">
-          "Copy to share elsewhere" puts the whole report on your clipboard, ready to paste into
-          WhatsApp, SMS, or wherever's easiest — this includes the page you're on and the time
-          automatically, so you don't have to remember to mention it.
-        </p>
       </div>
     </div>
   )

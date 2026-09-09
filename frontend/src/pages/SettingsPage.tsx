@@ -92,11 +92,7 @@ export function SettingsPage() {
 
   return (
     <div className="mx-auto max-w-2xl p-6">
-      <h1 className="mb-1 font-display text-2xl text-ink">Business settings</h1>
-      <p className="mb-6 text-sm text-ink-soft">
-        Everything here is specific to this business -- name, logo, and look. Nothing about the
-        system itself is tied to any one pharmacy.
-      </p>
+      <h1 className="mb-6 font-display text-2xl text-ink">Business settings</h1>
 
       <form onSubmit={handleSubmit} className="space-y-6">
         <section className="ledger-panel space-y-4 p-4">
@@ -200,10 +196,6 @@ export function SettingsPage() {
                 </optgroup>
               ))}
             </select>
-            <p className="mt-1 text-xs text-ink-soft">
-              Used to decide what counts as "today" for expiry checks, reports, and the audit
-              log -- always your own local day, not the server's.
-            </p>
           </Field>
         </section>
 

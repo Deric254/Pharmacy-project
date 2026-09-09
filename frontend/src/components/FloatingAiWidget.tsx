@@ -219,8 +219,7 @@ export function FloatingAiWidget() {
       <div className="flex-1 space-y-3 overflow-y-auto p-3">
         {conversation.length === 0 && (
           <p className="text-sm text-ink-soft">
-            Ask anything about your business — today's sales, what's low on stock, how a
-            product's margin looks. Answers are grounded in your real data.
+            Ask anything about today's sales, stock, or margins.
           </p>
         )}
         {conversation.map((turn, i) => (

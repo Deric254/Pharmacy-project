@@ -54,10 +54,6 @@ export function SalesPage() {
       <div className="mb-6 flex items-start justify-between">
         <div>
           <h1 className="mb-1 font-display text-2xl text-ink">Sales</h1>
-          <p className="text-sm text-ink-soft">
-            Every sale that's gone through the register, newest first. Open one to see exactly
-            what was sold, or to process a refund.
-          </p>
         </div>
         <button
           onClick={() => void downloadExport('/sales', {}, 'excel')}

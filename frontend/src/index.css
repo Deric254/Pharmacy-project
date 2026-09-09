@@ -37,6 +37,24 @@
     background: var(--color-brass-soft);
     color: var(--color-ink);
   }
+  /* Tailwind v4 Preflight sets cursor: default on buttons (matching
+     native OS behavior), not cursor: pointer -- every button in this
+     app is a real <button> (confirmed: no onClick on a div/li/tr
+     anywhere), so this single rule restores the expected pointer
+     cursor and a real hover affordance everywhere at once, instead of
+     every button needing its own cursor-pointer utility class. */
+  button:not(:disabled) {
+    cursor: pointer;
+    transition:
+      opacity 150ms ease,
+      filter 150ms ease;
+  }
+  button:not(:disabled):hover {
+    opacity: 0.85;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
   /* Every figure that represents money, quantity, or a date/time in a
      ledger row uses tabular figures so columns of numbers actually
      align -- the one non-negotiable rule of an accounting UI. */

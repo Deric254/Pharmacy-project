@@ -15,6 +15,7 @@ from datetime import date, datetime, timedelta
 import openpyxl
 from pypdf import PdfReader
 
+from app.core.business_time import business_today
 from app.core.database import AsyncSessionLocal
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
@@ -26,6 +27,19 @@ async def _login(client, username: str, password: str) -> str:
     r = await client.post("/api/v1/auth/login", json={"username": username, "password": password})
     assert r.status_code == 200, r.text
     return str(r.json()["access_token"])
+
+
+async def _business_today() -> date:
+    """
+    The business's real "today" (see business_time.py's own docstring
+    for why this must never be date.today() -- that's the test
+    runner's system clock, not the business's configured timezone,
+    and the two silently disagree for roughly 3 hours a day whenever
+    a business's local day has already turned over but the system
+    clock's hasn't, or vice versa).
+    """
+    async with AsyncSessionLocal() as db:
+        return await business_today(db)
 
 
 async def _make_product_with_batch(
@@ -80,7 +94,7 @@ class TestSalesSummaryAndProfit:
             headers={"Authorization": f"Bearer {employee_token}"},
         )
 
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             f"/api/v1/reports/sales?start_date={today}&end_date={today}",
             headers={"Authorization": f"Bearer {owner_token}"},
@@ -124,7 +138,7 @@ class TestSalesSummaryAndProfit:
         assert refund_resp.status_code == 201, refund_resp.text
         assert refund_resp.json()["total_amount"] == 10.0
 
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             f"/api/v1/reports/sales?start_date={today}&end_date={today}",
             headers={"Authorization": f"Bearer {owner_token}"},
@@ -179,7 +193,7 @@ class TestSalesSummaryAndProfit:
             headers={"Authorization": f"Bearer {employee_token}"},
         )
 
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             f"/api/v1/reports/profit?start_date={today}&end_date={today}",
             headers={"Authorization": f"Bearer {owner_token}"},
@@ -204,7 +218,7 @@ class TestSalesSummaryAndProfit:
         """
         admin_token = await _login(client, "sam", "AdminPass1")
         owner_token = await _login(client, "lucy", "S3curePass!")
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
 
         admin_r = await client.get(
             f"/api/v1/reports/profit?start_date={today}&end_date={today}",
@@ -225,7 +239,7 @@ class TestSalesSummaryAndProfit:
         Administrator report lockout -- confirm the general reports.view
         grant Administrator holds still works for everything else."""
         admin_token = await _login(client, "sam", "AdminPass1")
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
 
         sales = await client.get(
             f"/api/v1/reports/sales?start_date={today}&end_date={today}",
@@ -255,7 +269,7 @@ class TestSalesSummaryAndProfit:
             headers={"Authorization": f"Bearer {employee_token}"},
         )
 
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             f"/api/v1/reports/sales?start_date={today}&end_date={today}&export=excel",
             headers={"Authorization": f"Bearer {owner_token}"},
@@ -274,7 +288,7 @@ class TestSalesSummaryAndProfit:
         assert sheet[2][2].value == 15.0  # Total Revenue for the one sale
 
     async def test_expired_stock_export_produces_real_readable_pdf(self, client, owner_user):
-        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        yesterday = (await _business_today() - timedelta(days=1)).isoformat()
         await _make_product_with_batch(qty=10, cost=5.0, expiry=yesterday)
         owner_token = await _login(client, "lucy", "S3curePass!")
 
@@ -293,7 +307,7 @@ class TestSalesSummaryAndProfit:
         # Employee has neither reports.view nor reports.export in this
         # suite's seeded roles -- confirms the base permission gate first.
         token = await _login(client, "joe", "pass1234")
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             f"/api/v1/reports/sales?start_date={today}&end_date={today}&export=excel",
             headers={"Authorization": f"Bearer {token}"},
@@ -303,7 +317,7 @@ class TestSalesSummaryAndProfit:
 
 class TestExpiredStockReport:
     async def test_expired_batch_flagged_with_recommendation(self, client, owner_user):
-        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        yesterday = (await _business_today() - timedelta(days=1)).isoformat()
         await _make_product_with_batch(qty=20, cost=3.0, expiry=yesterday)
         token = await _login(client, "lucy", "S3curePass!")
 
@@ -459,7 +473,7 @@ class TestKpiDashboard:
             headers={"Authorization": f"Bearer {token}"},
         )
 
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/kpi-dashboard",
             params={"start_date": today, "end_date": today},
@@ -480,7 +494,7 @@ class TestKpiDashboard:
         # which would look like a real (bad) number instead of "you
         # can't see this".
         token = await _login(client, "sam", "AdminPass1")
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/kpi-dashboard",
             params={"start_date": today, "end_date": today},
@@ -502,7 +516,7 @@ class TestKpiDashboard:
             headers={"Authorization": f"Bearer {token}"},
         )
 
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/kpi-dashboard",
             params={"start_date": today, "end_date": today},
@@ -549,7 +563,7 @@ class TestKpiDashboard:
         assert refund_resp.status_code == 201, refund_resp.text
         assert refund_resp.json()["total_amount"] == 20.0
 
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/kpi-dashboard",
             params={"start_date": today, "end_date": today},
@@ -601,7 +615,7 @@ class TestKpiDashboard:
             headers={"Authorization": f"Bearer {token}"},
         )
 
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/kpi-dashboard",
             params={"start_date": today, "end_date": today},
@@ -655,7 +669,7 @@ class TestKpiDashboard:
             headers={"Authorization": f"Bearer {token}"},
         )
 
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/kpi-dashboard",
             params={"start_date": today, "end_date": today},
@@ -687,7 +701,7 @@ class TestKpiDashboard:
             headers={"Authorization": f"Bearer {token}"},
         )
 
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/kpi-dashboard",
             params={"start_date": today, "end_date": today},
@@ -731,7 +745,7 @@ class TestKpiDashboard:
         assert refund_resp.status_code == 201, refund_resp.text
         assert refund_resp.json()["total_amount"] == 30.0
 
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/kpi-dashboard",
             params={"start_date": today, "end_date": today},
@@ -762,7 +776,7 @@ class TestKpiDashboard:
             await db.commit()
 
         token = await _login(client, "lucy", "S3curePass!")
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/kpi-dashboard",
             params={"start_date": today, "end_date": today},
@@ -772,7 +786,7 @@ class TestKpiDashboard:
 
     async def test_requires_reports_view_permission(self, client, employee_user):
         token = await _login(client, "joe", "pass1234")
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/kpi-dashboard",
             params={"start_date": today, "end_date": today},
@@ -815,7 +829,7 @@ class TestDateBoundaryAccuracy:
             headers=headers,
         )
 
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/kpi-dashboard",
             params={"start_date": today, "end_date": today},
@@ -860,12 +874,12 @@ class TestDateBoundaryAccuracy:
 
             result = await db.execute(_select(Sale).where(Sale.id == sale["id"]))
             row = result.scalar_one()
-            _utc_start, utc_end_exclusive = await local_day_bounds_utc(db, date.today())
+            _utc_start, utc_end_exclusive = await local_day_bounds_utc(db, await business_today(db))
             just_before_local_midnight = utc_end_exclusive - timedelta(seconds=1)
             row.created_at = just_before_local_midnight
             await db.commit()
 
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/kpi-dashboard",
             params={"start_date": today, "end_date": today},
@@ -901,12 +915,12 @@ class TestDateBoundaryAccuracy:
 
             result = await db.execute(_select(Sale).where(Sale.id == sale["id"]))
             row = result.scalar_one()
-            _utc_start, utc_end_exclusive = await local_day_bounds_utc(db, date.today())
+            _utc_start, utc_end_exclusive = await local_day_bounds_utc(db, await business_today(db))
             just_before_local_midnight = utc_end_exclusive - timedelta(seconds=1)
             row.created_at = just_before_local_midnight
             await db.commit()
 
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/sales",
             params={"start_date": today, "end_date": today},
@@ -943,7 +957,7 @@ class TestTopCustomers:
                 headers=headers,
             )
 
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/top-customers",
             params={"start_date": today, "end_date": today},
@@ -972,7 +986,7 @@ class TestTopCustomers:
             headers=headers,
         )
 
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/top-customers",
             params={"start_date": today, "end_date": today},
@@ -1021,7 +1035,7 @@ class TestTopCustomers:
         assert refund_resp.status_code == 201, refund_resp.text
         assert refund_resp.json()["total_amount"] == 40.0
 
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/top-customers",
             params={"start_date": today, "end_date": today},
@@ -1078,7 +1092,7 @@ class TestSalesByCashier:
         assert refund_resp.status_code == 201, refund_resp.text
         assert refund_resp.json()["total_amount"] == 40.0
 
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/sales-by-cashier",
             params={"start_date": today, "end_date": today},
@@ -1092,7 +1106,7 @@ class TestSalesByCashier:
 
     async def test_requires_view_profit_permission(self, client, administrator_user):
         token = await _login(client, "sam", "AdminPass1")
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/sales-by-cashier",
             params={"start_date": today, "end_date": today},
@@ -1102,7 +1116,7 @@ class TestSalesByCashier:
 
     async def test_no_sales_returns_empty_not_an_error(self, client, owner_user):
         token = await _login(client, "lucy", "S3curePass!")
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/sales-by-cashier",
             params={"start_date": today, "end_date": today},
@@ -1340,7 +1354,7 @@ class TestRevenueTrend:
             headers=headers,
         )
 
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/revenue-trend",
             params={"start_date": today, "end_date": today},
@@ -1391,7 +1405,7 @@ class TestRevenueTrend:
             headers=headers,
         )
 
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/revenue-trend",
             params={"start_date": today, "end_date": today},
@@ -1427,7 +1441,7 @@ class TestProfitLossPdf:
             headers=headers,
         )
 
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/profit-loss-pdf",
             params={"start_date": today, "end_date": today},
@@ -1448,7 +1462,7 @@ class TestProfitLossPdf:
 
     async def test_requires_view_profit_permission(self, client, administrator_user):
         token = await _login(client, "sam", "AdminPass1")
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/profit-loss-pdf",
             params={"start_date": today, "end_date": today},
@@ -1502,8 +1516,8 @@ class TestProfitLossPdf:
             headers=headers,
         )
 
-        start = (date.today() - timedelta(days=1)).isoformat()
-        end = date.today().isoformat()
+        start = (await _business_today() - timedelta(days=1)).isoformat()
+        end = (await _business_today()).isoformat()
         r = await client.get(
             "/api/v1/reports/profit-loss-pdf",
             params={"start_date": start, "end_date": end},

@@ -13,6 +13,7 @@ from datetime import date, timedelta
 
 from sqlalchemy import select
 
+from app.core.business_time import business_today
 from app.core.database import AsyncSessionLocal
 from app.core.security import hash_password
 from app.models.audit_log import AuditLog
@@ -28,6 +29,16 @@ async def _login(client, username: str, password: str) -> str:
     r = await client.post("/api/v1/auth/login", json={"username": username, "password": password})
     assert r.status_code == 200, r.text
     return str(r.json()["access_token"])
+
+
+async def _business_today() -> date:
+    """
+    The business's real "today" -- see business_time.py's own
+    docstring for why date.today() (the test runner's system clock)
+    silently disagrees with this for part of every day.
+    """
+    async with AsyncSessionLocal() as db:
+        return await business_today(db)
 
 
 async def _make_product_with_batch(
@@ -695,8 +706,8 @@ class TestListSales:
             headers={"Authorization": f"Bearer {token}"},
         )
 
-        yesterday = (date.today() - timedelta(days=1)).isoformat()
-        two_days_ago = (date.today() - timedelta(days=2)).isoformat()
+        yesterday = (await _business_today() - timedelta(days=1)).isoformat()
+        two_days_ago = (await _business_today() - timedelta(days=2)).isoformat()
         r = await client.get(
             "/api/v1/sales",
             params={"start_date": two_days_ago, "end_date": yesterday},
@@ -792,7 +803,7 @@ class TestExpiredStockNeverSold:
     """
 
     async def test_batch_expired_yesterday_cannot_be_sold(self, client, owner_user):
-        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        yesterday = (await _business_today() - timedelta(days=1)).isoformat()
         product_id = await _make_product_with_batch(price=10.0, qty=20, expiry=yesterday)
         token = await _login(client, "lucy", "S3curePass!")
 
@@ -807,7 +818,7 @@ class TestExpiredStockNeverSold:
         assert r.status_code == 409
 
     async def test_batch_expiring_today_can_still_be_sold(self, client, owner_user):
-        today = date.today().isoformat()
+        today = (await _business_today()).isoformat()
         product_id = await _make_product_with_batch(price=10.0, qty=20, expiry=today)
         token = await _login(client, "lucy", "S3curePass!")
 
@@ -828,7 +839,7 @@ class TestExpiredStockNeverSold:
         and fulfill from the valid batch, not fail outright just
         because an expired batch happened to sort first.
         """
-        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        yesterday = (await _business_today() - timedelta(days=1)).isoformat()
         product_id = await _make_product_with_batch(price=10.0, qty=5, expiry=yesterday)
 
         async with AsyncSessionLocal() as db:

@@ -76,11 +76,6 @@ export function AuditLogPage() {
           Export to Excel
         </button>
       </div>
-      <p className="mb-6 text-sm text-ink-soft">
-        Every price change, refund, password reset, and role edit, in order — who did it and
-        when. Names shown here are recorded at the time of the action, not looked up fresh, so a
-        deactivated or renamed account never rewrites what actually happened.
-      </p>
 
       <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <label className="block">

@@ -43,12 +43,7 @@ export function AiAssistantPage() {
 
   return (
     <div className="p-6">
-      <h1 className="mb-1 font-display text-2xl text-ink">AI Settings</h1>
-      <p className="mb-6 text-sm text-ink-soft">
-        {canManageKeys
-          ? 'Bring your own API key from any supported provider. Keys are encrypted at rest and never shown again after you save them — only a masked preview. If your first-priority provider is unavailable, the next one by priority is tried automatically. Once a key is added, the assistant is available from the icon in the corner of every page.'
-          : 'Provider keys are shared across your whole team and managed by your pharmacy owner or administrator. Once one is added, the assistant is available from the icon in the corner of every page — there is nothing for you to configure here.'}
-      </p>
+      <h1 className="mb-6 font-display text-2xl text-ink">AI Settings</h1>
 
       {error && (
         <p role="alert" className="mb-4 border border-stamp-red-soft bg-stamp-red-soft/40 px-3 py-2 text-sm text-stamp-red">

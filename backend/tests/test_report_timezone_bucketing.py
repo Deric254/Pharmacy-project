@@ -18,6 +18,7 @@ from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import select
 
+from app.core.business_time import business_today
 from app.core.database import AsyncSessionLocal
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
@@ -74,8 +75,13 @@ class TestReportTimezoneBucketing:
 
         # Nairobi is UTC+3. 01:00 local "today" == 22:00 UTC "yesterday".
         # Overwrite created_at directly, same column the app itself
-        # writes, to simulate a real early-morning sale.
-        local_today = date.today()
+        # writes, to simulate a real early-morning sale. local_today
+        # must be the business's own today (business_today()), not
+        # date.today() -- this test exists to catch exactly the bug
+        # class where those two disagree, so its own harness computing
+        # "today" via the wrong clock would defeat the whole point.
+        async with AsyncSessionLocal() as db:
+            local_today = await business_today(db)
         utc_timestamp_for_1am_nairobi_today = datetime.combine(
             local_today, datetime.min.time()
         ) - timedelta(hours=2)  # 22:00 UTC on (local_today - 1 day)

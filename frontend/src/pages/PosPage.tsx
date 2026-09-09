@@ -624,9 +624,6 @@ export function PosPage() {
             <span>Total</span>
             <span className="figure">{formatCurrency(estimatedTotal)}</span>
           </div>
-          <p className="mt-1 text-xs text-ink-soft">
-            Estimate — final total is confirmed by the server at checkout.
-          </p>
 
           <button
             onClick={() => void handleCheckout()}

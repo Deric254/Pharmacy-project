@@ -10,12 +10,12 @@ AI assistant tests. The properties that matter:
      without any live network call to a paid third-party API.
 """
 
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, datetime, time, timedelta
 
 import httpx
 from sqlalchemy import select
 
-from app.core.business_time import business_today, get_business_timezone
+from app.core.business_time import business_today, get_business_timezone, local_day_bounds_utc
 from app.core.database import AsyncSessionLocal
 from app.core.security import decrypt_secret, encrypt_secret
 from app.models.ai_conversation import AIConversation, AIConversationMessage
@@ -1072,8 +1072,14 @@ class TestBusinessContext:
             db.add(batch)
             await db.flush()
 
-            # A real sale placed "yesterday", outside of today's window.
-            yesterday = datetime.now() - timedelta(days=1)
+            # A real sale placed "yesterday" (the business's own local
+            # yesterday, not datetime.now() - 1 day -- that's the test
+            # runner's system clock, which silently disagrees with the
+            # business's configured timezone for part of every day; see
+            # business_time.py's own docstring for the proof).
+            yesterday_local = await business_today(db) - timedelta(days=1)
+            utc_start, _utc_end = await local_day_bounds_utc(db, yesterday_local)
+            yesterday = utc_start + timedelta(hours=12)  # safely inside that local day
             sale = Sale(
                 cashier_user_id=owner_user.id,
                 subtotal=99.0,
@@ -1106,7 +1112,7 @@ class TestBusinessContext:
         def factory(provider, api_key):
             return ContextCapturingAdapter()
 
-        yesterday_str = yesterday.date().isoformat()
+        yesterday_str = yesterday_local.isoformat()
         async with AsyncSessionLocal() as db:
             service = AIAssistantService(db, adapter_factory=factory)
             await service.ask(
@@ -1166,13 +1172,22 @@ class TestBusinessContext:
         sale_id = sale.json()["id"]
 
         # Push the sale to yesterday -- outside today's default window.
-        yesterday = date.today() - timedelta(days=1)
+        # The business's own local yesterday (see business_time.py's
+        # docstring), converted to a safe mid-day UTC instant rather
+        # than combined naively with local midnight -- local midnight
+        # is not UTC midnight, so a naive combine risks landing back
+        # on the wrong calendar day, the exact bug this whole file is
+        # now written to avoid.
         async with AsyncSessionLocal() as db:
+            yesterday = await business_today(db) - timedelta(days=1)
+            utc_start, _utc_end = await local_day_bounds_utc(db, yesterday)
+            yesterday_utc_instant = utc_start + timedelta(hours=12)
+
             from app.models.sale import Sale
 
             result = await db.execute(select(Sale).where(Sale.id == sale_id))
             row = result.scalar_one()
-            row.created_at = datetime.combine(yesterday, datetime.min.time())
+            row.created_at = yesterday_utc_instant
             await db.commit()
 
             db.add(

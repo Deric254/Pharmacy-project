@@ -630,9 +630,6 @@ function BatchPriceRow({
             </div>
           </div>
         )}
-        {!sellsNext && (
-          <p className="mt-1 max-w-xs text-xs text-ink-soft">Sells after current batch (FEFO).</p>
-        )}
         {sellsNext && (
           <p className="mt-1 text-xs text-stamp-green">Sells next.</p>
         )}
@@ -1384,8 +1381,6 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
 
   return (
     <Modal title="Import products from Excel" onClose={onClose}>
-      <p className="text-sm text-ink-soft">All-or-nothing import.</p>
-
       <label className="mt-3 block">
         <span className="block text-xs uppercase tracking-wide text-ink-soft">
           Choose file

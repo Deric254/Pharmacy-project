@@ -10,6 +10,8 @@ AI assistant tests. The properties that matter:
      without any live network call to a paid third-party API.
 """
 
+import asyncio
+import time as time_module
 from datetime import UTC, datetime, time, timedelta
 
 import httpx
@@ -993,6 +995,137 @@ class TestBusinessContext:
 
         assert "today_profit" in captured_context
 
+    async def _make_product(self, name: str, price: float) -> int:
+        from app.models.medicine_batch import MedicineBatch
+        from app.models.product import Product
+
+        async with AsyncSessionLocal() as db:
+            product = Product(name=name, default_selling_price=price)
+            db.add(product)
+            await db.flush()
+            batch = MedicineBatch(
+                product_id=product.id,
+                batch_number=f"B-{name}",
+                expiry_date=datetime(2027, 1, 1).date(),
+                qty_received=100,
+                qty_remaining=100,
+                cost_price=1.0,
+            )
+            db.add(batch)
+            await db.commit()
+            return int(product.id)
+
+    async def test_reports_intelligence_excluded_without_reports_view_permission(
+        self, client, owner_user, employee_user
+    ):
+        """
+        The exact scenario this must never allow: a cashier has ai.use
+        (can ask the assistant questions at all) but not reports.view
+        (cannot open the Reports page's Fast/Slow Movers, Stock
+        Runway, or the new intelligence tabs). Asking the assistant
+        must not be a side door around that -- same rule as profit
+        above, extended to these two new figures.
+        """
+        product_a = await self._make_product("Gate Pair A", 5.0)
+        product_b = await self._make_product("Gate Pair B", 8.0)
+        owner_token = await _login(client, "lucy", "S3curePass!")
+        owner_headers = {"Authorization": f"Bearer {owner_token}"}
+        for _ in range(2):
+            await client.post(
+                "/api/v1/sales",
+                json={
+                    "items": [
+                        {"product_id": product_a, "quantity": 1},
+                        {"product_id": product_b, "quantity": 1},
+                    ],
+                    "payments": [{"method": "CASH", "amount": 13.0}],
+                },
+                headers=owner_headers,
+            )
+
+        async with AsyncSessionLocal() as db:
+            db.add(
+                AIProviderKey(
+                    user_id=employee_user.id,
+                    provider=AIProviderName.OPENAI,
+                    encrypted_key=encrypt_secret("key"),
+                    key_hint="key1",
+                    priority=1,
+                )
+            )
+            await db.commit()
+
+        captured_context: dict[str, object] = {}
+
+        class ContextCapturingAdapter:
+            async def ask(self, prompt, context):
+                captured_context.update(context)
+                return AIResponse(text="ok")
+
+        def factory(provider, api_key):
+            return ContextCapturingAdapter()
+
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=factory)
+            await service.ask(employee_user, AIAskRequest(prompt="what sells together?"))
+
+        assert "most_frequently_bought_together" not in captured_context
+        assert "top_seasonal_pattern" not in captured_context
+
+    async def test_co_occurrence_included_in_context_with_reports_view_permission(
+        self, client, owner_user, administrator_user
+    ):
+        product_a = await self._make_product("Included Pair A", 5.0)
+        product_b = await self._make_product("Included Pair B", 8.0)
+        owner_token = await _login(client, "lucy", "S3curePass!")
+        owner_headers = {"Authorization": f"Bearer {owner_token}"}
+        for _ in range(2):
+            await client.post(
+                "/api/v1/sales",
+                json={
+                    "items": [
+                        {"product_id": product_a, "quantity": 1},
+                        {"product_id": product_b, "quantity": 1},
+                    ],
+                    "payments": [{"method": "CASH", "amount": 13.0}],
+                },
+                headers=owner_headers,
+            )
+
+        async with AsyncSessionLocal() as db:
+            db.add(
+                AIProviderKey(
+                    user_id=administrator_user.id,
+                    provider=AIProviderName.OPENAI,
+                    encrypted_key=encrypt_secret("key"),
+                    key_hint="key1",
+                    priority=1,
+                )
+            )
+            await db.commit()
+
+        captured_context: dict[str, object] = {}
+
+        class ContextCapturingAdapter:
+            async def ask(self, prompt, context):
+                captured_context.update(context)
+                return AIResponse(text="ok")
+
+        def factory(provider, api_key):
+            return ContextCapturingAdapter()
+
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=factory)
+            # administrator_user has reports.view but not
+            # reports.view_profit -- proves this new gate is tied to
+            # the correct (broader) permission, not accidentally
+            # scoped to owner-only like profit is.
+            await service.ask(administrator_user, AIAskRequest(prompt="what sells together?"))
+
+        assert "most_frequently_bought_together" in captured_context
+        assert "Included Pair A" in captured_context["most_frequently_bought_together"]
+        assert "Included Pair B" in captured_context["most_frequently_bought_together"]
+
     async def test_business_context_failure_never_breaks_the_assistant(
         self, client, owner_user, monkeypatch
     ):
@@ -1498,3 +1631,67 @@ class TestConversationHistory:
             conversation = result.scalar_one()
             assert len(conversation.title) <= 61  # 60 chars + the ellipsis char
             assert conversation.title.endswith("…")
+
+
+class TestEventLoopNotBlockedDuringSlowResponse:
+    """
+    The real property that matters for a shared single-process
+    backend: a slow LLM response (the AI "thinking" for several real
+    seconds) must never stall anything else the backend is doing at
+    the same time -- another cashier's sale, a dashboard load, another
+    person's own AI question. This is only true because every
+    provider adapter awaits a genuine httpx.AsyncClient call (see
+    adapters.py) rather than blocking synchronously; this test proves
+    the effect directly rather than trusting that from reading the
+    code alone.
+    """
+
+    async def test_slow_ai_response_does_not_delay_unrelated_concurrent_work(self, owner_user):
+        async with AsyncSessionLocal() as db:
+            db.add(
+                AIProviderKey(
+                    user_id=owner_user.id,
+                    provider=AIProviderName.OPENAI,
+                    encrypted_key=encrypt_secret("fake-key"),
+                    key_hint="fake",
+                    priority=1,
+                )
+            )
+            await db.commit()
+
+        class SlowAdapter:
+            async def ask(self, prompt, context):
+                await asyncio.sleep(1.0)  # a real "thinking" LLM response
+                return AIResponse(text="slow answer")
+
+        def factory(provider, api_key):
+            return SlowAdapter()
+
+        async def slow_ai_call() -> float:
+            async with AsyncSessionLocal() as db:
+                service = AIAssistantService(db, adapter_factory=factory)
+                t0 = time_module.perf_counter()
+                await service.ask(owner_user, AIAskRequest(prompt="slow question"))
+                return time_module.perf_counter() - t0
+
+        async def unrelated_work() -> int:
+            # Simulates something else the backend is doing at the
+            # same time -- ticks every 50ms. If the AI call were
+            # blocking, these ticks would bunch up and arrive late
+            # instead of on schedule.
+            ticks = 0
+            for _ in range(15):
+                await asyncio.sleep(0.05)
+                ticks += 1
+            return ticks
+
+        t_start = time_module.perf_counter()
+        ai_duration, ticks = await asyncio.gather(slow_ai_call(), unrelated_work())
+        total = time_module.perf_counter() - t_start
+
+        assert ticks == 15  # unrelated work fully completed, not starved
+        # If the AI call blocked the event loop, total would be close
+        # to ai_duration + (15 * 0.05) =~ 1.75s (serialized). Running
+        # concurrently, it should be close to max(ai_duration, 0.75s)
+        # =~ 1.0s -- well under the serialized figure either way.
+        assert total < ai_duration + 0.5

@@ -1,5 +1,6 @@
 import { useEffect, lazy, Suspense, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { CollapsibleReportCard } from '../components/CollapsibleReportCard'
 import { inventoryApi } from '../api/domain'
 import { reportsApi } from '../api/reports'
 import { useAuthStore } from '../auth/store'
@@ -15,8 +16,10 @@ import type {
   FastSlowMoversOut,
   KpiDashboardOut,
   LowStockProductOut,
+  ProductCoOccurrenceOut,
   RevenuePotentialOut,
   RevenueTrendOut,
+  SeasonalTrendsOut,
   StockRunwayOut,
   StockValuationOut,
   TopCustomerEntry,
@@ -36,6 +39,31 @@ const CustomerParetoChart = lazy(() =>
     default: m.CustomerParetoChart,
   })),
 )
+
+const MONTH_NAMES = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+]
+
+function topSeasonalEntries(seasonal: SeasonalTrendsOut, count = 5) {
+  // Entries already come back sorted by total_quantity_sold (see
+  // ReportService.seasonal_trends), across every product/month
+  // combination in range -- this is purely the overview card's own
+  // cap to a handful of headline patterns, matching the same "Intel
+  // shows an overview, Reports shows everything" split as every other
+  // card here.
+  return seasonal.entries.slice(0, count)
+}
 
 type Preset = 'today' | 'week' | 'month' | 'custom'
 
@@ -77,6 +105,8 @@ export function DashboardPage() {
   const [topCustomers, setTopCustomers] = useState<TopCustomerEntry[] | null>(null)
   const [fastMovers, setFastMovers] = useState<FastSlowMoversOut | null>(null)
   const [stockRunway, setStockRunway] = useState<StockRunwayOut | null>(null)
+  const [coOccurrence, setCoOccurrence] = useState<ProductCoOccurrenceOut | null>(null)
+  const [seasonalTrends, setSeasonalTrends] = useState<SeasonalTrendsOut | null>(null)
   const [expiredStock, setExpiredStock] = useState<ExpiredStockReportOut | null>(null)
   const [cashierSales, setCashierSales] = useState<CashierSalesEntry[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -168,11 +198,18 @@ export function DashboardPage() {
     // custom range or misrepresent what's actually being shown.
     if (!canSeeReports) return
     let cancelled = false
-    Promise.all([reportsApi.stockRunway(30), reportsApi.fastSlowMovers(30, 5)])
-      .then(([runway, movers]) => {
+    Promise.all([
+      reportsApi.stockRunway(30),
+      reportsApi.fastSlowMovers(30, 5),
+      reportsApi.coOccurrence(90, 5),
+      reportsApi.seasonalTrends(730),
+    ])
+      .then(([runway, movers, pairs, seasonal]) => {
         if (cancelled) return
         setStockRunway(runway)
         setFastMovers(movers)
+        setCoOccurrence(pairs)
+        setSeasonalTrends(seasonal)
       })
       .catch(() => {
         // Supplementary to the KPI figures above -- omit rather than
@@ -360,7 +397,7 @@ export function DashboardPage() {
       {canSeeReports && topCustomers && topCustomers.length > 0 && (
         <div className="mb-6 ledger-panel p-4">
           <h2 className="mb-2 text-xs uppercase tracking-wide text-ink-soft">
-            Customer revenue
+            Customer revenue (Pareto)
           </h2>
           <Suspense fallback={<p className="text-sm text-ink-soft">Loading chart…</p>}>
             <CustomerParetoChart data={topCustomers} />
@@ -387,10 +424,10 @@ export function DashboardPage() {
       )}
 
       {canSeeReports && fastMovers && fastMovers.fast_movers.length > 0 && (
-        <div className="mb-6 ledger-panel p-4">
-          <h2 className="mb-2 text-xs uppercase tracking-wide text-ink-soft">
-            Fastest movers, last {fastMovers.period_days} days
-          </h2>
+        <CollapsibleReportCard
+          title={`Fastest movers, last ${fastMovers.period_days} days`}
+          reportTab="movers"
+        >
           <ul className="divide-y divide-rule">
             {fastMovers.fast_movers.map((p) => (
               <li key={p.product_id} className="flex justify-between py-1.5 text-sm">
@@ -399,14 +436,14 @@ export function DashboardPage() {
               </li>
             ))}
           </ul>
-        </div>
+        </CollapsibleReportCard>
       )}
 
       {canSeeReports && stockRunway && stockRunway.entries.length > 0 && (
-        <div className="mb-6 ledger-panel p-4">
-          <h2 className="mb-2 text-xs uppercase tracking-wide text-ink-soft">
-            Stock runway, last {stockRunway.lookback_days} days
-          </h2>
+        <CollapsibleReportCard
+          title={`Stock runway, last ${stockRunway.lookback_days} days`}
+          reportTab="stockRunway"
+        >
           <ul className="divide-y divide-rule">
             {stockRunway.entries.slice(0, 5).map((e) => (
               <li key={e.product_id} className="flex justify-between py-1.5 text-sm">
@@ -423,13 +460,12 @@ export function DashboardPage() {
               </li>
             ))}
           </ul>
-        </div>
+        </CollapsibleReportCard>
       )}
 
       {canSeeReports && expiredStock && expiredStock.entries.length > 0 && (
-        <div className="mb-6 ledger-panel p-4">
-          <h2 className="text-xs uppercase tracking-wide text-ink-soft">Expired stock</h2>
-          <div className="mt-2 grid grid-cols-2 gap-4">
+        <CollapsibleReportCard title="Expired stock" reportTab="expired">
+          <div className="grid grid-cols-2 gap-4">
             <div>
               <p className="text-xs text-ink-soft">Value at cost</p>
               <p className="figure text-xl text-stamp-red">
@@ -441,7 +477,46 @@ export function DashboardPage() {
               <p className="figure text-xl text-ink">{expiredStock.entries.length}</p>
             </div>
           </div>
-        </div>
+        </CollapsibleReportCard>
+      )}
+
+      {canSeeReports && coOccurrence && coOccurrence.pairs.length > 0 && (
+        <CollapsibleReportCard
+          title={`Frequently bought together, last ${coOccurrence.lookback_days} days`}
+          reportTab="coOccurrence"
+        >
+          <ul className="divide-y divide-rule">
+            {coOccurrence.pairs.slice(0, 5).map((p) => (
+              <li
+                key={`${p.product_a_id}-${p.product_b_id}`}
+                className="flex justify-between py-1.5 text-sm"
+              >
+                <span className="truncate pr-2">
+                  {p.product_a_name} + {p.product_b_name}
+                </span>
+                <span className="figure text-ink-soft">{p.percent_of_a_sales}%</span>
+              </li>
+            ))}
+          </ul>
+        </CollapsibleReportCard>
+      )}
+
+      {canSeeReports && seasonalTrends && seasonalTrends.has_sufficient_history && (
+        <CollapsibleReportCard title="Seasonal trends" reportTab="seasonalTrends">
+          <ul className="divide-y divide-rule">
+            {topSeasonalEntries(seasonalTrends).map((e) => (
+              <li
+                key={`${e.product_id}-${e.month}`}
+                className="flex justify-between py-1.5 text-sm"
+              >
+                <span className="truncate pr-2">{e.name}</span>
+                <span className="figure text-ink-soft">
+                  {MONTH_NAMES[e.month - 1]}: {e.total_quantity_sold} sold
+                </span>
+              </li>
+            ))}
+          </ul>
+        </CollapsibleReportCard>
       )}
 
       {canSeeProfit && revenuePotential && revenuePotential.by_product.length > 0 && (

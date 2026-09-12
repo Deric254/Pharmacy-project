@@ -13,10 +13,12 @@ from app.schemas.reports import (
     CashierSalesOut,
     FastSlowMoversOut,
     KpiDashboardOut,
+    ProductCoOccurrenceOut,
     ProfitReportOut,
     ReceivingDiscrepancyReportOut,
     RevenuePotentialOut,
     RevenueTrendOut,
+    SeasonalTrendsOut,
     StockRunwayOut,
     StockTakeHistoryOut,
     TopCustomersOut,
@@ -294,6 +296,31 @@ async def fast_slow_movers(
     limit: int = Query(default=10, ge=1, le=100),
 ) -> FastSlowMoversOut:
     return await ReportService(db).fast_slow_movers(days=days, limit=limit)
+
+
+@router.get(
+    "/co-occurrence",
+    response_model=ProductCoOccurrenceOut,
+    dependencies=[Depends(require_permission("reports.view"))],
+)
+async def product_co_occurrence(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    days: int = Query(default=90, ge=1),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> ProductCoOccurrenceOut:
+    return await ReportService(db).product_co_occurrence(days=days, limit=limit)
+
+
+@router.get(
+    "/seasonal-trends",
+    response_model=SeasonalTrendsOut,
+    dependencies=[Depends(require_permission("reports.view"))],
+)
+async def seasonal_trends(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    days: int = Query(default=730, ge=1),
+) -> SeasonalTrendsOut:
+    return await ReportService(db).seasonal_trends(days=days)
 
 
 @router.get(

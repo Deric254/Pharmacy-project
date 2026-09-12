@@ -380,6 +380,120 @@ class TestReconciliation:
         assert issues[batch_id]["batch_number"]
 
 
+class TestStockMovementHistory:
+    """
+    The real gap this closes: StockMovement has always been the
+    complete, correct ledger of every quantity change (see its own
+    docstring -- sales, refunds, adjustments, write-offs, corrections,
+    and purchase receipts all write here), but nothing ever exposed it
+    through the API. It existed and was accurate; nobody could see it.
+    """
+
+    async def test_a_purchase_receipt_appears_in_the_history(self, client, owner_user):
+        product_id = await _make_product("Movement History Product")
+        batch_id = await _add_batch(product_id, qty=40)
+
+        token = await _login(client, "lucy", "S3curePass!")
+        r = await client.get(
+            "/api/v1/inventory/movements",
+            params={"batch_id": batch_id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 1
+        entry = body["entries"][0]
+        assert entry["movement_type"] == "PURCHASE"
+        assert entry["quantity_delta"] == 40
+        assert entry["product_name"] == "Movement History Product"
+        assert entry["batch_id"] == batch_id
+
+    async def test_filters_by_product_and_movement_type(self, client, owner_user):
+        product_a = await _make_product("Filter Product A")
+        product_b = await _make_product("Filter Product B")
+        batch_a = await _add_batch(product_a, qty=50, batch_number="FA1")
+        await _add_batch(product_b, qty=60, batch_number="FB1")
+
+        async with AsyncSessionLocal() as db:
+            db.add(
+                StockMovement(
+                    batch_id=batch_a,
+                    movement_type=MovementType.ADJUSTMENT,
+                    quantity_delta=-5,
+                    reason="damaged",
+                    created_by_user_id=None,
+                )
+            )
+            await db.commit()
+
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        by_product = await client.get(
+            "/api/v1/inventory/movements", params={"product_id": product_a}, headers=headers
+        )
+        assert by_product.json()["total"] == 2  # the PURCHASE + the ADJUSTMENT
+        assert all(e["product_id"] == product_a for e in by_product.json()["entries"])
+
+        by_type = await client.get(
+            "/api/v1/inventory/movements",
+            params={"product_id": product_a, "movement_type": "ADJUSTMENT"},
+            headers=headers,
+        )
+        assert by_type.json()["total"] == 1
+        assert by_type.json()["entries"][0]["reason"] == "damaged"
+
+    async def test_a_purchase_order_receipt_traces_back_through_the_history(
+        self, client, owner_user
+    ):
+        """
+        Proves the fix made to purchasing_service.py actually connects
+        end to end: receiving stock via a real purchase order shows up
+        here too, not just batches created directly in tests.
+        """
+        product_id = await _make_product("PO Traced Product")
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        supplier = await client.post(
+            "/api/v1/suppliers", json={"name": "Traced Supplier"}, headers=headers
+        )
+        po = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": supplier.json()["id"],
+                "lines": [
+                    {
+                        "product_id": product_id,
+                        "quantity": 25,
+                        "batch_number": "PO-TRACE-1",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 4.0,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert po.status_code == 201, po.text
+
+        r = await client.get(
+            "/api/v1/inventory/movements", params={"product_id": product_id}, headers=headers
+        )
+        entries = r.json()["entries"]
+        assert len(entries) == 1
+        assert entries[0]["movement_type"] == "PURCHASE"
+        assert entries[0]["quantity_delta"] == 25
+
+    async def test_requires_inventory_adjust_permission(self, client, employee_user):
+        # employee_user has inventory.view but not inventory.adjust --
+        # matching reconcile's own permission tier, since this is
+        # equally audit-sensitive detail, not routine stock browsing.
+        token = await _login(client, "joe", "pass1234")
+        r = await client.get(
+            "/api/v1/inventory/movements", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 403
+
+
 class TestSaleTriggeredLowStockEvent:
     async def test_sale_dropping_below_reorder_point_publishes_stock_low(
         self, client, employee_user

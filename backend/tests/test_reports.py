@@ -43,10 +43,14 @@ async def _business_today() -> date:
 
 
 async def _make_product_with_batch(
-    price: float = 10.0, cost: float = 4.0, qty: int = 50, expiry: str = "2027-01-01"
+    price: float = 10.0,
+    cost: float = 4.0,
+    qty: int = 50,
+    expiry: str = "2027-01-01",
+    name: str = "Report Test Product",
 ) -> tuple[int, int]:
     async with AsyncSessionLocal() as db:
-        product = Product(name="Report Test Product", default_selling_price=price)
+        product = Product(name=name, default_selling_price=price)
         db.add(product)
         await db.flush()
         batch = MedicineBatch(
@@ -371,6 +375,204 @@ class TestFastSlowMovers:
         )
         never_sold_ids = {m["product_id"] for m in r.json()["never_sold"]}
         assert product_id in never_sold_ids
+
+
+class TestProductCoOccurrence:
+    async def test_two_products_bought_together_form_a_pair(self, client, owner_user):
+        product_a, _ = await _make_product_with_batch(price=5.0, qty=100, name="Co-occur A")
+        product_b, _ = await _make_product_with_batch(price=8.0, qty=100, name="Co-occur B")
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        for _ in range(2):
+            await client.post(
+                "/api/v1/sales",
+                json={
+                    "items": [
+                        {"product_id": product_a, "quantity": 1},
+                        {"product_id": product_b, "quantity": 1},
+                    ],
+                    "payments": [{"method": "CASH", "amount": 13.0}],
+                },
+                headers=headers,
+            )
+
+        r = await client.get("/api/v1/reports/co-occurrence", headers=headers)
+        assert r.status_code == 200
+        pairs = r.json()["pairs"]
+        matching = [
+            p for p in pairs if {p["product_a_id"], p["product_b_id"]} == {product_a, product_b}
+        ]
+        assert len(matching) == 1
+        assert matching[0]["co_occurrence_count"] == 2
+        assert matching[0]["percent_of_a_sales"] == 100.0
+
+    async def test_products_never_in_the_same_sale_do_not_pair(self, client, owner_user):
+        product_a, _ = await _make_product_with_batch(price=5.0, qty=100, name="Never-pair A")
+        product_b, _ = await _make_product_with_batch(price=8.0, qty=100, name="Never-pair B")
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        for pid, price in ((product_a, 5.0), (product_b, 8.0)):
+            await client.post(
+                "/api/v1/sales",
+                json={
+                    "items": [{"product_id": pid, "quantity": 1}],
+                    "payments": [{"method": "CASH", "amount": price}],
+                },
+                headers=headers,
+            )
+
+        r = await client.get("/api/v1/reports/co-occurrence", headers=headers)
+        pairs = r.json()["pairs"]
+        matching = [
+            p for p in pairs if {p["product_a_id"], p["product_b_id"]} == {product_a, product_b}
+        ]
+        assert matching == []
+
+    async def test_a_fefo_split_does_not_inflate_the_count(self, client, owner_user):
+        """
+        The property this whole report depends on: SaleItem is one row
+        per (sale, batch) allocation, not per cart line (see
+        SaleItem's own docstring). Buying enough of product_a to force
+        a FEFO split across two batches, in the same sale as
+        product_b, must still count each sale once -- not inflated by
+        however many batches that sale's line happened to split
+        across.
+        """
+        async with AsyncSessionLocal() as db:
+            product = Product(name="FEFO Split Product", default_selling_price=5.0)
+            db.add(product)
+            await db.flush()
+            batch1 = MedicineBatch(
+                product_id=product.id,
+                batch_number="FEFO-1",
+                expiry_date=date(2027, 1, 1),
+                qty_received=10,
+                qty_remaining=10,
+                cost_price=2.0,
+            )
+            batch2 = MedicineBatch(
+                product_id=product.id,
+                batch_number="FEFO-2",
+                expiry_date=date(2027, 6, 1),
+                qty_received=10,
+                qty_remaining=10,
+                cost_price=2.0,
+            )
+            db.add_all([batch1, batch2])
+            await db.commit()
+            product_a = int(product.id)
+
+        product_b, _ = await _make_product_with_batch(price=8.0, qty=100, name="FEFO Split B")
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # 8 units of product_a per sale, twice: batch1 only has 10, so
+        # the second sale forces a FEFO split (2 left in batch1 + 6
+        # from batch2) -- two SaleItem rows for that one (sale,
+        # product_a) pair. Two sales total must count as
+        # co_occurrence_count == 2, not 3, which an un-deduplicated
+        # count would produce from the split.
+        for _ in range(2):
+            r = await client.post(
+                "/api/v1/sales",
+                json={
+                    "items": [
+                        {"product_id": product_a, "quantity": 8},
+                        {"product_id": product_b, "quantity": 1},
+                    ],
+                    "payments": [{"method": "CASH", "amount": 48.0}],
+                },
+                headers=headers,
+            )
+            assert r.status_code == 201, r.text
+
+        report = await client.get("/api/v1/reports/co-occurrence", headers=headers)
+        pairs = report.json()["pairs"]
+        matching = [
+            p for p in pairs if {p["product_a_id"], p["product_b_id"]} == {product_a, product_b}
+        ]
+        assert len(matching) == 1
+        assert matching[0]["co_occurrence_count"] == 2  # two sales, not three
+
+    async def test_requires_reports_view_permission(self, client, employee_user):
+        token = await _login(client, "joe", "pass1234")
+        r = await client.get(
+            "/api/v1/reports/co-occurrence", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 403
+
+
+class TestSeasonalTrends:
+    async def test_insufficient_history_for_a_brand_new_business(self, client, owner_user):
+        product_id, _ = await _make_product_with_batch(price=5.0, qty=10)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 5.0}],
+            },
+            headers=headers,
+        )
+
+        r = await client.get("/api/v1/reports/seasonal-trends", headers=headers)
+        assert r.status_code == 200
+        assert r.json()["has_sufficient_history"] is False
+
+    async def test_quantities_grouped_by_calendar_month_across_years(self, client, owner_user):
+        product_id, _ = await _make_product_with_batch(price=5.0, qty=100)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        sale1 = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 4}],
+                "payments": [{"method": "CASH", "amount": 20.0}],
+            },
+            headers=headers,
+        )
+        sale2 = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 6}],
+                "payments": [{"method": "CASH", "amount": 30.0}],
+            },
+            headers=headers,
+        )
+
+        # Backdate both into April, two different years -- a real
+        # seasonal pattern is the SUM across years for that month,
+        # not two separate single-year data points.
+        async with AsyncSessionLocal() as db:
+            from sqlalchemy import select
+
+            from app.models.sale import Sale
+
+            for sale_id, year in ((sale1.json()["id"], 2024), (sale2.json()["id"], 2025)):
+                result = await db.execute(select(Sale).where(Sale.id == sale_id))
+                row = result.scalar_one()
+                row.created_at = datetime(year, 4, 15, 12, 0, 0)
+            await db.commit()
+
+        r = await client.get(
+            "/api/v1/reports/seasonal-trends", params={"days": 3650}, headers=headers
+        )
+        assert r.status_code == 200
+        entries = [e for e in r.json()["entries"] if e["product_id"] == product_id]
+        assert len(entries) == 1  # both years collapse into one April entry
+        assert entries[0]["month"] == 4
+        assert entries[0]["total_quantity_sold"] == 10  # 4 + 6 summed
+
+    async def test_requires_reports_view_permission(self, client, employee_user):
+        token = await _login(client, "joe", "pass1234")
+        r = await client.get(
+            "/api/v1/reports/seasonal-trends", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 403
 
 
 class TestReceivingDiscrepancies:

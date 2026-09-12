@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.schemas._money import Money, PositiveQuantity
 
@@ -11,6 +11,21 @@ class BatchCreate(BaseModel):
     qty_received: PositiveQuantity
     cost_price: Money
     selling_price: Money | None = None
+
+    @model_validator(mode="after")
+    def selling_price_must_not_be_below_cost(self) -> "BatchCreate":
+        # A batch sold below what it cost to bring in loses money on
+        # every single unit sold, guaranteed, before any other cost
+        # (rent, staff, anything) is even counted -- almost always a
+        # typo (swapped fields, a decimal in the wrong place) rather
+        # than a deliberate loss-leader, and the one place to catch it
+        # is here, before it's ever possible to sell at this price.
+        if self.selling_price is not None and self.selling_price < self.cost_price:
+            raise ValueError(
+                f"Selling price ({self.selling_price}) is below cost price "
+                f"({self.cost_price}) -- this batch would lose money on every unit sold."
+            )
+        return self
 
 
 class BatchUpdate(BaseModel):

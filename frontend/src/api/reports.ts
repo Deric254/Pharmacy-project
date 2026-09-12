@@ -4,11 +4,13 @@ import type {
   ExpiredStockReportOut,
   FastSlowMoversOut,
   KpiDashboardOut,
+  ProductCoOccurrenceOut,
   ProfitReportOut,
   ReceivingDiscrepancyReportOut,
   RevenuePotentialOut,
   RevenueTrendOut,
   SalesSummaryOut,
+  SeasonalTrendsOut,
   StockRunwayOut,
   StockTakeHistoryOut,
   TopCustomersOut,
@@ -53,6 +55,10 @@ export const reportsApi = {
       start_date: startDate,
       end_date: endDate,
     }),
+  coOccurrence: (days = 90, limit = 50) =>
+    api.get<ProductCoOccurrenceOut>('/reports/co-occurrence', { days, limit }),
+  seasonalTrends: (days = 730) =>
+    api.get<SeasonalTrendsOut>('/reports/seasonal-trends', { days }),
 }
 
 // Kept under its original name here so ReportsPage.tsx's existing

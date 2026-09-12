@@ -24,6 +24,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import StockTakeClosedEvent, publish
+from app.models.audit_log import AuditLog
 from app.models.medicine_batch import MedicineBatch
 from app.models.stock_movement import MovementType, StockMovement
 from app.models.stock_take import StockTake, StockTakeItem, StockTakeStatus
@@ -217,6 +218,28 @@ class StockTakeService:
             expected_value += item.expected_qty * batch.cost_price
             if variance < 0:
                 shrinkage_value += abs(variance) * batch.cost_price
+
+        # Summary-level fact StockMovement's per-batch rows don't
+        # capture on their own: who closed this count, and what it
+        # found in aggregate. Individual variances are already fully
+        # attributed via _apply_variance's StockMovement rows (visible
+        # at GET /inventory/movements); this is the "who signed off on
+        # this stock take, and what did it show" record a real audit
+        # review actually asks for first.
+        self.db.add(
+            AuditLog(
+                user_id=user.id,
+                user_name_snapshot=user.full_name,
+                action="stock_take.closed",
+                entity_type="stock_take",
+                entity_id=str(stock_take.id),
+                old_value=None,
+                new_value=(
+                    f"{len(stock_take.items)} item(s) counted, "
+                    f"shrinkage_value={shrinkage_value:.2f}, expected_value={expected_value:.2f}"
+                ),
+            )
+        )
 
         await self.db.commit()
         await self.db.refresh(stock_take, attribute_names=["items", "status", "closed_at"])

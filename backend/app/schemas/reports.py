@@ -199,6 +199,42 @@ class StockRunwayOut(BaseModel):
     caveat: str
 
 
+class ProductPairEntry(BaseModel):
+    product_a_id: int
+    product_a_name: str
+    product_b_id: int
+    product_b_name: str
+    # Distinct sales containing both -- see the service method's own
+    # docstring for why this is deduplicated by (sale_id, product_id)
+    # first, not a raw SaleItem count.
+    co_occurrence_count: int
+    # Of sales containing product_a, the % that also contained
+    # product_b -- the actionable "if X, how often Y too" number, not
+    # just a raw count that means nothing without a denominator.
+    percent_of_a_sales: float
+
+
+class ProductCoOccurrenceOut(BaseModel):
+    lookback_days: int
+    pairs: list[ProductPairEntry]
+
+
+class SeasonalTrendEntry(BaseModel):
+    product_id: int
+    name: str
+    month: int  # 1-12, calendar month, summed across every year in range
+    total_quantity_sold: int
+
+
+class SeasonalTrendsOut(BaseModel):
+    lookback_days: int
+    entries: list[SeasonalTrendEntry]
+    # False until there's enough real history to call a single-month
+    # spike a "pattern" rather than one occurrence -- see the service
+    # method's own docstring for the exact threshold and reasoning.
+    has_sufficient_history: bool
+
+
 class RevenueTrendPoint(BaseModel):
     period_label: str  # e.g. "2026-07-15", "2026-W29", "2026-07"
     revenue: float

@@ -3,7 +3,7 @@ import { useConfigStore } from '../config/store'
 import { configApi } from '../api/config'
 import { ApiError } from '../api/client'
 import { THEMES, applyTheme } from '../theme/themes'
-import { useUpdateCheck } from '../lib/updateCheck'
+import { useReleaseHistory, useUpdateCheck } from '../lib/updateCheck'
 import { TIMEZONE_GROUPS, timezoneLabel } from '../lib/timezones'
 
 export function SettingsPage() {
@@ -271,6 +271,7 @@ export function SettingsPage() {
       <section className="ledger-panel mt-6 space-y-3 p-4">
         <h2 className="text-xs uppercase tracking-wide text-ink-soft">Software updates</h2>
         <UpdateSection />
+        <VersionHistorySection />
       </section>
     </div>
   )
@@ -332,6 +333,65 @@ function UpdateSection() {
         </button>
       </div>
     </div>
+  )
+}
+
+function VersionHistorySection() {
+  const { releases, loading, error, load } = useReleaseHistory()
+
+  return (
+    <details className="mt-3 border-t border-rule pt-3">
+      <summary
+        className="cursor-pointer text-sm text-ink-soft hover:text-ink"
+        onClick={() => {
+          if (!releases && !loading) void load()
+        }}
+      >
+        Install a specific version
+      </summary>
+      <div className="mt-3">
+        {loading && <p className="text-sm text-ink-soft">Loading release history…</p>}
+        {error && (
+          <p className="text-sm text-stamp-red">
+            Couldn't load the release history. Check your connection and try again.
+          </p>
+        )}
+        {releases && releases.length === 0 && (
+          <p className="text-sm text-ink-soft">No downloadable releases found.</p>
+        )}
+        {releases && releases.length > 0 && (
+          <ul className="divide-y divide-rule">
+            {releases.map((r) => (
+              <li key={r.version} className="flex items-center justify-between py-2 text-sm">
+                <span className="figure">
+                  {r.version}
+                  {r.isCurrent && <span className="ml-2 text-xs text-ink-soft">(current)</span>}
+                </span>
+                {r.isCurrent ? (
+                  <span className="text-xs text-ink-soft">Already installed</span>
+                ) : window.electronAPI?.downloadUpdateInstaller ? (
+                  <button
+                    onClick={() => void window.electronAPI?.downloadUpdateInstaller(r.downloadUrl)}
+                    className="border border-rule px-3 py-1 text-xs hover:border-brass"
+                  >
+                    Download &amp; install
+                  </button>
+                ) : (
+                  <a
+                    href={r.downloadUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="border border-rule px-3 py-1 text-xs hover:border-brass"
+                  >
+                    Download
+                  </a>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </details>
   )
 }
 

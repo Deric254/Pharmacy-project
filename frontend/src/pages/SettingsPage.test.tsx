@@ -19,6 +19,7 @@ vi.mock('../api/config', () => ({
 // here, and a real network call has no place in a unit test.
 vi.mock('../lib/updateCheck', () => ({
   useUpdateCheck: () => ({ info: null, checking: false, checkNow: vi.fn() }),
+  useReleaseHistory: () => ({ releases: null, loading: false, error: false, load: vi.fn() }),
 }))
 
 const BASE_CONFIG: BusinessConfigOut = {

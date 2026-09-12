@@ -470,6 +470,33 @@ export interface StockRunwayOut {
   caveat: string
 }
 
+export interface ProductPairEntry {
+  product_a_id: number
+  product_a_name: string
+  product_b_id: number
+  product_b_name: string
+  co_occurrence_count: number
+  percent_of_a_sales: number
+}
+
+export interface ProductCoOccurrenceOut {
+  lookback_days: number
+  pairs: ProductPairEntry[]
+}
+
+export interface SeasonalTrendEntry {
+  product_id: number
+  name: string
+  month: number
+  total_quantity_sold: number
+}
+
+export interface SeasonalTrendsOut {
+  lookback_days: number
+  entries: SeasonalTrendEntry[]
+  has_sufficient_history: boolean
+}
+
 export interface RevenueTrendPoint {
   period_label: string
   revenue: number
@@ -544,6 +571,33 @@ export interface FastSlowMoversOut {
   fast_movers: ProductMovementEntry[]
   slow_movers: ProductMovementEntry[]
   never_sold: NeverSoldEntry[]
+}
+
+export interface ProductPairEntry {
+  product_a_id: number
+  product_a_name: string
+  product_b_id: number
+  product_b_name: string
+  co_occurrence_count: number
+  percent_of_a_sales: number
+}
+
+export interface ProductCoOccurrenceOut {
+  lookback_days: number
+  pairs: ProductPairEntry[]
+}
+
+export interface SeasonalTrendEntry {
+  product_id: number
+  name: string
+  month: number
+  total_quantity_sold: number
+}
+
+export interface SeasonalTrendsOut {
+  lookback_days: number
+  entries: SeasonalTrendEntry[]
+  has_sufficient_history: boolean
 }
 
 export interface ReceivingDiscrepancyEntry {

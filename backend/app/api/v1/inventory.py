@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
@@ -5,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.rbac import require_permission
+from app.models.stock_movement import MovementType
 from app.models.user import User
 from app.schemas.inventory import (
     AdjustmentOut,
@@ -13,6 +15,7 @@ from app.schemas.inventory import (
     ExpiringBatchOut,
     LowStockProductOut,
     ReconciliationIssueOut,
+    StockMovementPage,
     StockValuationOut,
     WriteOffResult,
 )
@@ -84,3 +87,29 @@ async def write_off_all_expired(
 )
 async def reconcile(db: Annotated[AsyncSession, Depends(get_db)]) -> list[ReconciliationIssueOut]:
     return await InventoryService(db).reconcile()
+
+
+@router.get(
+    "/movements",
+    response_model=StockMovementPage,
+    dependencies=[Depends(require_permission("inventory.adjust"))],
+)
+async def list_movements(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    product_id: int | None = None,
+    batch_id: int | None = None,
+    movement_type: MovementType | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> StockMovementPage:
+    return await InventoryService(db).list_movements(
+        product_id=product_id,
+        batch_id=batch_id,
+        movement_type=movement_type,
+        start_date=start_date,
+        end_date=end_date,
+        limit=limit,
+        offset=offset,
+    )

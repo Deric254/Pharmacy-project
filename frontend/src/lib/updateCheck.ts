@@ -36,7 +36,6 @@ export interface UpdateCheckResult {
   checking: boolean
   checkNow: () => Promise<void>
 }
-
 async function fetchLatestReleaseInfo(): Promise<UpdateInfo | null> {
   const healthRes = await fetch('/health')
   if (!healthRes.ok) return null
@@ -100,4 +99,73 @@ export function useUpdateCheck(): UpdateCheckResult {
   }, [])
 
   return { info, checking, checkNow }
+}
+
+export interface ReleaseOption {
+  version: string
+  downloadUrl: string
+  releaseUrl: string
+  isCurrent: boolean
+}
+
+/**
+ * Every release that has a real installer asset, newest first --
+ * unlike useUpdateCheck above (which only ever surfaces "is there
+ * something newer"), this is what lets someone deliberately install
+ * an OLDER version too. Kept as a separate, on-demand hook rather
+ * than folded into useUpdateCheck: fetching the full release list is
+ * unnecessary API usage for the common case (just checking whether
+ * to upgrade), and this is only ever needed once someone actually
+ * opens the "install a specific version" section.
+ */
+export function useReleaseHistory(): {
+  releases: ReleaseOption[] | null
+  loading: boolean
+  error: boolean
+  load: () => Promise<void>
+} {
+  const [releases, setReleases] = useState<ReleaseOption[] | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(false)
+
+  async function load() {
+    setLoading(true)
+    setError(false)
+    try {
+      const healthRes = await fetch('/health')
+      const health = healthRes.ok ? ((await healthRes.json()) as { version: string }) : null
+      const currentVersion = health ? normalizeVersion(health.version) : null
+
+      const releasesRes = await fetch(`https://api.github.com/repos/${REPO}/releases`)
+      if (!releasesRes.ok) {
+        setError(true)
+        return
+      }
+      const allReleases = (await releasesRes.json()) as GithubRelease[]
+
+      const options = allReleases
+        .map((release) => {
+          const installerAsset = release.assets.find(
+            (a) => a.name.startsWith('Pharmacy-ERP-Setup-') && a.name.endsWith('.exe'),
+          )
+          if (!installerAsset) return null
+          const version = normalizeVersion(release.tag_name)
+          return {
+            version,
+            downloadUrl: installerAsset.browser_download_url,
+            releaseUrl: release.html_url,
+            isCurrent: version === currentVersion,
+          }
+        })
+        .filter((option): option is ReleaseOption => option !== null)
+
+      setReleases(options)
+    } catch {
+      setError(true)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return { releases, loading, error, load }
 }

@@ -154,6 +154,110 @@ class TestBatchCreation:
         )
         assert r.status_code == 403
 
+    async def test_explicit_selling_price_below_cost_is_rejected(self, client, owner_user):
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id = await self._make_product(client, headers)
+
+        r = await client.post(
+            f"/api/v1/products/{product_id}/batches",
+            json={
+                "batch_number": "LOSS-1",
+                "expiry_date": "2027-01-01",
+                "qty_received": 10,
+                "cost_price": 50.0,
+                "selling_price": 30.0,
+            },
+            headers=headers,
+        )
+        assert r.status_code == 422
+        assert "below cost price" in r.text
+
+    async def test_selling_price_exactly_equal_to_cost_is_allowed(self, client, owner_user):
+        # Zero margin is a real (if unwise) business choice, not a
+        # loss -- only strictly BELOW cost is a guaranteed loss on
+        # every unit, so equal must not be rejected.
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id = await self._make_product(client, headers)
+
+        r = await client.post(
+            f"/api/v1/products/{product_id}/batches",
+            json={
+                "batch_number": "BREAKEVEN-1",
+                "expiry_date": "2027-01-01",
+                "qty_received": 10,
+                "cost_price": 50.0,
+                "selling_price": 50.0,
+            },
+            headers=headers,
+        )
+        assert r.status_code == 201
+
+    async def test_omitted_selling_price_falling_back_to_a_stale_default_is_still_rejected(
+        self, client, owner_user
+    ):
+        """
+        The gap this closes: BatchCreate's own validator only ever
+        sees a selling_price the caller actually typed. Leaving it
+        blank falls back to the product's default_selling_price
+        instead -- if that default is stale or was never set high
+        enough, the schema validator alone would never catch it.
+        """
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product = await client.post(
+            "/api/v1/products",
+            json={"name": "Stale Default Product", "default_selling_price": 2.0},
+            headers=headers,
+        )
+        product_id = product.json()["id"]
+
+        r = await client.post(
+            f"/api/v1/products/{product_id}/batches",
+            json={
+                "batch_number": "STALE-1",
+                "expiry_date": "2027-01-01",
+                "qty_received": 10,
+                "cost_price": 5.0,
+                # selling_price omitted on purpose -- falls back to
+                # the product's stale 2.0 default.
+            },
+            headers=headers,
+        )
+        assert r.status_code == 400
+        assert "below cost price" in r.text
+
+    async def test_price_update_cannot_drop_a_batch_below_its_own_cost(self, client, owner_user):
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id = await self._make_product(client, headers)
+
+        created = await client.post(
+            f"/api/v1/products/{product_id}/batches",
+            json={
+                "batch_number": "REPRICE-1",
+                "expiry_date": "2027-01-01",
+                "qty_received": 10,
+                "cost_price": 50.0,
+                "selling_price": 80.0,
+            },
+            headers=headers,
+        )
+        batch_id = created.json()["id"]
+
+        r = await client.patch(
+            f"/api/v1/products/{product_id}/batches/{batch_id}",
+            json={"selling_price": 30.0},
+            headers=headers,
+        )
+        assert r.status_code == 400
+        assert "below this batch's cost price" in r.text
+
+        # And the price genuinely did not change.
+        unchanged = await client.get(f"/api/v1/products/{product_id}/batches", headers=headers)
+        assert unchanged.json()[0]["selling_price"] == 80.0
+
 
 class TestProductExport:
     async def _login(self, client, username: str, password: str) -> str:
@@ -869,6 +973,26 @@ class TestBatchCostCorrection:
         assert matching[0]["old_value"] == "10.00"
         assert "6.50" in matching[0]["new_value"]
         assert "supplier invoice was actually 6.50" in matching[0]["new_value"]
+
+    async def test_cost_correction_cannot_rise_above_the_batch_selling_price(
+        self, client, owner_user
+    ):
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        # default selling_price=30.0 per _make_product_with_batch above.
+        product_id, batch_id = await self._make_product_with_batch(client, headers, cost_price=10.0)
+
+        r = await client.patch(
+            f"/api/v1/products/{product_id}/batches/{batch_id}/cost",
+            json={"cost_price": 45.0, "reason": "supplier invoice was actually higher"},
+            headers=headers,
+        )
+        assert r.status_code == 400
+        assert "above this batch's selling price" in r.text
+
+        # And the cost genuinely did not change.
+        unchanged = await client.get(f"/api/v1/products/{product_id}/batches", headers=headers)
+        assert unchanged.json()[0]["cost_price"] == 10.0
 
 
 class TestBatchExpiryCorrection:

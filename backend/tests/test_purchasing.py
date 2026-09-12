@@ -603,6 +603,144 @@ class TestQuickPurchase:
         assert batches.json()[0]["selling_price"] == 25.0
         assert batches.json()[0]["qty_remaining"] == 150
 
+    async def test_receiving_stock_is_captured_in_the_audit_log(self, client, owner_user):
+        """
+        The real gap this closes: receiving stock is real drugs and
+        real money entering the business, and until now it left no
+        audit trail at all -- only later corrections to a batch's
+        cost or price were ever logged. Every quick_purchase must now
+        produce a real, queryable audit entry.
+        """
+        product_id = await _make_product("Audited Receiving Product", price=20.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        supplier = await client.post(
+            "/api/v1/suppliers", json={"name": "Audited Supplier"}, headers=headers
+        )
+        supplier_id = supplier.json()["id"]
+
+        r = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": supplier_id,
+                "lines": [
+                    {
+                        "product_id": product_id,
+                        "quantity": 30,
+                        "batch_number": "AUDIT-PO-1",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 8.0,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert r.status_code == 201, r.text
+        po_id = r.json()["id"]
+
+        audit = await client.get(
+            "/api/v1/audit-logs", params={"action": "purchase_order.received"}, headers=headers
+        )
+        assert audit.status_code == 200
+        entries = audit.json()["entries"]
+        matching = [e for e in entries if e["entity_id"] == str(po_id)]
+        assert len(matching) == 1
+        assert matching[0]["user_name_snapshot"] == "Lucy Kangai"
+        assert f"supplier_id={supplier_id}" in matching[0]["new_value"]
+        assert "total_owed=240.00" in matching[0]["new_value"]  # 30 * 8.0
+
+    async def test_new_batch_below_cost_is_rejected(self, client, owner_user):
+        product_id = await _make_product("Below Cost New Batch Product", price=5.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        supplier = await client.post(
+            "/api/v1/suppliers", json={"name": "Loss Supplier"}, headers=headers
+        )
+        supplier_id = supplier.json()["id"]
+
+        r = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": supplier_id,
+                "lines": [
+                    {
+                        "product_id": product_id,
+                        "quantity": 20,
+                        "batch_number": "LOSS-QP-1",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 15.0,
+                        # no selling_price -- falls back to the
+                        # product's real (non-zero) default of 5.0,
+                        # which is below this line's own cost.
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert r.status_code == 400
+        assert "below its cost price" in r.text
+
+        product = await client.get(f"/api/v1/products/{product_id}", headers=headers)
+        assert product.json()["total_qty_available"] == 0  # nothing was received
+
+    async def test_restock_that_would_blend_cost_above_selling_price_is_rejected(
+        self, client, owner_user
+    ):
+        product_id = await _make_product("Blended Cost Product")
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        supplier = await client.post(
+            "/api/v1/suppliers", json={"name": "Blend Supplier"}, headers=headers
+        )
+        supplier_id = supplier.json()["id"]
+
+        first = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": supplier_id,
+                "lines": [
+                    {
+                        "product_id": product_id,
+                        "quantity": 10,
+                        "batch_number": "BLEND-1",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 5.0,
+                        "selling_price": 12.0,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert first.status_code == 201, first.text
+
+        # Same batch number -- merges. 10 @ 5.0 blended with 10 @
+        # 50.0 averages to 27.5, which is above this batch's own
+        # 12.0 selling price. Must be rejected, and the existing
+        # 10 units at cost 5.0 must be completely untouched by it.
+        second = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": supplier_id,
+                "lines": [
+                    {
+                        "product_id": product_id,
+                        "quantity": 10,
+                        "batch_number": "BLEND-1",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 50.0,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert second.status_code == 400
+        assert "above its selling price" in second.text
+
+        batches = await client.get(f"/api/v1/products/{product_id}/batches", headers=headers)
+        assert len(batches.json()) == 1
+        assert batches.json()[0]["cost_price"] == 5.0
+        assert batches.json()[0]["qty_remaining"] == 10
+
 
 class TestQuickPurchaseConcurrency:
     """

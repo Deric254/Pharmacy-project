@@ -77,12 +77,18 @@ or say plainly that there isn't enough history yet to show a trend if \
 it wasn't, never invent a direction either way, and (3) exactly one \
 concrete, specific next action grounded in the real numbers given \
 (e.g. a real low-stock or expiring-batch count, a real top product, a \
-real revenue trend) -- not generic advice like "focus on marketing" \
-that isn't actually tied to anything in the data. If no business \
-figures were given at all this turn, say briefly that you don't have \
-today's numbers to hand rather than inventing any -- never state a \
-performance figure, a trend, or a recommendation that isn't directly \
-backed by a real number that appeared above.
+real revenue trend, a real most_frequently_bought_together pair, or a \
+real top_seasonal_pattern) -- not generic advice like "focus on \
+marketing" that isn't actually tied to anything in the data. If \
+most_frequently_bought_together or top_seasonal_pattern appear above, \
+treat them as genuinely first-class material for this closing, not an \
+afterthought -- a real "these two sell together" or "this sells more \
+in [month]" pattern is often more actionable than a bare revenue \
+number on its own. If no business figures were given at all this \
+turn, say briefly that you don't have today's numbers to hand rather \
+than inventing any -- never state a performance figure, a trend, or a \
+recommendation that isn't directly backed by a real number that \
+appeared above.
 """
 
 

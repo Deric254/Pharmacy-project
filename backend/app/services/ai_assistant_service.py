@@ -56,6 +56,21 @@ from app.services.report_service import ReportService
 logger = logging.getLogger(__name__)
 AdapterFactory = Callable[[AIProviderName, str], AIProvider]
 
+_MONTH_NAMES = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+]
+
 _DEFAULT_ADAPTER_CLASSES: dict[AIProviderName, type[AIProvider]] = {
     AIProviderName.OPENAI: OpenAIAdapter,
     AIProviderName.CLAUDE: ClaudeAdapter,
@@ -205,6 +220,38 @@ class AIAssistantService:
                 )
         except Exception:  # noqa: BLE001 - enrichment only, never load-bearing
             pass
+
+        # Gated on reports.view specifically, not just ai.use -- a
+        # cashier who can ask the assistant questions at all but
+        # cannot open the Reports page's Fast/Slow Movers or Stock
+        # Runway tabs must not get their contents through this side
+        # channel either. Matches exactly how those two REST endpoints
+        # are gated (see app/api/v1/reports.py).
+        if "reports.view" in user_permission_codes:
+            try:
+                co_occurrence = await report_service.product_co_occurrence(days=90, limit=1)
+                if co_occurrence.pairs:
+                    top_pair = co_occurrence.pairs[0]
+                    context["most_frequently_bought_together"] = (
+                        f"{top_pair.product_a_name} + {top_pair.product_b_name} "
+                        f"({top_pair.percent_of_a_sales:.0f}% of {top_pair.product_a_name} "
+                        "sales also include the other)"
+                    )
+            except Exception:  # noqa: BLE001 - enrichment only, never load-bearing
+                pass
+
+            try:
+                seasonal = await report_service.seasonal_trends(days=730)
+                if seasonal.has_sufficient_history and seasonal.entries:
+                    top_seasonal = seasonal.entries[0]
+                    context["top_seasonal_pattern"] = (
+                        f"{top_seasonal.name} sells most in "
+                        f"{_MONTH_NAMES[top_seasonal.month - 1]} "
+                        f"({top_seasonal.total_quantity_sold} units, summed across every "
+                        "year on record)"
+                    )
+            except Exception:  # noqa: BLE001 - enrichment only, never load-bearing
+                pass
 
         return context
 

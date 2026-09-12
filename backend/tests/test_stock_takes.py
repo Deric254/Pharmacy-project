@@ -571,6 +571,37 @@ class TestClose:
         assert r.json()["status"] == "CLOSED"
         assert r.json()["closed_at"] is not None
 
+    async def test_close_is_captured_in_the_audit_log(self, client, owner_user):
+        product_id, _ = await _make_product_with_batch(qty=30, cost=4.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        create_resp = await client.post(
+            "/api/v1/stock-takes", json={"product_ids": [product_id]}, headers=headers
+        )
+        stock_take_id = create_resp.json()["id"]
+        item_id = create_resp.json()["items"][0]["id"]
+        # Physically counted 28, expected 30 -- a real 2-unit shrinkage
+        # at cost, within SELF_APPROVE_THRESHOLD so it auto-applies
+        # without needing a separate manager approval step here.
+        await client.post(
+            f"/api/v1/stock-takes/{stock_take_id}/items/{item_id}/count",
+            json={"physical_qty": 28, "reason": "THEFT_OR_LOSS"},
+            headers=headers,
+        )
+
+        close = await client.post(f"/api/v1/stock-takes/{stock_take_id}/close", headers=headers)
+        assert close.status_code == 200
+
+        audit = await client.get(
+            "/api/v1/audit-logs", params={"action": "stock_take.closed"}, headers=headers
+        )
+        entries = audit.json()["entries"]
+        matching = [e for e in entries if e["entity_id"] == str(stock_take_id)]
+        assert len(matching) == 1
+        assert matching[0]["user_name_snapshot"] == "Lucy Kangai"
+        assert "shrinkage_value=8.00" in matching[0]["new_value"]  # 2 units * 4.0 cost
+
     async def test_two_concurrent_close_calls_only_one_succeeds(self, client, owner_user):
         """
         The actual bug this closes: close() checked "is this already

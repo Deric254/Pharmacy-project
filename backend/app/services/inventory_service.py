@@ -18,7 +18,7 @@ a signal for a human to investigate (possible bug, or someone edited
 the DB directly), not something to silently paper over.
 """
 
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Any, cast
 
 from fastapi import HTTPException
@@ -26,7 +26,7 @@ from sqlalchemy import and_, func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.business_time import business_today
+from app.core.business_time import business_today, local_day_bounds_utc
 from app.core.events import BatchExpiringEvent, StockLowEvent, publish
 from app.models.audit_log import AuditLog
 from app.models.business_config import BusinessConfig
@@ -42,6 +42,8 @@ from app.schemas.inventory import (
     LowStockProductOut,
     ProductValuationOut,
     ReconciliationIssueOut,
+    StockMovementOut,
+    StockMovementPage,
     StockValuationOut,
     WriteOffResult,
 )
@@ -433,6 +435,93 @@ class InventoryService:
                     )
                 )
         return issues
+
+    async def list_movements(
+        self,
+        product_id: int | None = None,
+        batch_id: int | None = None,
+        movement_type: MovementType | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> StockMovementPage:
+        """
+        The real, complete trace of every quantity change to every
+        batch -- sales, refunds, adjustments, write-offs, corrections,
+        and purchase receipts all write here (see StockMovement's own
+        docstring: it is the append-only source of truth, not
+        MedicineBatch.qty_remaining, which is a derived cache). This
+        was always correct and complete in the data; this method is
+        what finally makes it visible to a real audit review, which
+        it never was until now.
+        """
+        query = (
+            select(
+                StockMovement.id,
+                StockMovement.batch_id,
+                MedicineBatch.batch_number,
+                MedicineBatch.product_id,
+                Product.name,
+                StockMovement.movement_type,
+                StockMovement.quantity_delta,
+                StockMovement.reason,
+                StockMovement.reference,
+                StockMovement.created_by_user_id,
+                User.full_name,
+                StockMovement.created_at,
+            )
+            .join(MedicineBatch, MedicineBatch.id == StockMovement.batch_id)
+            .join(Product, Product.id == MedicineBatch.product_id)
+            .outerjoin(User, User.id == StockMovement.created_by_user_id)
+        )
+        count_query = (
+            select(func.count())
+            .select_from(StockMovement)
+            .join(MedicineBatch, MedicineBatch.id == StockMovement.batch_id)
+        )
+
+        if product_id is not None:
+            query = query.where(MedicineBatch.product_id == product_id)
+            count_query = count_query.where(MedicineBatch.product_id == product_id)
+        if batch_id is not None:
+            query = query.where(StockMovement.batch_id == batch_id)
+            count_query = count_query.where(StockMovement.batch_id == batch_id)
+        if movement_type is not None:
+            query = query.where(StockMovement.movement_type == movement_type)
+            count_query = count_query.where(StockMovement.movement_type == movement_type)
+        if start_date is not None:
+            utc_start, _ = await local_day_bounds_utc(self.db, start_date)
+            query = query.where(StockMovement.created_at >= utc_start)
+            count_query = count_query.where(StockMovement.created_at >= utc_start)
+        if end_date is not None:
+            _, utc_end = await local_day_bounds_utc(self.db, end_date)
+            query = query.where(StockMovement.created_at < utc_end)
+            count_query = count_query.where(StockMovement.created_at < utc_end)
+
+        total = (await self.db.execute(count_query)).scalar_one()
+        query = query.order_by(StockMovement.created_at.desc(), StockMovement.id.desc())
+        query = query.limit(limit).offset(offset)
+        rows = (await self.db.execute(query)).all()
+
+        entries = [
+            StockMovementOut(
+                id=row[0],
+                batch_id=row[1],
+                batch_number=row[2],
+                product_id=row[3],
+                product_name=row[4],
+                movement_type=row[5],
+                quantity_delta=row[6],
+                reason=row[7],
+                reference=row[8],
+                created_by_user_id=row[9],
+                created_by_name=row[10],
+                created_at=row[11],
+            )
+            for row in rows
+        ]
+        return StockMovementPage(entries=entries, total=total, limit=limit, offset=offset)
 
     async def _max_alert_window(self) -> int:
         result = await self.db.execute(select(BusinessConfig).where(BusinessConfig.id == 1))

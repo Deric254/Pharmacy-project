@@ -1,5 +1,5 @@
 import enum
-from datetime import date
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -87,3 +87,25 @@ class ReconciliationIssueOut(BaseModel):
     qty_remaining: int
     ledger_sum: int
     discrepancy: int
+
+
+class StockMovementOut(BaseModel):
+    id: int
+    batch_id: int
+    batch_number: str
+    product_id: int
+    product_name: str
+    movement_type: str
+    quantity_delta: int
+    reason: str | None
+    reference: str | None
+    created_by_user_id: int | None
+    created_by_name: str | None
+    created_at: datetime
+
+
+class StockMovementPage(BaseModel):
+    entries: list[StockMovementOut]
+    total: int
+    limit: int
+    offset: int

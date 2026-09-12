@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { reportsApi, downloadReportExport } from '../api/reports'
 import { useAuthStore } from '../auth/store'
 import { useConfigStore } from '../config/store'
@@ -9,13 +10,36 @@ import { ApiError } from '../api/client'
 import type {
   ExpiredStockReportOut,
   FastSlowMoversOut,
+  ProductCoOccurrenceOut,
   ProfitReportOut,
   ReceivingDiscrepancyReportOut,
   SalesSummaryOut,
+  SeasonalTrendsOut,
+  StockRunwayOut,
   StockTakeHistoryOut,
 } from '../types/api'
 
-type Tab = 'sales' | 'profit' | 'expired' | 'movers' | 'receiving' | 'stocktakes'
+const CoOccurrencePairsChart = lazy(() =>
+  import('../components/charts/CoOccurrencePairsChart').then((m) => ({
+    default: m.CoOccurrencePairsChart,
+  })),
+)
+const SeasonalTrendsChart = lazy(() =>
+  import('../components/charts/SeasonalTrendsChart').then((m) => ({
+    default: m.SeasonalTrendsChart,
+  })),
+)
+
+type Tab =
+  | 'sales'
+  | 'profit'
+  | 'expired'
+  | 'movers'
+  | 'receiving'
+  | 'stocktakes'
+  | 'stockRunway'
+  | 'coOccurrence'
+  | 'seasonalTrends'
 
 const TABS: { id: Tab; label: string; permission: string }[] = [
   { id: 'sales', label: 'Sales', permission: 'reports.view' },
@@ -24,6 +48,9 @@ const TABS: { id: Tab; label: string; permission: string }[] = [
   { id: 'movers', label: 'Fast/Slow Movers', permission: 'reports.view' },
   { id: 'receiving', label: 'Receiving Variance', permission: 'reports.view' },
   { id: 'stocktakes', label: 'Stock Take History', permission: 'reports.view' },
+  { id: 'stockRunway', label: 'Stock Runway', permission: 'reports.view' },
+  { id: 'coOccurrence', label: 'Frequently Bought Together', permission: 'reports.view' },
+  { id: 'seasonalTrends', label: 'Seasonal Trends', permission: 'reports.view' },
 ]
 
 // Falls back to the device's own timezone only if branding/config
@@ -38,7 +65,18 @@ function defaultDateRange(timezone: string) {
 export function ReportsPage() {
   const hasPermission = useAuthStore((s) => s.hasPermission)
   const visibleTabs = TABS.filter((t) => hasPermission(t.permission))
-  const [tab, setTab] = useState<Tab>(visibleTabs[0]?.id ?? 'sales')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedTab = searchParams.get('tab') as Tab | null
+  const initialTab =
+    requestedTab && visibleTabs.some((t) => t.id === requestedTab)
+      ? requestedTab
+      : (visibleTabs[0]?.id ?? 'sales')
+  const [tab, setTabState] = useState<Tab>(initialTab)
+
+  function setTab(next: Tab) {
+    setTabState(next)
+    setSearchParams({ tab: next }, { replace: true })
+  }
 
   return (
     <div className="p-6">
@@ -66,6 +104,9 @@ export function ReportsPage() {
       {tab === 'movers' && <MoversReport />}
       {tab === 'receiving' && <ReceivingReport />}
       {tab === 'stocktakes' && <StockTakeHistoryReport />}
+      {tab === 'stockRunway' && <StockRunwayReport />}
+      {tab === 'coOccurrence' && <CoOccurrenceReport />}
+      {tab === 'seasonalTrends' && <SeasonalTrendsReport />}
     </div>
   )
 }
@@ -476,6 +517,155 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
     <div className="ledger-panel p-3">
       <p className="text-xs uppercase tracking-wide text-ink-soft">{label}</p>
       <p className={`figure mt-1 text-xl ${accent ? 'text-brass' : 'text-ink'}`}>{value}</p>
+    </div>
+  )
+}
+
+function StockRunwayReport() {
+  const [lookbackDays, setLookbackDays] = useState(30)
+  const [data, setData] = useState<StockRunwayOut | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const salesVersion = useSaleCompletedRefresh(true)
+
+  useEffect(() => {
+    setError(null)
+    reportsApi
+      .stockRunway(lookbackDays)
+      .then(setData)
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load report.'))
+  }, [lookbackDays, salesVersion])
+
+  return (
+    <div>
+      <label className="mb-4 flex items-center gap-2 text-sm">
+        Over the last
+        <input
+          type="number"
+          min={1}
+          value={lookbackDays}
+          onChange={(e) => setLookbackDays(Number(e.target.value))}
+          className="figure w-16 border border-rule px-2 py-1"
+        />
+        days
+      </label>
+      {error && <p className="text-sm text-stamp-red">{error}</p>}
+      {data && (
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-rule text-left text-xs uppercase tracking-wide text-ink-soft">
+              <th className="px-3 py-2">Product</th>
+              <th className="px-3 py-2">On hand</th>
+              <th className="px-3 py-2">Sold in window</th>
+              <th className="px-3 py-2">Avg/day</th>
+              <th className="px-3 py-2">Days left</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.entries.map((e) => (
+              <tr key={e.product_id} className="ruled-row">
+                <td className="px-3 py-2">{e.name}</td>
+                <td className="figure px-3 py-2">{e.qty_on_hand}</td>
+                <td className="figure px-3 py-2">{e.units_sold_in_window}</td>
+                <td className="figure px-3 py-2">{e.avg_daily_sales.toFixed(1)}</td>
+                <td
+                  className={`figure px-3 py-2 ${
+                    e.days_remaining !== null && e.days_remaining <= 7 ? 'text-stamp-red' : ''
+                  }`}
+                >
+                  {e.days_remaining !== null ? e.days_remaining : '—'}
+                </td>
+              </tr>
+            ))}
+            {data.entries.length === 0 && (
+              <tr>
+                <td colSpan={5} className="px-3 py-4 text-center text-ink-soft">
+                  No sales in this window yet.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
+function CoOccurrenceReport() {
+  const [days, setDays] = useState(90)
+  const [data, setData] = useState<ProductCoOccurrenceOut | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const salesVersion = useSaleCompletedRefresh(true)
+
+  useEffect(() => {
+    setError(null)
+    reportsApi
+      .coOccurrence(days, 50)
+      .then(setData)
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load report.'))
+  }, [days, salesVersion])
+
+  return (
+    <div>
+      <label className="mb-4 flex items-center gap-2 text-sm">
+        Over the last
+        <input
+          type="number"
+          min={1}
+          value={days}
+          onChange={(e) => setDays(Number(e.target.value))}
+          className="figure w-16 border border-rule px-2 py-1"
+        />
+        days
+      </label>
+      {error && <p className="text-sm text-stamp-red">{error}</p>}
+      {data && (
+        <Suspense fallback={<p className="text-sm text-ink-soft">Loading chart…</p>}>
+          <CoOccurrencePairsChart data={data.pairs} />
+        </Suspense>
+      )}
+    </div>
+  )
+}
+
+function SeasonalTrendsReport() {
+  const [days, setDays] = useState(730)
+  const [data, setData] = useState<SeasonalTrendsOut | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const salesVersion = useSaleCompletedRefresh(true)
+
+  useEffect(() => {
+    setError(null)
+    reportsApi
+      .seasonalTrends(days)
+      .then(setData)
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load report.'))
+  }, [days, salesVersion])
+
+  return (
+    <div>
+      <label className="mb-4 flex items-center gap-2 text-sm">
+        Over the last
+        <input
+          type="number"
+          min={1}
+          value={days}
+          onChange={(e) => setDays(Number(e.target.value))}
+          className="figure w-16 border border-rule px-2 py-1"
+        />
+        days
+      </label>
+      {error && <p className="text-sm text-stamp-red">{error}</p>}
+      {data && !data.has_sufficient_history && (
+        <p className="mb-3 text-sm text-ink-soft">
+          Not enough sales history yet for a real seasonal pattern -- check back after a full
+          year of data.
+        </p>
+      )}
+      {data && (
+        <Suspense fallback={<p className="text-sm text-ink-soft">Loading chart…</p>}>
+          <SeasonalTrendsChart data={data.entries} />
+        </Suspense>
+      )}
     </div>
   )
 }

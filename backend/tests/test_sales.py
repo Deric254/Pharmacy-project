@@ -11,7 +11,7 @@ Sales tests. The two properties that actually matter for a POS:
 import asyncio
 from datetime import date, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.business_time import business_today
 from app.core.database import AsyncSessionLocal
@@ -342,6 +342,55 @@ class TestConcurrentSales:
             )
             batch = batch_result.scalar_one()
             assert batch.qty_remaining == 2  # 10 - 8, never negative, never double-sold
+
+    async def test_thirty_concurrent_sales_against_limited_stock_never_oversells_or_loses_money(
+        self, client, employee_user
+    ):
+        """
+        A real stress scenario, not just a 2-way race: 30 simultaneous
+        checkout attempts against a batch with only 12 units, each
+        wanting 1 unit. Exactly 12 must succeed, 18 must be correctly
+        rejected as out of stock -- never more sold than existed,
+        never a unit silently lost or duplicated, and the money
+        collected must exactly match the units actually sold. This is
+        the same atomic-UPDATE guarantee as the 2-way test above,
+        proven at a scale closer to a real busy-till burst.
+        """
+        product_id = await _make_product_with_batch(price=15.0, qty=12)
+        token = await _login(client, "joe", "pass1234")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        async def attempt_sale():
+            return await client.post(
+                "/api/v1/sales",
+                json={
+                    "items": [{"product_id": product_id, "quantity": 1}],
+                    "payments": [{"method": "CASH", "amount": 15.0}],
+                },
+                headers=headers,
+            )
+
+        results = await asyncio.gather(*[attempt_sale() for _ in range(30)], return_exceptions=True)
+        status_codes = [r.status_code for r in results if not isinstance(r, Exception)]
+
+        assert status_codes.count(201) == 12  # exactly the stock that existed
+        assert status_codes.count(409) == 18  # everyone else correctly turned away
+
+        async with AsyncSessionLocal() as db:
+            batch_result = await db.execute(
+                select(MedicineBatch).where(MedicineBatch.product_id == product_id)
+            )
+            batch = batch_result.scalar_one()
+            assert batch.qty_remaining == 0  # never negative
+
+            sales_result = await db.execute(select(func.sum(Sale.total_amount)))
+            total_collected = sales_result.scalar_one()
+            # 12 successful sales * 15.0 each -- the money collected
+            # must exactly match the units actually sold, not more
+            # and not less. This test's DB is isolated per-test (see
+            # conftest's autouse _fresh_db fixture), so summing every
+            # Sale row here is summing exactly this test's sales.
+            assert total_collected == 180.0
 
 
 class TestIdempotentCheckout:

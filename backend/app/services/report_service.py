@@ -42,7 +42,9 @@ from app.schemas.reports import (
     FastSlowMoversOut,
     KpiDashboardOut,
     NeverSoldEntry,
+    ProductCoOccurrenceOut,
     ProductMovementEntry,
+    ProductPairEntry,
     ProfitReportOut,
     ReceivingDiscrepancyEntry,
     ReceivingDiscrepancyReportOut,
@@ -52,6 +54,8 @@ from app.schemas.reports import (
     RevenueTrendPoint,
     SalesSummaryEntry,
     SalesSummaryOut,
+    SeasonalTrendEntry,
+    SeasonalTrendsOut,
     StockRunwayEntry,
     StockRunwayOut,
     StockTakeHistoryEntry,
@@ -257,6 +261,142 @@ class ReportService:
             fast_movers=movement[:limit],
             slow_movers=list(reversed(movement))[:limit],
             never_sold=never_sold,
+        )
+
+    async def product_co_occurrence(
+        self, days: int = 90, limit: int = 50
+    ) -> ProductCoOccurrenceOut:
+        """
+        Real market-basket analysis over actual sales -- which products
+        genuinely get bought together, not a guess.
+
+        SaleItem is one row per (sale, batch) ALLOCATION, not one row
+        per cart line (see SaleItem's own docstring): a single product
+        split across two FEFO batches in one sale is two SaleItem rows
+        for the same (sale, product) pair. Counting raw SaleItem pairs
+        without deduplicating first would inflate co-occurrence counts
+        for exactly the products most likely to need a FEFO split
+        (the ones with many small batches) -- backwards from the
+        truth. distinct_items collapses to one row per real
+        (sale, product) combination before anything else happens.
+        """
+        cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=days)
+
+        distinct_items = (
+            select(SaleItem.sale_id, SaleItem.product_id)
+            .join(Sale, Sale.id == SaleItem.sale_id)
+            .where(Sale.created_at >= cutoff)
+            .distinct()
+            .subquery()
+        )
+        a = distinct_items.alias("a")
+        b = distinct_items.alias("b")
+
+        pair_result = await self.db.execute(
+            select(
+                a.c.product_id,
+                b.c.product_id,
+                func.count(func.distinct(a.c.sale_id)),
+            )
+            .select_from(a)
+            .join(b, and_(a.c.sale_id == b.c.sale_id, a.c.product_id < b.c.product_id))
+            .group_by(a.c.product_id, b.c.product_id)
+            .having(func.count(func.distinct(a.c.sale_id)) >= 2)
+            .order_by(func.count(func.distinct(a.c.sale_id)).desc())
+            .limit(limit)
+        )
+        pair_rows = pair_result.all()
+        if not pair_rows:
+            return ProductCoOccurrenceOut(lookback_days=days, pairs=[])
+
+        # Denominator for percent_of_a_sales: how many distinct sales
+        # contained product_a at all, for every product_a that showed
+        # up in a pair above -- one grouped query, not one query per
+        # pair, so this stays cheap regardless of how many pairs exist.
+        product_a_ids = {row[0] for row in pair_rows}
+        totals_result = await self.db.execute(
+            select(distinct_items.c.product_id, func.count(func.distinct(distinct_items.c.sale_id)))
+            .where(distinct_items.c.product_id.in_(product_a_ids))
+            .group_by(distinct_items.c.product_id)
+        )
+        sales_containing: dict[int, int] = {
+            product_id: count for product_id, count in totals_result.all()
+        }
+
+        product_ids = product_a_ids | {row[1] for row in pair_rows}
+        names_result = await self.db.execute(
+            select(Product.id, Product.name).where(Product.id.in_(product_ids))
+        )
+        names: dict[int, str] = {product_id: name for product_id, name in names_result.all()}
+
+        pairs = [
+            ProductPairEntry(
+                product_a_id=a_id,
+                product_a_name=names.get(a_id, "Unknown product"),
+                product_b_id=b_id,
+                product_b_name=names.get(b_id, "Unknown product"),
+                co_occurrence_count=count,
+                percent_of_a_sales=round(100 * count / sales_containing[a_id], 1),
+            )
+            for a_id, b_id, count in pair_rows
+        ]
+        return ProductCoOccurrenceOut(lookback_days=days, pairs=pairs)
+
+    async def seasonal_trends(self, days: int = 730) -> SeasonalTrendsOut:
+        """
+        Real month-of-year sales patterns, summed across every year in
+        range -- e.g. "this antimalarial sells 3x more in April" is a
+        genuine pattern only once there's been more than one April to
+        compare, not a one-off. has_sufficient_history is False until
+        the earliest sale in range is at least ~180 days old, so a
+        brand-new business's first month of data is never presented as
+        a "seasonal pattern" -- it's one data point, not a trend.
+
+        Grouped by calendar month using the stored (UTC) timestamp
+        directly, not shifted to the business's local timezone first --
+        for Africa/Nairobi's fixed +3 offset (no DST) this only ever
+        misattributes sales made in the last 3 hours of a UTC month to
+        the following month, a handful of transactions at most out of
+        a whole month's total. Immaterial for "which month is this
+        drug's season" the way it would not be for an exact daily
+        revenue figure, which is why this report -- unlike
+        revenue_trend -- doesn't do the full per-DST-segment local
+        time conversion.
+        """
+        cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=days)
+
+        earliest_result = await self.db.execute(
+            select(func.min(Sale.created_at)).where(Sale.created_at >= cutoff)
+        )
+        earliest = earliest_result.scalar_one_or_none()
+        has_sufficient_history = (
+            earliest is not None and (datetime.now(UTC).replace(tzinfo=None) - earliest).days >= 180
+        )
+
+        result = await self.db.execute(
+            select(
+                SaleItem.product_id,
+                Product.name,
+                func.strftime("%m", Sale.created_at),
+                func.sum(SaleItem.quantity),
+            )
+            .join(Sale, Sale.id == SaleItem.sale_id)
+            .join(Product, Product.id == SaleItem.product_id)
+            .where(Sale.created_at >= cutoff)
+            .group_by(SaleItem.product_id, func.strftime("%m", Sale.created_at))
+        )
+        entries = [
+            SeasonalTrendEntry(
+                product_id=product_id,
+                name=name,
+                month=int(month_str),
+                total_quantity_sold=qty,
+            )
+            for product_id, name, month_str, qty in result.all()
+        ]
+        entries.sort(key=lambda e: e.total_quantity_sold, reverse=True)
+        return SeasonalTrendsOut(
+            lookback_days=days, entries=entries, has_sufficient_history=has_sufficient_history
         )
 
     async def receiving_discrepancies(self) -> ReceivingDiscrepancyReportOut:

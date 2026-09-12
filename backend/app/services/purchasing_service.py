@@ -21,6 +21,7 @@ from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.audit_log import AuditLog
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
 from app.models.purchase_order import PurchaseOrder, PurchaseOrderItem, PurchaseOrderStatus
@@ -163,7 +164,26 @@ class PurchasingService:
                 # narrow window between the read above and this write:
                 # a stock take could have locked this exact batch in
                 # between. rowcount==0 with a still-existing row means
-                # exactly that race happened.
+                # either that race happened, or the price condition
+                # just below rejected it -- disambiguated after the
+                # fact rather than guessed at.
+                #
+                # blended_cost is computed once and reused in both the
+                # SET and the WHERE below, specifically so the
+                # rejection check compares against the exact same
+                # value that would be written -- never a Python-side
+                # recomputation of the average, which would reopen the
+                # stale-read race this whole method already closes
+                # once (see TestQuickPurchaseConcurrency). Rejecting
+                # via the WHERE clause keeps the read-decide-write
+                # atomic: no other request can move cost_price,
+                # qty_remaining, or selling_price between this
+                # statement deciding and this statement writing,
+                # because there's only one statement.
+                blended_cost = (
+                    MedicineBatch.qty_remaining * MedicineBatch.cost_price
+                    + line.quantity * line.unit_cost
+                ) / (MedicineBatch.qty_remaining + line.quantity)
                 merge_result = cast(
                     "CursorResult[Any]",
                     await self.db.execute(
@@ -171,30 +191,61 @@ class PurchasingService:
                         .where(
                             MedicineBatch.id == existing_batch.id,
                             MedicineBatch.locked_by_stock_take_id.is_(None),
+                            blended_cost <= MedicineBatch.selling_price,
                         )
                         .values(
-                            cost_price=(
-                                MedicineBatch.qty_remaining * MedicineBatch.cost_price
-                                + line.quantity * line.unit_cost
-                            )
-                            / (MedicineBatch.qty_remaining + line.quantity),
+                            cost_price=blended_cost,
                             qty_received=MedicineBatch.qty_received + line.quantity,
                             qty_remaining=MedicineBatch.qty_remaining + line.quantity,
                         )
                     ),
                 )
                 if merge_result.rowcount == 0:
+                    await self.db.refresh(existing_batch)
+                    if existing_batch.locked_by_stock_take_id is not None:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                f"Batch {line.batch_number} for this product was just locked "
+                                "by an open stock take and cannot receive new stock right "
+                                "now. Retry once the count closes."
+                            ),
+                        )
                     raise HTTPException(
-                        status_code=409,
+                        status_code=400,
                         detail=(
-                            f"Batch {line.batch_number} for this product was just locked by "
-                            "an open stock take and cannot receive new stock right now. "
-                            "Retry once the count closes."
+                            f"Receiving this line at {line.unit_cost} would push batch "
+                            f"{line.batch_number}'s blended cost above its selling price "
+                            f"({existing_batch.selling_price}) -- every unit sold from it "
+                            "would lose money. Update the selling price first if this cost "
+                            "increase is correct."
                         ),
                     )
                 await self.db.refresh(existing_batch)
                 batch = existing_batch
             else:
+                # default_selling_price == 0.0 is this codebase's
+                # existing "no real price set yet" sentinel, not a
+                # deliberate give-it-away price -- see the identical
+                # reasoning in BatchService.create_batch. Only a
+                # genuinely-set, non-zero default that's simply too
+                # low gets caught here.
+                resolved_selling_price = (
+                    line.selling_price
+                    if line.selling_price is not None
+                    else product.default_selling_price
+                )
+                if resolved_selling_price != 0 and resolved_selling_price < line.unit_cost:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Selling price ({resolved_selling_price}) for batch "
+                            f"{line.batch_number} is below its cost price ({line.unit_cost}) "
+                            "-- every unit sold from it would lose money. Set an explicit "
+                            "selling price for this line, or update the product's default "
+                            "selling price first."
+                        ),
+                    )
                 batch = MedicineBatch(
                     product_id=line.product_id,
                     batch_number=line.batch_number,
@@ -202,11 +253,7 @@ class PurchasingService:
                     qty_received=line.quantity,
                     qty_remaining=line.quantity,
                     cost_price=line.unit_cost,
-                    selling_price=(
-                        line.selling_price
-                        if line.selling_price is not None
-                        else product.default_selling_price
-                    ),
+                    selling_price=resolved_selling_price,
                 )
                 self.db.add(batch)
             await self.db.flush()
@@ -240,6 +287,30 @@ class PurchasingService:
                     supplier_id=payload.supplier_id, amount=total_owed, reference=f"po:{po.id}"
                 )
             )
+
+        # One entry per purchase order, not per line -- this is a
+        # receiving event (real stock and real money entering the
+        # business, both audit non-negotiables), same "who/what/when"
+        # standard as every other AuditLog write in this codebase, at
+        # the granularity a real audit review actually reads at.
+        line_summary = ", ".join(
+            f"{line.quantity}x product_id={line.product_id} @{line.unit_cost}"
+            for line in payload.lines
+        )
+        self.db.add(
+            AuditLog(
+                user_id=user.id,
+                user_name_snapshot=user.full_name,
+                action="purchase_order.received",
+                entity_type="purchase_order",
+                entity_id=str(po.id),
+                old_value=None,
+                new_value=(
+                    f"supplier_id={payload.supplier_id}, total_owed={total_owed:.2f}, "
+                    f"lines=[{line_summary}]"
+                ),
+            )
+        )
 
         await self.db.commit()
         await self.db.refresh(po, attribute_names=["items", "created_at"])

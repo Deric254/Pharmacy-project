@@ -21,7 +21,7 @@ import type { ApiErrorBody } from '../types/api'
  */
 const DEFAULT_TIMEOUT_MS = 30_000
 
-async function fetchWithTimeout(
+export async function fetchWithTimeout(
   input: string,
   init: RequestInit,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,

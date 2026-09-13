@@ -1396,6 +1396,128 @@ class TestBusinessContext:
 
         assert response.answer == "ok"
 
+    async def test_explicit_period_in_prompt_overrides_dashboard_viewed_range(
+        self, client, owner_user
+    ):
+        """
+        The real gap this closes: asking about a specific period IN
+        THE QUESTION ITSELF (e.g. "how did we do yesterday?") must be
+        answered for that period, not whatever the Dashboard's date
+        filter happens to still be sitting on -- even when the client
+        sends a completely different viewing_start_date/end_date, the
+        period named in the prompt wins.
+        """
+        from datetime import datetime, timedelta
+
+        from app.models.medicine_batch import MedicineBatch
+        from app.models.product import Product
+        from app.models.sale import Sale, SaleItem
+
+        async with AsyncSessionLocal() as db:
+            db.add(
+                AIProviderKey(
+                    user_id=owner_user.id,
+                    provider=AIProviderName.OPENAI,
+                    encrypted_key=encrypt_secret("key"),
+                    key_hint="key1",
+                    priority=1,
+                )
+            )
+            product = Product(name="Prompt Period Test Product", default_selling_price=77.0)
+            db.add(product)
+            await db.flush()
+            batch = MedicineBatch(
+                product_id=product.id,
+                batch_number="PP1",
+                expiry_date=datetime(2027, 1, 1).date(),
+                qty_received=10,
+                qty_remaining=10,
+                cost_price=30.0,
+            )
+            db.add(batch)
+            await db.flush()
+
+            yesterday_local = await business_today(db) - timedelta(days=1)
+            utc_start, _utc_end = await local_day_bounds_utc(db, yesterday_local)
+            yesterday = utc_start + timedelta(hours=12)
+            sale = Sale(
+                cashier_user_id=owner_user.id,
+                subtotal=77.0,
+                discount_amount=0.0,
+                total_amount=77.0,
+            )
+            db.add(sale)
+            await db.flush()
+            sale.created_at = yesterday
+            db.add(
+                SaleItem(
+                    sale_id=sale.id,
+                    product_id=product.id,
+                    batch_id=batch.id,
+                    quantity=1,
+                    unit_price=77.0,
+                    unit_cost=batch.cost_price,
+                    line_total=77.0,
+                )
+            )
+            await db.commit()
+
+        captured_context: dict[str, object] = {}
+
+        class ContextCapturingAdapter:
+            async def ask(self, prompt, context):
+                captured_context.update(context)
+                return AIResponse(text="ok")
+
+        def factory(provider, api_key):
+            return ContextCapturingAdapter()
+
+        async with AsyncSessionLocal() as db:
+            today_str = (await business_today(db)).isoformat()
+            service = AIAssistantService(db, adapter_factory=factory)
+            await service.ask(
+                owner_user,
+                AIAskRequest(
+                    prompt="how did we do yesterday?",
+                    # Dashboard's filter is still on "today" -- the
+                    # prompt's own "yesterday" must win over this.
+                    context={"viewing_start_date": today_str, "viewing_end_date": today_str},
+                ),
+            )
+
+        assert captured_context.get("requested_period_revenue") == "KES 77.00"
+        assert "today_revenue" not in captured_context
+        assert "viewed_period_revenue" not in captured_context
+
+    async def test_last_n_days_phrase_in_prompt_is_recognized(self, client, owner_user):
+        async with AsyncSessionLocal() as db:
+            db.add(
+                AIProviderKey(
+                    user_id=owner_user.id,
+                    provider=AIProviderName.OPENAI,
+                    encrypted_key=encrypt_secret("key"),
+                    key_hint="key1",
+                    priority=1,
+                )
+            )
+            await db.commit()
+
+        captured_context: dict[str, object] = {}
+
+        class ContextCapturingAdapter:
+            async def ask(self, prompt, context):
+                captured_context.update(context)
+                return AIResponse(text="ok")
+
+        def factory(provider, api_key):
+            return ContextCapturingAdapter()
+
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=factory)
+            await service.ask(owner_user, AIAskRequest(prompt="show me the last 7 days"))
+
+        assert "requested_period_revenue" in captured_context
+
 
 class TestNoKeyGuidance:
     """

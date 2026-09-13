@@ -28,9 +28,12 @@ transient network blip. The fix is a log line, not a UI change --
 the person using the AI panel still just sees "try again shortly".
 """
 
+import calendar
 import logging
+import re
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
+from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -84,6 +87,112 @@ def _default_adapter_factory(provider: AIProviderName, api_key: str) -> AIProvid
     return _DEFAULT_ADAPTER_CLASSES[provider](api_key=api_key)
 
 
+_MONTH_NAME_TO_NUM = {name.lower(): index + 1 for index, name in enumerate(_MONTH_NAMES)}
+_ISO_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+_LAST_N_DAYS_RE = re.compile(r"\blast\s+(\d{1,3})\s+days?\b")
+_MONTH_YEAR_RE = {name: re.compile(rf"\b{name}\s+(\d{{4}})\b") for name in _MONTH_NAME_TO_NUM}
+
+
+def _parse_period_from_prompt(prompt: str, today: date) -> tuple[date, date] | None:
+    """
+    Best-effort extraction of an explicit period from what the person
+    actually TYPED (e.g. "how did we do last month", "sales for
+    August 2026") -- this is what lets the assistant answer about a
+    different period on request, rather than being stuck on whatever
+    the Dashboard's own date filter happens to still be sitting on
+    (see viewed_start/viewed_end in _build_business_context, and
+    ask() below for how the two interact: an explicit period found
+    here always wins over the client-sent viewing range, because
+    typing a question about a specific period is a more direct signal
+    than an incidentally-still-open dashboard filter).
+
+    Deliberately narrow and literal, not real NLU: every branch below
+    is an unambiguous, fixed phrase or an explicit date. Anything not
+    recognized returns None, and the caller falls back to the viewed
+    range (or today) exactly as it did before this existed -- this
+    never guesses at an ambiguous phrase like "recently" or "lately".
+
+    No "today" branch on purpose: falling through to None here already
+    yields today via the existing default, so a bare "today" mention
+    stays labeled "today" in the context exactly as before, rather
+    than being relabeled "requested_period" for no behavioral
+    difference other than a confusing key rename.
+    """
+    text = prompt.lower()
+
+    iso_dates = _ISO_DATE_RE.findall(text)
+    if len(iso_dates) >= 2:
+        try:
+            first, second = date.fromisoformat(iso_dates[0]), date.fromisoformat(iso_dates[1])
+        except ValueError:
+            pass
+        else:
+            return (first, second) if first <= second else (second, first)
+    elif len(iso_dates) == 1:
+        try:
+            single = date.fromisoformat(iso_dates[0])
+        except ValueError:
+            pass
+        else:
+            return (single, single)
+
+    last_n_days_match = _LAST_N_DAYS_RE.search(text)
+    if last_n_days_match:
+        n = int(last_n_days_match.group(1))
+        if n > 0:
+            # Inclusive of today, e.g. "last 7 days" = today and the 6
+            # days before it -- matching how the Dashboard's own
+            # relative-range filter counts, not an off-by-one.
+            return (today - timedelta(days=n - 1), today)
+
+    if "yesterday" in text:
+        yesterday = today - timedelta(days=1)
+        return (yesterday, yesterday)
+
+    if "last week" in text:
+        this_monday = today - timedelta(days=today.weekday())
+        last_monday = this_monday - timedelta(days=7)
+        return (last_monday, last_monday + timedelta(days=6))
+
+    if "this week" in text:
+        this_monday = today - timedelta(days=today.weekday())
+        return (this_monday, today)
+
+    if "last month" in text:
+        first_of_this_month = today.replace(day=1)
+        last_day_of_prev_month = first_of_this_month - timedelta(days=1)
+        first_of_prev_month = last_day_of_prev_month.replace(day=1)
+        return (first_of_prev_month, last_day_of_prev_month)
+
+    if "this month" in text:
+        return (today.replace(day=1), today)
+
+    if "last year" in text:
+        return (date(today.year - 1, 1, 1), date(today.year - 1, 12, 31))
+
+    if "this year" in text:
+        return (date(today.year, 1, 1), today)
+
+    for month_name, month_num in _MONTH_NAME_TO_NUM.items():
+        if month_name not in text:
+            continue
+        year_match = _MONTH_YEAR_RE[month_name].search(text)
+        if year_match:
+            year = int(year_match.group(1))
+        else:
+            # No year stated -- assume the most recent occurrence of
+            # that month rather than a future one, e.g. asking about
+            # "March" in September 2026 means March 2026 (already
+            # past), but asking about "November" in September 2026
+            # means November 2025 (the only November that's actually
+            # happened), not a month that hasn't occurred yet.
+            year = today.year if month_num <= today.month else today.year - 1
+        last_day = calendar.monthrange(year, month_num)[1]
+        return (date(year, month_num, 1), date(year, month_num, last_day))
+
+    return None
+
+
 def _parse_context_date(
     context: dict[str, str | int | float | bool | None] | None, key: str
 ) -> date | None:
@@ -126,7 +235,11 @@ class AIAssistantService:
         self.adapter_factory = adapter_factory
 
     async def _build_business_context(
-        self, user: User, viewed_start: date | None = None, viewed_end: date | None = None
+        self,
+        user: User,
+        viewed_start: date | None = None,
+        viewed_end: date | None = None,
+        period_source: Literal["today", "viewed_period", "requested_period"] | None = None,
     ) -> dict[str, object]:
         """
         Real, current business numbers, computed server-side right
@@ -147,6 +260,16 @@ class AIAssistantService:
         server, never a number. Every figure below is still computed
         fresh here, server-side, exactly as if the person had asked
         about today with no range supplied at all.
+
+        period_source names WHY this range was chosen (today's
+        default / the Dashboard's own filter / a period the person
+        typed directly into this question -- see
+        _parse_period_from_prompt in ask()), so the context key
+        prefix tells the model something real about where the range
+        came from instead of every non-today range looking identical.
+        Optional and defaults to the old today-vs-viewed_period
+        inference so direct callers (tests included) that don't pass
+        it keep their exact previous behavior.
         """
         today = await business_today(self.db)
         range_start = viewed_start or today
@@ -180,7 +303,9 @@ class AIAssistantService:
         def money(value: float) -> str:
             return f"{currency} {value:.2f}".strip()
 
-        period_label = "today" if range_start == range_end == today else "viewed_period"
+        period_label = period_source or (
+            "today" if range_start == range_end == today else "viewed_period"
+        )
         context: dict[str, object] = {
             "person_asking_name": user.full_name,
             f"{period_label}_revenue": money(kpi.revenue),
@@ -289,13 +414,32 @@ class AIAssistantService:
             # this exact question -- whatever the client sent in
             # payload.context is layered underneath, so it can add extra
             # detail (e.g. "the product I'm asking about") but can never
-            # override or fake the real business figures. The one thing
-            # pulled out of it deliberately is a date range (e.g. "the
-            # Dashboard's slicer is currently set to last month") -- never
-            # a number, just what period to freshly recompute here.
+            # override or fake the real business figures. Two possible
+            # sources for which date range to recompute: whatever the
+            # Dashboard's own slicer is currently set to (sent as
+            # viewing_start_date/viewing_end_date), or a period the
+            # person typed directly into THIS question (e.g. "how about
+            # last month") -- the latter always wins, since asking about
+            # a specific period is a more direct signal than an
+            # incidentally-still-open dashboard filter from whatever the
+            # person was looking at before they opened the chat. Either
+            # way this only ever crosses a date range, never a number --
+            # every figure is still computed fresh, server-side.
+            today = await business_today(self.db)
             viewed_start = _parse_context_date(payload.context, "viewing_start_date")
             viewed_end = _parse_context_date(payload.context, "viewing_end_date")
-            business_context = await self._build_business_context(user, viewed_start, viewed_end)
+            requested_period = _parse_period_from_prompt(payload.prompt, today)
+            period_source: Literal["today", "viewed_period", "requested_period"]
+            if requested_period is not None:
+                viewed_start, viewed_end = requested_period
+                period_source = "requested_period"
+            elif viewed_start is not None or viewed_end is not None:
+                period_source = "viewed_period"
+            else:
+                period_source = "today"
+            business_context = await self._build_business_context(
+                user, viewed_start, viewed_end, period_source
+            )
             full_context: dict[str, object] = {**(payload.context or {}), **business_context}
 
             answer = _ALL_FAILED_MESSAGE

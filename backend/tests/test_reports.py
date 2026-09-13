@@ -1591,6 +1591,47 @@ class TestRevenueTrend:
         assert r.status_code == 200
         assert r.json()["granularity"] == "week"
 
+    async def test_week_bucket_labels_are_real_monday_dates_not_week_numbers(
+        self, client, owner_user
+    ):
+        """
+        Week-granularity points must be labeled with an actual
+        calendar date (the Monday starting that week), never a raw
+        "YYYY-Www" week-number string like "2026-W35" -- that format
+        isn't a real date the chart/tooltip/AI can use meaningfully,
+        and SQLite's %W week numbering isn't even ISO-correct near
+        year boundaries. Every label here must parse as a real date
+        and fall on a Monday.
+        """
+        product_id, _ = await _make_product_with_batch(price=20.0, cost=8.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 20.0}],
+            },
+            headers=headers,
+        )
+
+        today = await _business_today()
+        start = today - timedelta(days=90)  # medium range -> "week" granularity
+        r = await client.get(
+            "/api/v1/reports/revenue-trend",
+            params={"start_date": start.isoformat(), "end_date": today.isoformat()},
+            headers=headers,
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["granularity"] == "week"
+        assert len(body["points"]) > 0
+        for point in body["points"]:
+            label = point["period_label"]
+            assert "W" not in label, f"expected a real date, got week-number label {label!r}"
+            parsed = date.fromisoformat(label)  # raises if not a real YYYY-MM-DD date
+            assert parsed.weekday() == 0, f"expected a Monday, got {label!r}"
+
     async def test_profit_hidden_entirely_without_view_profit_permission(
         self, client, administrator_user
     ):

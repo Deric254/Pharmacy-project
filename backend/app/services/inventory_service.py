@@ -55,13 +55,25 @@ class InventoryService:
 
     async def get_low_stock_products(self) -> list[LowStockProductOut]:
         today = await business_today(self.db)
+        # Ordered by how urgent the shortage is -- lowest total_qty
+        # (the most depleted, most at-risk-of-stocking-out products)
+        # first. Without an explicit ORDER BY, SQL makes no promise
+        # about row order at all; this used to come back in whatever
+        # incidental order the GROUP BY happened to produce, which is
+        # why the list didn't look sorted despite the underlying data
+        # being perfectly fine. The order_by target is the same
+        # coalesced SUM expression used in both SELECT and HAVING
+        # above, not the "total_qty" label -- some backends don't
+        # accept an aggregate's own output label inside ORDER BY, so
+        # this repeats the expression itself to stay portable.
+        total_qty_expr = func.coalesce(func.sum(MedicineBatch.qty_remaining), 0)
         result = await self.db.execute(
             select(
                 Product.id,
                 Product.name,
                 Product.barcode,
                 Product.reorder_point,
-                func.coalesce(func.sum(MedicineBatch.qty_remaining), 0).label("total_qty"),
+                total_qty_expr.label("total_qty"),
             )
             .outerjoin(
                 MedicineBatch,
@@ -73,7 +85,8 @@ class InventoryService:
             )
             .where(Product.deleted_at.is_(None))
             .group_by(Product.id)
-            .having(func.coalesce(func.sum(MedicineBatch.qty_remaining), 0) < Product.reorder_point)
+            .having(total_qty_expr < Product.reorder_point)
+            .order_by(total_qty_expr.asc())
         )
         return [
             LowStockProductOut(

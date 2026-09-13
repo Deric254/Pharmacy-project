@@ -109,6 +109,29 @@ class TestLowStock:
         )
         assert r.status_code == 200
 
+    async def test_results_are_ordered_lowest_stock_first(self, client, owner_user):
+        # Three products, deliberately inserted in an order that does
+        # NOT match ascending stock, so a passing test can only mean
+        # the endpoint itself is sorting -- not that insertion order
+        # happened to already look right.
+        mid_id = await _make_product("Mid Stock Product", reorder_point=50)
+        await _add_batch(mid_id, qty=30)
+        lowest_id = await _make_product("Lowest Stock Product", reorder_point=50)
+        await _add_batch(lowest_id, qty=2)
+        highest_id = await _make_product("Highest Stock Product", reorder_point=50)
+        await _add_batch(highest_id, qty=45)
+
+        token = await _login(client, "lucy", "S3curePass!")
+        r = await client.get(
+            "/api/v1/inventory/low-stock", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.status_code == 200
+        ids_in_order = [p["product_id"] for p in r.json()]
+        # All three are below their 50-unit reorder point, so all
+        # three appear -- only their relative order is under test.
+        relevant_order = [pid for pid in ids_in_order if pid in {lowest_id, mid_id, highest_id}]
+        assert relevant_order == [lowest_id, mid_id, highest_id]
+
 
 class TestExpiringBatches:
     async def test_batch_within_default_window_is_flagged(self, client, owner_user):

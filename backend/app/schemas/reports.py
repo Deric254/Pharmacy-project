@@ -236,7 +236,8 @@ class SeasonalTrendsOut(BaseModel):
 
 
 class RevenueTrendPoint(BaseModel):
-    period_label: str  # e.g. "2026-07-15", "2026-W29", "2026-07"
+    # e.g. "2026-07-15" (day), "2026-07-14" (that week's Monday), "2026-07" (month)
+    period_label: str
     revenue: float
     profit: float | None  # None entirely for anyone without reports.view_profit
     transaction_count: int

@@ -875,7 +875,23 @@ class ReportService:
             if granularity == "day":
                 return func.date(shifted_column)
             if granularity == "week":
-                return func.strftime("%Y-W%W", shifted_column)
+                # A real calendar date (the Monday that starts the
+                # week), not SQLite's "%Y-W%W" week-number label --
+                # that format (e.g. "2026-W35") is neither an actual
+                # date the chart/tooltip can display meaningfully nor
+                # an ISO week number (SQLite's %W counts Monday-based
+                # weeks from Jan 1, which disagrees with ISO 8601 near
+                # year boundaries), so it only ever confused the axis.
+                # `date(shifted_column, 'weekday 0', '-6 days')` is the
+                # standard SQLite recipe for "the Monday on/before this
+                # date": 'weekday 0' advances to the next Sunday (or
+                # stays put if already Sunday), and stepping back 6
+                # days from that Sunday lands exactly on that week's
+                # Monday. The result is a plain YYYY-MM-DD string,
+                # which sorts correctly with a simple string sort
+                # (used below via period_order.sort()) exactly as
+                # day/month buckets already did.
+                return func.date(shifted_column, "weekday 0", "-6 days")
             return func.strftime("%Y-%m", shifted_column)
 
         revenue_by_period: dict[str, float] = {}

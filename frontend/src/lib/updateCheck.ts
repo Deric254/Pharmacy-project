@@ -1,6 +1,24 @@
 import { useEffect, useState } from 'react'
+import { fetchWithTimeout } from '../api/client'
 
 const REPO = 'Deric254/Pharmacy-project'
+
+// Every other fetch in this app goes through client.ts's own
+// fetchWithTimeout precisely because a bare fetch() that never
+// resolves or rejects is a real, previously-reported failure mode
+// (see that file's own comment) -- this update check used to be the
+// one remaining exception, calling fetch() directly with no bound at
+// all. That mattered here specifically: unlike the backend health
+// check (a same-machine loopback call), this reaches out to GitHub's
+// public API, which is only reachable at all when the machine has
+// internet access -- and a slow, filtered, or half-working connection
+// (common on a small business's network) can leave an un-timed fetch
+// hanging far longer than any offline failure ever would, which is
+// exactly the "sometimes hangs on startup, but only with internet"
+// shape this was causing. This check is purely informational (an
+// update banner), so a shorter bound than the app's general 30s
+// default is fine -- there is nothing here worth a long wait for.
+const UPDATE_CHECK_TIMEOUT_MS = 10_000
 
 export interface UpdateInfo {
   currentVersion: string
@@ -37,11 +55,15 @@ export interface UpdateCheckResult {
   checkNow: () => Promise<void>
 }
 async function fetchLatestReleaseInfo(): Promise<UpdateInfo | null> {
-  const healthRes = await fetch('/health')
+  const healthRes = await fetchWithTimeout('/health', {}, UPDATE_CHECK_TIMEOUT_MS)
   if (!healthRes.ok) return null
   const health = (await healthRes.json()) as { version: string }
 
-  const releaseRes = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`)
+  const releaseRes = await fetchWithTimeout(
+    `https://api.github.com/repos/${REPO}/releases/latest`,
+    {},
+    UPDATE_CHECK_TIMEOUT_MS,
+  )
   if (!releaseRes.ok) return null // no releases yet, rate-limited, offline -- fine, just skip
   const release = (await releaseRes.json()) as GithubRelease
 
@@ -132,11 +154,15 @@ export function useReleaseHistory(): {
     setLoading(true)
     setError(false)
     try {
-      const healthRes = await fetch('/health')
+      const healthRes = await fetchWithTimeout('/health', {}, UPDATE_CHECK_TIMEOUT_MS)
       const health = healthRes.ok ? ((await healthRes.json()) as { version: string }) : null
       const currentVersion = health ? normalizeVersion(health.version) : null
 
-      const releasesRes = await fetch(`https://api.github.com/repos/${REPO}/releases`)
+      const releasesRes = await fetchWithTimeout(
+        `https://api.github.com/repos/${REPO}/releases`,
+        {},
+        UPDATE_CHECK_TIMEOUT_MS,
+      )
       if (!releasesRes.ok) {
         setError(true)
         return

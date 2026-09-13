@@ -28,7 +28,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
+from app.models.audit_log import AuditLog
 from app.models.product import Product
+from app.models.user import User
 from app.schemas.product import BulkImportResult, ImportRowError, ProductCreate
 
 _COMMON_UNITS = [
@@ -313,7 +315,7 @@ async def _parse_and_validate(
     return candidates, errors
 
 
-async def bulk_import(db: AsyncSession, file_bytes: bytes) -> BulkImportResult:
+async def bulk_import(db: AsyncSession, file_bytes: bytes, user: User) -> BulkImportResult:
     candidates, errors = await _parse_and_validate(db, file_bytes)
 
     if errors:
@@ -332,6 +334,21 @@ async def bulk_import(db: AsyncSession, file_bytes: bytes) -> BulkImportResult:
 
     for candidate in candidates:
         db.add(Product(**candidate.model_dump()))
+    # One entry for the whole batch, not per row -- same reasoning as
+    # purchase_order.received: a bulk import is a single real-world
+    # event (a spreadsheet handed to someone to load), and per-row
+    # entries here would drown the audit trail in noise without
+    # adding any who/what/when it doesn't already have at this grain.
+    db.add(
+        AuditLog(
+            user_id=user.id,
+            user_name_snapshot=user.full_name,
+            action="product.bulk_imported",
+            entity_type="product",
+            entity_id="bulk",
+            new_value=f"{len(candidates)} product(s) imported",
+        )
+    )
     try:
         await db.commit()
     except IntegrityError as exc:

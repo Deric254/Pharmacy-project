@@ -253,6 +253,36 @@ function SalesReport() {
   )
 }
 
+function ProfitPdfExportButton({ start, end }: { start: string; end: string }) {
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  async function handle() {
+    setBusy(true)
+    setError(null)
+    try {
+      await reportsApi.profitLossPdf(start, end)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Export failed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mb-4 flex items-center gap-2">
+      <button
+        onClick={() => void handle()}
+        disabled={busy}
+        className="border border-rule px-3 py-1 text-xs text-ink-soft hover:border-brass disabled:opacity-50"
+      >
+        Export PDF
+      </button>
+      {error && <p className="text-sm text-stamp-red">{error}</p>}
+    </div>
+  )
+}
+
 function ProfitReport() {
   const formatCurrency = useCurrencyFormatter()
   const timezone = useConfigStore((s) => s.config?.timezone) ?? fallbackTimezone()
@@ -272,6 +302,7 @@ function ProfitReport() {
   return (
     <div>
       <DateRangeControls start={start} end={end} onChange={(s, e) => setRange({ start: s, end: e })} />
+      <ProfitPdfExportButton start={start} end={end} />
       {error && <p className="text-sm text-stamp-red">{error}</p>}
       {data && (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">

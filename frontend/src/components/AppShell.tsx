@@ -30,6 +30,7 @@ const NAV_SECTIONS: NavSection[] = [
       { to: '/pos', label: 'Point of Sale', permission: 'sales.create' },
       { to: '/sales', label: 'Sales', permission: 'sales.create' },
       { to: '/inventory', label: 'Inventory', permission: 'inventory.view' },
+      { to: '/inventory/movements', label: 'Stock Movements', permission: 'inventory.adjust' },
       { to: '/purchasing', label: 'Purchasing', permission: 'purchasing.create_po' },
       { to: '/stock-takes', label: 'Stock Takes', permission: 'stocktake.perform' },
       { to: '/customers', label: 'Customers', permission: 'sales.create' },

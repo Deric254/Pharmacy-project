@@ -39,7 +39,10 @@ async def download_po_import_template() -> Response:
     "/import",
     response_model=PurchaseOrderOut,
     status_code=201,
-    dependencies=[Depends(require_permission("purchasing.create_po"))],
+    dependencies=[
+        Depends(require_permission("purchasing.create_po")),
+        Depends(require_permission("purchasing.receive_stock")),
+    ],
 )
 async def import_purchase_order(
     file: Annotated[UploadFile, File()],
@@ -74,7 +77,10 @@ async def list_purchase_orders(
     "/quick-purchase",
     response_model=PurchaseOrderOut,
     status_code=201,
-    dependencies=[Depends(require_permission("purchasing.create_po"))],
+    dependencies=[
+        Depends(require_permission("purchasing.create_po")),
+        Depends(require_permission("purchasing.receive_stock")),
+    ],
 )
 async def quick_purchase(
     payload: QuickPurchaseRequest,

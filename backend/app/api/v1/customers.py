@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.rbac import require_permission
+from app.models.user import User
 from app.schemas.customer import (
     CustomerCreate,
     CustomerLifetimeValueOut,
@@ -51,16 +52,16 @@ async def download_customer_import_template() -> Response:
     "/import",
     response_model=BulkImportResult,
     status_code=201,
-    dependencies=[Depends(require_permission("sales.create"))],
 )
 async def import_customers(
     file: Annotated[UploadFile, File()],
+    user: Annotated[User, Depends(require_permission("sales.create"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> BulkImportResult:
     file_bytes = await file.read()
     if len(file_bytes) > _MAX_IMPORT_FILE_BYTES:
         raise HTTPException(status_code=413, detail="Import file is too large")
-    return await bulk_import_customers(db, file_bytes)
+    return await bulk_import_customers(db, file_bytes, user)
 
 
 @router.get("", dependencies=[Depends(require_permission("sales.create"))])
@@ -83,12 +84,13 @@ async def list_customers(
     "",
     response_model=CustomerOut,
     status_code=201,
-    dependencies=[Depends(require_permission("sales.create"))],
 )
 async def create_customer(
-    payload: CustomerCreate, db: Annotated[AsyncSession, Depends(get_db)]
+    payload: CustomerCreate,
+    user: Annotated[User, Depends(require_permission("sales.create"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> CustomerOut:
-    return await CustomerService(db).create(payload)
+    return await CustomerService(db).create(payload, user)
 
 
 @router.get(

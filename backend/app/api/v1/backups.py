@@ -27,7 +27,7 @@ async def export_for_migration(
     user: Annotated[User, Depends(require_permission("backups.manage"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
-    content = await BackupService(db).export_for_migration(payload.passphrase)
+    content = await BackupService(db).export_for_migration(payload.passphrase, user)
     return Response(
         content=content,
         media_type="application/octet-stream",

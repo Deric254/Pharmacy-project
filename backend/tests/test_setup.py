@@ -369,16 +369,15 @@ class TestMigrationExportAndRestore:
         async with AsyncSessionLocal() as db:
             role_result = await db.execute(select(Role).where(Role.name == "ChemistOwner"))
             role = role_result.scalar_one()
-            db.add(
-                User(
-                    full_name="Cross Device Owner",
-                    username="crossdeviceowner",
-                    hashed_password=await hash_password("RealOriginalPassword123"),
-                    role_id=role.id,
-                    security_question="Q",
-                    security_answer_hash=await hash_password("A"),
-                )
+            owner_user = User(
+                full_name="Cross Device Owner",
+                username="crossdeviceowner",
+                hashed_password=await hash_password("RealOriginalPassword123"),
+                role_id=role.id,
+                security_question="Q",
+                security_answer_hash=await hash_password("A"),
             )
+            db.add(owner_user)
             product_result = await db.execute(
                 text(
                     "INSERT INTO products (name, default_selling_price, reorder_point, "
@@ -397,7 +396,9 @@ class TestMigrationExportAndRestore:
             )
             await db.commit()
 
-            exported_bytes = await BackupService(db).export_for_migration("CrossDevicePassphrase!")
+            exported_bytes = await BackupService(db).export_for_migration(
+                "CrossDevicePassphrase!", owner_user
+            )
 
         # A genuinely separate SQLite file, migrated the real way --
         # as an actual subprocess with its own environment, since

@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.events import BackupFailedEvent, publish
 from app.core.security import decrypt_bytes, encrypt_bytes, encrypt_bytes_with_passphrase
+from app.models.audit_log import AuditLog
 from app.models.backup import BackupLog, BackupOAuthToken, BackupProviderName, BackupStatus
 from app.models.business_config import BusinessConfig
 from app.models.user import User
@@ -80,9 +81,18 @@ class BackupService:
                     connected_by_user_id=user.id,
                 )
             )
+        self.db.add(
+            AuditLog(
+                user_id=user.id,
+                user_name_snapshot=user.full_name,
+                action="backup.google_drive_connected",
+                entity_type="backup",
+                entity_id="google_drive",
+            )
+        )
         await self.db.commit()
 
-    async def export_for_migration(self, passphrase: str) -> bytes:
+    async def export_for_migration(self, passphrase: str, user: User) -> bytes:
         """
         A deliberately separate path from run_backup(): encrypted with
         a passphrase the owner chooses and remembers, not this
@@ -96,7 +106,24 @@ class BackupService:
         """
         dump = await dump_all_tables(self.db)
         plaintext = serialize_dump(dump)
-        return encrypt_bytes_with_passphrase(plaintext, passphrase)
+        encrypted = encrypt_bytes_with_passphrase(plaintext, passphrase)
+        # The passphrase itself is never logged -- only that the
+        # export happened, by whom, and how big the resulting file
+        # was. This is a full, unencrypted-at-rest-in-plaintext-form
+        # copy of every table leaving the system; who did it and when
+        # is a non-negotiable, same as backup.restored below.
+        self.db.add(
+            AuditLog(
+                user_id=user.id,
+                user_name_snapshot=user.full_name,
+                action="backup.exported_for_migration",
+                entity_type="backup",
+                entity_id="migration_export",
+                new_value=f"size_bytes={len(encrypted)}",
+            )
+        )
+        await self.db.commit()
+        return encrypted
 
     async def run_backup(self, user: User, provider_choice: str = "local") -> BackupLogOut:
         provider_name = _PROVIDER_REQUEST_MAP[provider_choice]
@@ -119,6 +146,16 @@ class BackupService:
                 created_by_user_id=user.id,
             )
             self.db.add(log)
+            self.db.add(
+                AuditLog(
+                    user_id=user.id,
+                    user_name_snapshot=user.full_name,
+                    action="backup.run_failed",
+                    entity_type="backup",
+                    entity_id="pending",
+                    new_value=f"provider={provider_choice} error={exc}",
+                )
+            )
             await self.db.commit()
             await self.db.refresh(log)
             await publish(BackupFailedEvent(reason=str(exc)))
@@ -133,6 +170,17 @@ class BackupService:
             created_by_user_id=user.id,
         )
         self.db.add(log)
+        await self.db.flush()
+        self.db.add(
+            AuditLog(
+                user_id=user.id,
+                user_name_snapshot=user.full_name,
+                action="backup.run",
+                entity_type="backup",
+                entity_id=str(log.id),
+                new_value=f"provider={provider_choice} size_bytes={log.size_bytes}",
+            )
+        )
         await self.db.commit()
         await self.db.refresh(log)
         return BackupLogOut.model_validate(log)
@@ -174,6 +222,22 @@ class BackupService:
         actual_manifest = compute_manifest(dump)
         manifest_matched = recorded_manifest == actual_manifest
         if not manifest_matched:
+            # Committed before raising, not left for the exception to
+            # discard -- a refused restore due to a corrupted or
+            # tampered file is exactly the kind of event that must
+            # survive on the record even though nothing else in this
+            # request landed.
+            self.db.add(
+                AuditLog(
+                    user_id=user.id,
+                    user_name_snapshot=user.full_name,
+                    action="backup.restore_refused",
+                    entity_type="backup",
+                    entity_id=str(log.id),
+                    new_value="manifest mismatch - possible corruption or tampering",
+                )
+            )
+            await self.db.commit()
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -186,6 +250,20 @@ class BackupService:
         total_rows = await restore_all_tables(self.db, dump)
 
         log.restored_at = datetime.now(UTC)
+        # The single most consequential action in this system -- it
+        # overwrites the live database. Same audit non-negotiable as
+        # everything else that moves real stock, real money, or (as
+        # here) the entire dataset at once.
+        self.db.add(
+            AuditLog(
+                user_id=user.id,
+                user_name_snapshot=user.full_name,
+                action="backup.restored",
+                entity_type="backup",
+                entity_id=str(log.id),
+                new_value=f"tables_restored={len(actual_manifest)} rows_restored={total_rows}",
+            )
+        )
         await self.db.commit()
 
         return RestoreResult(

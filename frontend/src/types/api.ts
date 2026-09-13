@@ -768,6 +768,28 @@ export interface FirstUserCreate {
   timezone?: string
 }
 
+export interface StockMovementOut {
+  id: number
+  batch_id: number
+  batch_number: string
+  product_id: number
+  product_name: string
+  movement_type: string
+  quantity_delta: number
+  reason: string | null
+  reference: string | null
+  created_by_user_id: number | null
+  created_by_name: string | null
+  created_at: string
+}
+
+export interface StockMovementPage {
+  entries: StockMovementOut[]
+  total: number
+  limit: number
+  offset: number
+}
+
 export interface AuditLogOut {
   id: number
   user_id: number | null

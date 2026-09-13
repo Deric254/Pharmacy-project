@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import encrypt_secret
 from app.models.ai_provider_key import AIProviderKey
+from app.models.audit_log import AuditLog
 from app.models.user import User
 from app.schemas.ai import AIProviderKeyCreate, AIProviderKeyOut
 
@@ -23,6 +24,20 @@ class AIKeyService:
             priority=payload.priority,
         )
         self.db.add(key_row)
+        await self.db.flush()
+        # Never the key itself -- only the provider and the same
+        # last-4-chars hint already shown in the UI, matching the
+        # masking _to_schema already applies.
+        self.db.add(
+            AuditLog(
+                user_id=user.id,
+                user_name_snapshot=user.full_name,
+                action="ai_key.added",
+                entity_type="ai_provider_key",
+                entity_id=str(key_row.id),
+                new_value=f"provider={payload.provider} hint=***{key_row.key_hint}",
+            )
+        )
         await self.db.commit()
         await self.db.refresh(key_row)
         return self._to_schema(key_row)
@@ -36,6 +51,16 @@ class AIKeyService:
         key_row = result.scalar_one_or_none()
         if key_row is None:
             raise HTTPException(status_code=404, detail="API key not found")
+        self.db.add(
+            AuditLog(
+                user_id=user.id,
+                user_name_snapshot=user.full_name,
+                action="ai_key.removed",
+                entity_type="ai_provider_key",
+                entity_id=str(key_row.id),
+                old_value=f"provider={key_row.provider} hint=***{key_row.key_hint}",
+            )
+        )
         await self.db.delete(key_row)
         await self.db.commit()
 

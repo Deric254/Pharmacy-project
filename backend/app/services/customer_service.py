@@ -21,10 +21,12 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.audit_log import AuditLog
 from app.models.business_config import BusinessConfig
 from app.models.customer import Customer
 from app.models.refund import Refund
 from app.models.sale import Sale
+from app.models.user import User
 from app.schemas.customer import (
     CustomerCreate,
     CustomerLifetimeValueEntry,
@@ -38,7 +40,7 @@ class CustomerService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    async def create(self, payload: CustomerCreate) -> CustomerOut:
+    async def create(self, payload: CustomerCreate, created_by: User) -> CustomerOut:
         if payload.phone:
             existing = await self.db.execute(
                 select(Customer).where(Customer.phone == payload.phone)
@@ -49,7 +51,7 @@ class CustomerService:
         customer = Customer(**payload.model_dump())
         self.db.add(customer)
         try:
-            await self.db.commit()
+            await self.db.flush()
         except IntegrityError as exc:
             # The check above has the same theoretical race
             # SaleService's idempotency-key check documents: two
@@ -62,6 +64,17 @@ class CustomerService:
             # clean 409 the sequential case above already returns.
             await self.db.rollback()
             raise HTTPException(status_code=409, detail="Phone number already registered") from exc
+        self.db.add(
+            AuditLog(
+                user_id=created_by.id,
+                user_name_snapshot=created_by.full_name,
+                action="customer.created",
+                entity_type="customer",
+                entity_id=str(customer.id),
+                new_value=f"name={customer.name} phone={customer.phone or 'none'}",
+            )
+        )
+        await self.db.commit()
         await self.db.refresh(customer)
         return CustomerOut.model_validate(customer)
 

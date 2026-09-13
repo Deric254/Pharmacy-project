@@ -338,14 +338,18 @@ class TestRestoreBackup:
             service = BackupService(db, provider_override=fake_provider)
             backup = await service.run_backup(owner_user)
 
-        # Same row counts as the real backup (so the manifest check
-        # still passes -- this genuinely is "the same backup", just
-        # missing columns that didn't exist when it was taken), but
-        # the users row simulates the older, pre-migration shape.
-        async with AsyncSessionLocal() as db:
-            from app.services.backup.dump_restore import dump_all_tables
+        # Built from the actual backup payload just taken -- not a
+        # fresh re-dump of the live database. A fresh re-dump would
+        # drift from the stored manifest by whatever the backup run
+        # itself writes afterward (e.g. its own audit trail entry),
+        # which is expected drift in live state but has nothing to do
+        # with what this test is actually checking: that a genuinely
+        # older backup's *own* dump, missing only the newer columns,
+        # still restores cleanly against today's schema.
+        assert backup.reference is not None
+        from app.services.backup.dump_restore import deserialize_dump, serialize_dump
 
-            real_dump = await dump_all_tables(db)
+        real_dump = deserialize_dump(decrypt_bytes(fake_provider.storage[backup.reference]))
 
         old_style_dump = dict(real_dump)
         old_style_dump["users"] = [
@@ -356,9 +360,6 @@ class TestRestoreBackup:
             }
             for row in real_dump["users"]
         ]
-
-        assert backup.reference is not None
-        from app.services.backup.dump_restore import serialize_dump
 
         fake_provider.storage[backup.reference] = encrypt_bytes(serialize_dump(old_style_dump))
 

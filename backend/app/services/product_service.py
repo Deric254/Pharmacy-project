@@ -8,8 +8,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.business_time import business_today
+from app.models.audit_log import AuditLog
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
+from app.models.user import User
 from app.schemas.product import ProductCreate, ProductOut, ProductUpdate
 
 
@@ -17,7 +19,7 @@ class ProductService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    async def create(self, payload: ProductCreate) -> ProductOut:
+    async def create(self, payload: ProductCreate, created_by: User) -> ProductOut:
         if payload.barcode:
             existing = await self.db.execute(
                 select(Product).where(
@@ -44,7 +46,7 @@ class ProductService:
         product = Product(**payload.model_dump())
         self.db.add(product)
         try:
-            await self.db.commit()
+            await self.db.flush()
         except IntegrityError as exc:
             # The real safety net against two concurrent creates racing
             # past the checks above -- both name and barcode uniqueness
@@ -55,10 +57,21 @@ class ProductService:
                 status_code=409,
                 detail="A product with that name or barcode was just created. Please refresh.",
             ) from exc
+        self.db.add(
+            AuditLog(
+                user_id=created_by.id,
+                user_name_snapshot=created_by.full_name,
+                action="product.created",
+                entity_type="product",
+                entity_id=str(product.id),
+                new_value=f"name={product.name} barcode={product.barcode or 'none'}",
+            )
+        )
+        await self.db.commit()
         await self.db.refresh(product)
         return await self._to_schema(product)
 
-    async def update(self, product_id: int, payload: ProductUpdate) -> ProductOut:
+    async def update(self, product_id: int, payload: ProductUpdate, changed_by: User) -> ProductOut:
         product = await self._get_or_404(product_id)
 
         update_data = payload.model_dump(exclude_unset=True)
@@ -86,8 +99,24 @@ class ProductService:
                     detail=f'A product named "{update_data["name"]}" already exists.',
                 )
 
+        # Snapshotted before mutation so old_value reflects what the
+        # field actually was, not the value it's about to become.
+        old_values = {field: getattr(product, field) for field in update_data}
         for field, value in update_data.items():
             setattr(product, field, value)
+
+        if update_data:
+            self.db.add(
+                AuditLog(
+                    user_id=changed_by.id,
+                    user_name_snapshot=changed_by.full_name,
+                    action="product.updated",
+                    entity_type="product",
+                    entity_id=str(product.id),
+                    old_value=", ".join(f"{k}={v}" for k, v in old_values.items()),
+                    new_value=", ".join(f"{k}={v}" for k, v in update_data.items()),
+                )
+            )
 
         try:
             await self.db.commit()
@@ -211,7 +240,7 @@ class ProductService:
         if cost > 0:
             out.markup_percent = (profit / cost) * 100
 
-    async def delete(self, product_id: int) -> None:
+    async def delete(self, product_id: int, deactivated_by: User) -> None:
         """
         Soft delete only -- sets deleted_at, never a hard DELETE. This
         preserves referential integrity for historical sales/purchase
@@ -220,6 +249,16 @@ class ProductService:
         """
         product = await self._get_or_404(product_id)
         product.deleted_at = datetime.now(UTC)
+        self.db.add(
+            AuditLog(
+                user_id=deactivated_by.id,
+                user_name_snapshot=deactivated_by.full_name,
+                action="product.deactivated",
+                entity_type="product",
+                entity_id=str(product_id),
+                old_value=f"name={product.name}",
+            )
+        )
         await self.db.commit()
 
     async def _get_or_404(self, product_id: int) -> Product:

@@ -54,12 +54,13 @@ async def list_suppliers(
     "",
     response_model=SupplierOut,
     status_code=201,
-    dependencies=[Depends(_require_purchasing_access)],
 )
 async def create_supplier(
-    payload: SupplierCreate, db: Annotated[AsyncSession, Depends(get_db)]
+    payload: SupplierCreate,
+    user: Annotated[User, Depends(_require_purchasing_access)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SupplierOut:
-    return await SupplierService(db).create(payload)
+    return await SupplierService(db).create(payload, user)
 
 
 @router.get(
@@ -76,9 +77,11 @@ async def get_supplier(
 @router.post(
     "/{supplier_id}/payments",
     response_model=SupplierOut,
-    dependencies=[Depends(require_permission("purchasing.approve_po"))],
 )
 async def record_payment(
-    supplier_id: int, payload: PaymentRecordRequest, db: Annotated[AsyncSession, Depends(get_db)]
+    supplier_id: int,
+    payload: PaymentRecordRequest,
+    user: Annotated[User, Depends(require_permission("purchasing.approve_po"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SupplierOut:
-    return await SupplierService(db).record_payment(supplier_id, payload)
+    return await SupplierService(db).record_payment(supplier_id, payload, user)

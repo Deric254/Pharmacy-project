@@ -52,16 +52,16 @@ async def download_import_template() -> Response:
     "/import",
     response_model=BulkImportResult,
     status_code=201,
-    dependencies=[Depends(require_permission("products.manage"))],
 )
 async def import_products(
     file: Annotated[UploadFile, File()],
+    user: Annotated[User, Depends(require_permission("products.manage"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> BulkImportResult:
     file_bytes = await file.read()
     if len(file_bytes) > _MAX_IMPORT_FILE_BYTES:
         raise HTTPException(status_code=413, detail="Import file is too large")
-    return await bulk_import(db, file_bytes)
+    return await bulk_import(db, file_bytes, user)
 
 
 @router.get(
@@ -127,29 +127,29 @@ async def get_product(product_id: int, db: Annotated[AsyncSession, Depends(get_d
 @router.post("", response_model=ProductOut, status_code=201)
 async def create_product(
     payload: ProductCreate,
-    _: Annotated[User, Depends(require_permission("products.manage"))],
+    user: Annotated[User, Depends(require_permission("products.manage"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ProductOut:
-    return await ProductService(db).create(payload)
+    return await ProductService(db).create(payload, user)
 
 
 @router.patch("/{product_id}", response_model=ProductOut)
 async def update_product(
     product_id: int,
     payload: ProductUpdate,
-    _: Annotated[User, Depends(require_permission("products.manage"))],
+    user: Annotated[User, Depends(require_permission("products.manage"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ProductOut:
-    return await ProductService(db).update(product_id, payload)
+    return await ProductService(db).update(product_id, payload, user)
 
 
 @router.delete("/{product_id}", status_code=204)
 async def delete_product(
     product_id: int,
-    _: Annotated[User, Depends(require_permission("products.manage"))],
+    user: Annotated[User, Depends(require_permission("products.manage"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
-    await ProductService(db).delete(product_id)
+    await ProductService(db).delete(product_id, user)
 
 
 @router.get(

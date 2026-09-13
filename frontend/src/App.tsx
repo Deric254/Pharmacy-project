@@ -11,6 +11,7 @@ import { DashboardPage } from './pages/DashboardPage'
 import { PosPage } from './pages/PosPage'
 import { SalesPage } from './pages/SalesPage'
 import { InventoryPage } from './pages/InventoryPage'
+import { StockMovementsPage } from './pages/StockMovementsPage'
 import { PurchasingPage } from './pages/PurchasingPage'
 import { StockTakesPage } from './pages/StockTakesPage'
 import { CustomersPage } from './pages/CustomersPage'
@@ -159,6 +160,14 @@ export function App() {
             element={
               <RequirePermission code="inventory.view">
                 <InventoryPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="inventory/movements"
+            element={
+              <RequirePermission code="inventory.adjust">
+                <StockMovementsPage />
               </RequirePermission>
             }
           />

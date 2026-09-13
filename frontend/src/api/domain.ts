@@ -26,6 +26,7 @@ import type {
   SaleQuoteOut,
   SaleQuoteRequest,
   SalePage,
+  StockMovementPage,
   StockTakeCreate,
   StockTakeItemOut,
   StockTakeOut,
@@ -78,6 +79,21 @@ export const inventoryApi = {
   writeOffExpired: (batchId: number) =>
     api.post<WriteOffResult>(`/inventory/batches/${batchId}/write-off-expired`),
   writeOffAllExpired: () => api.post<BulkWriteOffResult>('/inventory/write-off-all-expired'),
+  movements: (filters: StockMovementFilters = {}) =>
+    api.get<StockMovementPage>(
+      '/inventory/movements',
+      filters as Record<string, string | number | undefined>,
+    ),
+}
+
+export interface StockMovementFilters {
+  product_id?: number
+  batch_id?: number
+  movement_type?: string
+  start_date?: string
+  end_date?: string
+  limit?: number
+  offset?: number
 }
 
 export const suppliersApi = {

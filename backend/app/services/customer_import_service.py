@@ -17,7 +17,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
+from app.models.audit_log import AuditLog
 from app.models.customer import Customer
+from app.models.user import User
 from app.schemas.customer import CustomerCreate
 from app.schemas.product import BulkImportResult, ImportRowError
 
@@ -194,7 +196,9 @@ async def _parse_and_validate(
     return candidates, errors
 
 
-async def bulk_import_customers(db: AsyncSession, file_bytes: bytes) -> BulkImportResult:
+async def bulk_import_customers(
+    db: AsyncSession, file_bytes: bytes, user: User
+) -> BulkImportResult:
     candidates, errors = await _parse_and_validate(db, file_bytes)
 
     if errors:
@@ -208,6 +212,19 @@ async def bulk_import_customers(db: AsyncSession, file_bytes: bytes) -> BulkImpo
 
     for candidate in candidates:
         db.add(Customer(**candidate.model_dump()))
+    # One entry for the whole batch -- same reasoning as the product
+    # importer's audit entry: a single real-world event, not one row
+    # each.
+    db.add(
+        AuditLog(
+            user_id=user.id,
+            user_name_snapshot=user.full_name,
+            action="customer.bulk_imported",
+            entity_type="customer",
+            entity_id="bulk",
+            new_value=f"{len(candidates)} customer(s) imported",
+        )
+    )
     try:
         await db.commit()
     except IntegrityError as exc:

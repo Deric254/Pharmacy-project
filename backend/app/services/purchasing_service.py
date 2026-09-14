@@ -141,7 +141,10 @@ class PurchasingService:
                 # that happens as a side effect of receiving stock, and
                 # a mismatched explicit price here is a conflict, not a
                 # silent overwrite.
-                if line.selling_price is not None and existing_batch.selling_price != line.selling_price:
+                if (
+                    line.selling_price is not None
+                    and existing_batch.selling_price != line.selling_price
+                ):
                     raise HTTPException(
                         status_code=409,
                         detail=(

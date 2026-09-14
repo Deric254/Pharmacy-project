@@ -46,7 +46,16 @@ async def _make_product(name: str) -> int:
 def _build_workbook(rows: list[list[object]]) -> bytes:
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.append(["Product name", "Quantity", "Batch number", "Expiry date", "Unit cost", "Selling price"])
+    ws.append(
+        [
+            "Product name",
+            "Quantity",
+            "Batch number",
+            "Expiry date",
+            "Unit cost",
+            "Selling price",
+        ]
+    )
     for row in rows:
         ws.append(row)
     buffer = io.BytesIO()
@@ -107,7 +116,8 @@ class TestPurchaseOrderBulkImport:
         content = _build_workbook(
             [
                 ["Amoxicillin 500mg", 100, "AMX-001", "2027-06-30", 10.0, 18.0],
-                ["paracetamol 500mg", 200, "PARA-001", "2027-06-30", 4.0, 8.0],  # lowercase on purpose
+                # lowercase on purpose
+                ["paracetamol 500mg", 200, "PARA-001", "2027-06-30", 4.0, 8.0],
             ]
         )
         r = await client.post(
@@ -260,7 +270,9 @@ class TestPurchaseOrderBulkImport:
         token = await _login(client, "lucy", "S3curePass!")
         headers = {"Authorization": f"Bearer {token}"}
 
-        content = _build_workbook([["Reupload Test Product", 100, "REUP1", "2027-06-30", 10.0, 18.0]])
+        content = _build_workbook(
+            [["Reupload Test Product", 100, "REUP1", "2027-06-30", 10.0, 18.0]]
+        )
 
         first = await client.post(
             "/api/v1/purchase-orders/import",

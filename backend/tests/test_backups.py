@@ -274,9 +274,7 @@ class TestRestoreBackup:
             # see database.py), so the batch has to go before the
             # product it references.
             await db.execute(
-                MedicineBatch.__table__.delete().where(
-                    MedicineBatch.product_id == product_id
-                )
+                MedicineBatch.__table__.delete().where(MedicineBatch.product_id == product_id)
             )
             await db.execute(Product.__table__.delete().where(Product.id == product_id))
             await db.commit()

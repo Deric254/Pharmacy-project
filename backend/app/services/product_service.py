@@ -216,8 +216,11 @@ class ProductService:
         )
         # selling_price is required on every batch (migration 0036),
         # so this tuple's second element is never None for a batch
-        # that's actually in the query results below.
-        next_price_by_product: dict[int, tuple[float, float]] = {}
+        # that's actually in the query results below. Annotated to
+        # match the return type (rather than tuple[float, float])
+        # because dict is invariant in mypy -- see
+        # https://mypy.readthedocs.io/en/stable/common_issues.html#variance
+        next_price_by_product: dict[int, tuple[float, float | None]] = {}
         for product_id, cost_price, selling_price in result.tuples().all():
             next_price_by_product.setdefault(product_id, (cost_price, selling_price))
         return next_price_by_product

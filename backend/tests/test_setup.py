@@ -380,17 +380,17 @@ class TestMigrationExportAndRestore:
             db.add(owner_user)
             product_result = await db.execute(
                 text(
-                    "INSERT INTO products (name, default_selling_price, reorder_point, "
+                    "INSERT INTO products (name, reorder_point, "
                     "unit, is_active) "
-                    "VALUES ('Cross Device Product', 42.0, 10, 'unit', 1) RETURNING id"
+                    "VALUES ('Cross Device Product', 10, 'unit', 1) RETURNING id"
                 )
             )
             product_id = product_result.scalar_one()
             await db.execute(
                 text(
                     "INSERT INTO medicine_batches (product_id, batch_number, expiry_date, "
-                    "qty_received, qty_remaining, cost_price) "
-                    "VALUES (:pid, 'XDEV1', '2027-06-30', 77, 77, 15.0)"
+                    "qty_received, qty_remaining, cost_price, selling_price) "
+                    "VALUES (:pid, 'XDEV1', '2027-06-30', 77, 77, 15.0, 42.0)"
                 ),
                 {"pid": product_id},
             )
@@ -459,7 +459,7 @@ class TestMigrationExportAndRestore:
 
         product = await client.post(
             "/api/v1/products",
-            json={"name": "Migration Round Trip Product", "default_selling_price": 42.0},
+            json={"name": "Migration Round Trip Product"},
             headers=headers,
         )
         product_id = product.json()["id"]
@@ -470,6 +470,7 @@ class TestMigrationExportAndRestore:
                 "expiry_date": "2027-06-30",
                 "qty_received": 77,
                 "cost_price": 15.0,
+                "selling_price": 42.0,
             },
             headers=headers,
         )

@@ -47,6 +47,13 @@ class QuickPurchaseLine(BaseModel):
     batch_number: str = Field(min_length=1, max_length=80)
     expiry_date: date
     unit_cost: Money
+    # Optional -- blank means "no opinion" and is only ever valid on a
+    # restock of a batch that already has its own price (same product +
+    # batch_number + expiry_date already exists). A genuinely new batch
+    # has nothing to inherit from any more (no product-level default),
+    # so PurchasingService itself rejects a blank selling_price when no
+    # matching existing batch is found -- that check can't live in this
+    # schema, since only the service knows which case applies.
     selling_price: Money | None = None
 
 

@@ -105,6 +105,7 @@ class TestQueryCountRegressionGuard:
                         qty_received=1,
                         qty_remaining=1,
                         cost_price=1.0,
+                        selling_price=2.0,
                     )
                 )
             await db.commit()
@@ -141,7 +142,7 @@ class TestBasicLatencySanity:
 
         product_resp = await client.post(
             "/api/v1/products",
-            json={"name": "Latency Test Product", "default_selling_price": 5.0},
+            json={"name": "Latency Test Product"},
             headers={"Authorization": f"Bearer {owner_token}"},
         )
         product_id = product_resp.json()["id"]
@@ -152,6 +153,7 @@ class TestBasicLatencySanity:
                 "expiry_date": "2027-01-01",
                 "qty_received": 1000,
                 "cost_price": 2.0,
+                "selling_price": 5.0,
             },
             headers={"Authorization": f"Bearer {owner_token}"},
         )

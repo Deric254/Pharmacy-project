@@ -34,7 +34,7 @@ async def _make_product_with_batch(
     price: float = 10.0, qty: int = 20, expiry: str = "2027-01-01"
 ) -> int:
     async with AsyncSessionLocal() as db:
-        product = Product(name="Amoxicillin 500mg", default_selling_price=price)
+        product = Product(name="Amoxicillin 500mg")
         db.add(product)
         await db.flush()
         db.add(
@@ -45,6 +45,7 @@ async def _make_product_with_batch(
                 qty_received=qty,
                 qty_remaining=qty,
                 cost_price=price / 2,
+                selling_price=price,
             )
         )
         await db.commit()

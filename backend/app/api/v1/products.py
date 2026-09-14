@@ -95,7 +95,7 @@ async def list_products(
             p.barcode or "",
             p.unit,
             p.reorder_point,
-            p.default_selling_price,
+            p.current_selling_price,
             p.total_qty_available,
             "Yes" if p.is_active else "No",
         ]

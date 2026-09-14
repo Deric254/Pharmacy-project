@@ -9,13 +9,14 @@ export interface CartLine {
  * The subtotal shown in the cart before any discount -- sum of each
  * line's own selling price times quantity. An empty cart is 0, not
  * NaN or undefined, so callers never need a special case for "cart
- * hasn't been touched yet".
+ * hasn't been touched yet". `current_selling_price` is only ever null
+ * for a product with zero stock, which the POS never lets into the
+ * cart in the first place (see PosPage's total_qty_available check) --
+ * the `?? 0` here is a type-safety fallback, not a real case.
  */
 export function calculateSubtotal(cart: CartLine[]): number {
   return cart.reduce(
-    (sum, line) =>
-      sum +
-      (line.product.current_selling_price ?? line.product.default_selling_price) * line.quantity,
+    (sum, line) => sum + (line.product.current_selling_price ?? 0) * line.quantity,
     0,
   )
 }

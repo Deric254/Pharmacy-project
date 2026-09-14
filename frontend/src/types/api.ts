@@ -25,7 +25,6 @@ export interface ProductOut {
   unit: string
   category_id: number | null
   reorder_point: number
-  default_selling_price: number
   is_active: boolean
   created_at: string
   total_qty_available: number
@@ -42,7 +41,6 @@ export interface ProductCreate {
   unit?: string
   category_id?: number | null
   reorder_point?: number
-  default_selling_price?: number
 }
 
 export interface ProductUpdate {
@@ -51,7 +49,6 @@ export interface ProductUpdate {
   unit?: string
   category_id?: number | null
   reorder_point?: number
-  default_selling_price?: number
   is_active?: boolean
 }
 
@@ -63,7 +60,7 @@ export interface BatchOut {
   qty_received: number
   qty_remaining: number
   cost_price: number
-  selling_price: number | null
+  selling_price: number
   created_at: string
 }
 

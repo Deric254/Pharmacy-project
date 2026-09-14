@@ -718,7 +718,7 @@ class TestBusinessContext:
                     priority=1,
                 )
             )
-            product = Product(name="Trend Test Product", default_selling_price=100.0)
+            product = Product(name="Trend Test Product")
             db.add(product)
             await db.flush()
             batch = MedicineBatch(
@@ -728,6 +728,7 @@ class TestBusinessContext:
                 qty_received=10,
                 qty_remaining=10,
                 cost_price=40.0,
+                selling_price=100.0,
             )
             db.add(batch)
             await db.flush()
@@ -812,7 +813,7 @@ class TestBusinessContext:
                     priority=1,
                 )
             )
-            product = Product(name="Currency Test Product", default_selling_price=50.0)
+            product = Product(name="Currency Test Product")
             db.add(product)
             await db.flush()
             batch = MedicineBatch(
@@ -822,6 +823,7 @@ class TestBusinessContext:
                 qty_received=10,
                 qty_remaining=10,
                 cost_price=20.0,
+                selling_price=50.0,
             )
             db.add(batch)
             await db.flush()
@@ -1000,7 +1002,7 @@ class TestBusinessContext:
         from app.models.product import Product
 
         async with AsyncSessionLocal() as db:
-            product = Product(name=name, default_selling_price=price)
+            product = Product(name=name)
             db.add(product)
             await db.flush()
             batch = MedicineBatch(
@@ -1010,6 +1012,7 @@ class TestBusinessContext:
                 qty_received=100,
                 qty_remaining=100,
                 cost_price=1.0,
+                selling_price=price,
             )
             db.add(batch)
             await db.commit()
@@ -1191,7 +1194,7 @@ class TestBusinessContext:
                     priority=1,
                 )
             )
-            product = Product(name="Viewed Range Test Product", default_selling_price=99.0)
+            product = Product(name="Viewed Range Test Product")
             db.add(product)
             await db.flush()
             batch = MedicineBatch(
@@ -1201,6 +1204,7 @@ class TestBusinessContext:
                 qty_received=10,
                 qty_remaining=10,
                 cost_price=40.0,
+                selling_price=99.0,
             )
             db.add(batch)
             await db.flush()
@@ -1280,7 +1284,7 @@ class TestBusinessContext:
 
         product = await client.post(
             "/api/v1/products",
-            json={"name": "AI Context Range Product", "default_selling_price": 40.0},
+            json={"name": "AI Context Range Product"},
             headers=headers,
         )
         product_id = product.json()["id"]
@@ -1291,6 +1295,7 @@ class TestBusinessContext:
                 "expiry_date": "2027-06-30",
                 "qty_received": 20,
                 "cost_price": 15.0,
+                "selling_price": 40.0,
             },
             headers=headers,
         )
@@ -1423,7 +1428,7 @@ class TestBusinessContext:
                     priority=1,
                 )
             )
-            product = Product(name="Prompt Period Test Product", default_selling_price=77.0)
+            product = Product(name="Prompt Period Test Product")
             db.add(product)
             await db.flush()
             batch = MedicineBatch(
@@ -1433,6 +1438,7 @@ class TestBusinessContext:
                 qty_received=10,
                 qty_remaining=10,
                 cost_price=30.0,
+                selling_price=77.0,
             )
             db.add(batch)
             await db.flush()

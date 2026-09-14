@@ -100,12 +100,15 @@ def generate_purchase_order_import_template() -> bytes:
     cost_validation.add(f"E2:E{_MAX_ROWS}")
 
     # Selling price is genuinely optional -- leaving it blank is the
-    # normal case for a routine restock (it means "no opinion on
-    # price, keep whatever this batch already sells at"), not an
-    # error. It needs its own validation object: reusing cost_validation
-    # here would both reject blank cells (allow_blank=False) and show
-    # "Invalid cost" / "Unit cost must be..." on a column that isn't
-    # the cost column at all.
+    # normal case for a restock of a batch that already has its own
+    # price (same batch number + expiry as an existing batch): it
+    # means "no opinion, keep what it already sells at". It's only
+    # rejected, and only at processing time (not here, since this
+    # sheet has no way to know which rows are restocks), when a row
+    # turns out to be a genuinely new batch with nothing to inherit a
+    # price from. Needs its own validation object: reusing
+    # cost_validation would both reject blank cells (allow_blank=False)
+    # and show "Invalid cost" on a column that isn't the cost column.
     selling_price_validation = DataValidation(
         type="decimal",
         operator="greaterThanOrEqual",
@@ -124,7 +127,8 @@ def generate_purchase_order_import_template() -> bytes:
         value=(
             "Product names must match your catalog exactly. Expiry date as YYYY-MM-DD. "
             "Selling price is optional -- leave it blank to keep the existing batch's "
-            "price, or the product's default price for a new batch."
+            "price on a restock (same batch number + expiry as one already on file). "
+            "Required for a genuinely new batch number."
         ),
     )
     instructions.font = Font(name="Arial", italic=True, size=9, color="991B1B")

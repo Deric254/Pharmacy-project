@@ -42,7 +42,7 @@ class TestMultiBatchProfitAccuracy:
             - profit = total_amount - cost = 130.0 - 46.0 = 84.0
         """
         async with AsyncSessionLocal() as db:
-            product = Product(name="Triple Batch Product", default_selling_price=10.0)
+            product = Product(name="Triple Batch Product")
             db.add(product)
             await db.flush()
             for batch_number, expiry, qty, cost in [
@@ -58,6 +58,7 @@ class TestMultiBatchProfitAccuracy:
                         qty_received=qty,
                         qty_remaining=qty,
                         cost_price=cost,
+                        selling_price=10.0,
                     )
                 )
             await db.commit()
@@ -102,7 +103,7 @@ class TestMultiBatchProfitAccuracy:
         Must draw fully from that batch and touch nothing else.
         """
         async with AsyncSessionLocal() as db:
-            product = Product(name="Boundary Product", default_selling_price=5.0)
+            product = Product(name="Boundary Product")
             db.add(product)
             await db.flush()
             near = MedicineBatch(
@@ -112,6 +113,7 @@ class TestMultiBatchProfitAccuracy:
                 qty_received=10,
                 qty_remaining=10,
                 cost_price=1.0,
+                selling_price=5.0,
             )
             far = MedicineBatch(
                 product_id=product.id,
@@ -120,6 +122,7 @@ class TestMultiBatchProfitAccuracy:
                 qty_received=50,
                 qty_remaining=50,
                 cost_price=1.5,
+                selling_price=5.0,
             )
             db.add_all([near, far])
             await db.commit()
@@ -152,7 +155,7 @@ class TestMultiBatchProfitAccuracy:
         """A batch with exactly 1 unit remaining -- the smallest
         possible non-empty allocation, must work exactly, not off-by-one."""
         async with AsyncSessionLocal() as db:
-            product = Product(name="Single Unit Product", default_selling_price=99.99)
+            product = Product(name="Single Unit Product")
             db.add(product)
             await db.flush()
             db.add(
@@ -163,6 +166,7 @@ class TestMultiBatchProfitAccuracy:
                     qty_received=1,
                     qty_remaining=1,
                     cost_price=50.0,
+                    selling_price=99.99,
                 )
             )
             await db.commit()
@@ -216,6 +220,7 @@ class TestValuationAccuracy:
                         qty_received=qty,
                         qty_remaining=qty,
                         cost_price=cost,
+                        selling_price=cost * 2,
                     )
                 )
             await db.commit()

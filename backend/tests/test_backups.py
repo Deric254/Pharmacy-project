@@ -12,6 +12,7 @@ Backup tests. The properties that matter:
 """
 
 import json
+from datetime import date
 
 import httpx
 from fastapi import HTTPException
@@ -21,6 +22,7 @@ from app.core.events import CHANNEL
 from app.core.redis_client import redis_client
 from app.core.security import decrypt_bytes, encrypt_bytes
 from app.models.backup import BackupOAuthToken
+from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
 from app.services.backup.base import BackupProvider, BackupProviderError
 from app.services.backup.google_drive import GoogleDriveBackupProvider
@@ -237,10 +239,24 @@ class TestRestoreBackup:
         it's really back with the correct values - not a mocked
         assertion anywhere in the destroy/restore path.
         """
-        # 1. Create real data.
+        # 1. Create real data. Product itself carries no price (see
+        # migration 0036) -- the batch is what carries real money
+        # values now, so that's what needs to prove it round-trips
+        # correctly through backup/destroy/restore, not just the name.
         async with AsyncSessionLocal() as db:
-            product = Product(name="Disaster Recovery Test Product", default_selling_price=42.0)
+            product = Product(name="Disaster Recovery Test Product")
             db.add(product)
+            await db.flush()
+            batch = MedicineBatch(
+                product_id=product.id,
+                batch_number="DR-1",
+                expiry_date=date(2027, 1, 1),
+                qty_received=10,
+                qty_remaining=10,
+                cost_price=17.5,
+                selling_price=42.0,
+            )
+            db.add(batch)
             await db.commit()
             product_id = int(product.id)
 
@@ -254,6 +270,10 @@ class TestRestoreBackup:
         async with AsyncSessionLocal() as db:
             from sqlalchemy import select
 
+            # Batch first -- product_id is a real FK (foreign_keys=ON,
+            # see database.py), so the batch has to go before the
+            # product it references.
+            await db.execute(MedicineBatch.__table__.delete().where(MedicineBatch.product_id == product_id))
             await db.execute(Product.__table__.delete().where(Product.id == product_id))
             await db.commit()
             result = await db.execute(select(Product).where(Product.id == product_id))
@@ -266,7 +286,10 @@ class TestRestoreBackup:
             assert restore_result.manifest_matched is True
             assert restore_result.total_rows_restored > 0
 
-        # 5. Confirm it's genuinely back, with the correct value.
+        # 5. Confirm it's genuinely back, with the correct values --
+        # both the product's name and the batch's real money values
+        # (cost_price, selling_price), proving the round-trip preserves
+        # exact numeric precision, not just row counts.
         async with AsyncSessionLocal() as db:
             from sqlalchemy import select
 
@@ -274,7 +297,13 @@ class TestRestoreBackup:
             restored_product = result.scalar_one_or_none()
             assert restored_product is not None
             assert restored_product.name == "Disaster Recovery Test Product"
-            assert restored_product.default_selling_price == 42.0
+
+            batch_result = await db.execute(
+                select(MedicineBatch).where(MedicineBatch.product_id == product_id)
+            )
+            restored_batch = batch_result.scalar_one()
+            assert restored_batch.cost_price == 17.5
+            assert restored_batch.selling_price == 42.0
 
     async def test_manifest_mismatch_refuses_to_restore(self, client, owner_user):
         """

@@ -58,24 +58,25 @@ async def main() -> None:
             cost = round(price * random.uniform(0.3, 0.7), 2)
             result = await db.execute(
                 text(
-                    "INSERT INTO products (name, default_selling_price, reorder_point, "
-                    "is_active) VALUES (:name, :price, 20, 1) RETURNING id"
+                    "INSERT INTO products (name, reorder_point, "
+                    "is_active) VALUES (:name, 20, 1) RETURNING id"
                 ),
-                {"name": f"Stress Test Product {i:04d}", "price": price},
+                {"name": f"Stress Test Product {i:04d}"},
             )
             pid = result.scalar_one()
 
             batch_result = await db.execute(
                 text(
                     "INSERT INTO medicine_batches (product_id, batch_number, expiry_date, "
-                    "qty_received, qty_remaining, cost_price) "
-                    "VALUES (:pid, :bn, :exp, 100000, 100000, :cost) RETURNING id"
+                    "qty_received, qty_remaining, cost_price, selling_price) "
+                    "VALUES (:pid, :bn, :exp, 100000, 100000, :cost, :price) RETURNING id"
                 ),
                 {
                     "pid": pid,
                     "bn": f"BATCH-{i:04d}",
                     "exp": (now + timedelta(days=1000)).date().isoformat(),
                     "cost": cost,
+                    "price": price,
                 },
             )
             batch_id = batch_result.scalar_one()

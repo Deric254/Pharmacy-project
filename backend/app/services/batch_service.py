@@ -38,37 +38,10 @@ class BatchService:
         if product is None:
             raise HTTPException(status_code=404, detail="Product not found")
 
-        # payload.selling_price already can't be below cost_price when
-        # explicitly given -- see BatchCreate's own validator -- but
-        # that validator has no way to see product.default_selling_price,
-        # so the fallback used when selling_price is omitted needs its
-        # own check here, or a product with a stale/low default price
-        # would silently create a below-cost batch anyway.
-        #
-        # default_selling_price == 0.0 is this codebase's existing
-        # "no real price set yet" sentinel, not a deliberate give-it-
-        # away price -- ProductCreate defaults to it, and a plain
-        # "create a product, then add its first batch" flow (nobody
-        # has typed a price anywhere yet) is completely normal and
-        # must not be blocked (confirmed live: this exact scenario is
-        # exercised by TestBatchCreation::test_create_batch_updates_product_total,
-        # which never sets a default price). Only a genuinely-set,
-        # non-zero default that's simply too low gets caught here.
-        resolved_selling_price = (
-            payload.selling_price
-            if payload.selling_price is not None
-            else product.default_selling_price
-        )
-        if resolved_selling_price != 0 and resolved_selling_price < payload.cost_price:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Selling price ({resolved_selling_price}) is below cost price "
-                    f"({payload.cost_price}) -- this batch would lose money on every unit "
-                    "sold. Set an explicit selling price for this batch, or update the "
-                    "product's default selling price first."
-                ),
-            )
+        # selling_price is required on the payload (see BatchCreate),
+        # and its own validator already rejects it below cost_price --
+        # no product-level fallback or sentinel to special-case here
+        # any more. Every batch owns its price outright from creation.
 
         batch = MedicineBatch(
             product_id=product_id,
@@ -77,7 +50,7 @@ class BatchService:
             qty_received=payload.qty_received,
             qty_remaining=payload.qty_received,
             cost_price=payload.cost_price,
-            selling_price=resolved_selling_price,
+            selling_price=payload.selling_price,
         )
         self.db.add(batch)
         await self.db.flush()  # assigns batch.id without ending the transaction

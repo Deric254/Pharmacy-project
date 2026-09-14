@@ -936,7 +936,7 @@ function ProductManagementPanel({ onChanged }: { onChanged: () => void }) {
                 {p.total_qty_available} in stock
               </span>
               <span className="figure text-xs text-ink-soft" title="Selling price">
-                Sell {formatCurrency(p.current_selling_price ?? p.default_selling_price)}
+                Sell {p.current_selling_price !== null ? formatCurrency(p.current_selling_price) : '—'}
               </span>
               <span className="figure text-xs text-ink-soft" title="Buying price (cost)">
                 Buy {p.current_cost !== null ? formatCurrency(p.current_cost) : '—'}
@@ -1039,7 +1039,6 @@ function ProductFormModal({
   const [barcode, setBarcode] = useState(product?.barcode ?? '')
   const [unit, setUnit] = useState(product?.unit ?? 'unit')
   const [reorderPoint, setReorderPoint] = useState(product?.reorder_point ?? 10)
-  const [price, setPrice] = useState(product?.default_selling_price ?? 0)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [batches, setBatches] = useState<BatchOut[] | null>(null)
@@ -1076,9 +1075,7 @@ function ProductFormModal({
     const today = businessToday(timezone)
     return batches.find((b) => b.qty_remaining > 0 && b.expiry_date >= today) ?? null
   }, [batches, timezone])
-  const currentSellingPrice = fefoNextBatch
-    ? (fefoNextBatch.selling_price ?? product?.default_selling_price ?? null)
-    : null
+  const currentSellingPrice = fefoNextBatch ? fefoNextBatch.selling_price : null
   const currentCost = fefoNextBatch?.cost_price ?? null
 
   async function handleBatchPriceChange(batchId: number, sellingPrice: number) {
@@ -1127,7 +1124,6 @@ function ProductFormModal({
           barcode: barcode || null,
           unit,
           reorder_point: reorderPoint,
-          default_selling_price: price,
         }
         await productsApi.update(product.id, payload)
       } else {
@@ -1136,7 +1132,6 @@ function ProductFormModal({
           barcode: barcode || null,
           unit,
           reorder_point: reorderPoint,
-          default_selling_price: price,
         }
         await productsApi.create(payload)
       }
@@ -1193,49 +1188,17 @@ function ProductFormModal({
             />
           </label>
         </div>
-        <label className="block">
-          <span className="block text-xs uppercase tracking-wide text-ink-soft">
-            Default selling price
-          </span>
-          <input
-            type="number"
-            min={0}
-            step="any"
-            value={price}
-              onChange={(e) => setPrice(Math.max(0, Number(e.target.value) || 0))}
-            className="figure mt-1 w-full border border-rule bg-paper px-3 py-2"
-          />
-          <p className="mt-1 text-xs text-ink-soft">
-            {isEdit && currentSellingPrice !== null ? (
+        {isEdit && (currentCost !== null || currentSellingPrice !== null) && (
+          <p className="text-xs text-ink-soft">
+            {currentSellingPrice !== null && (
               <>
-                POS charging <strong>{formatCurrency(currentSellingPrice)}</strong> (current batch)
+                POS currently charging <strong>{formatCurrency(currentSellingPrice)}</strong>
               </>
-            ) : (
-              'Fallback price for new batches'
+            )}
+            {currentCost !== null && (
+              <> (cost {formatCurrency(currentCost)}) -- set per batch below.</>
             )}
           </p>
-        </label>
-
-        {isEdit && currentCost !== null && (
-          <label className="block">
-            <span className="block text-xs uppercase tracking-wide text-ink-soft">
-              Markup % (cost {currentCost.toFixed(2)})
-            </span>
-            <div className="mt-1 flex items-center gap-2">
-              <input
-                type="number"
-                min={0}
-                step={1}
-                placeholder="e.g. 40"
-                onChange={(e) => {
-                  const markupPercent = Number(e.target.value)
-                  setPrice(Math.round(currentCost * (1 + markupPercent / 100) * 100) / 100)
-                }}
-                className="figure w-24 border border-rule bg-paper px-3 py-2"
-              />
-              <span className="text-sm text-ink-soft">→ {price.toFixed(2)}</span>
-            </div>
-          </label>
         )}
 
         {isEdit && (

@@ -214,7 +214,10 @@ class ProductService:
             )
             .order_by(MedicineBatch.product_id, MedicineBatch.expiry_date.asc())
         )
-        next_price_by_product: dict[int, tuple[float, float | None]] = {}
+        # selling_price is required on every batch (migration 0036),
+        # so this tuple's second element is never None for a batch
+        # that's actually in the query results below.
+        next_price_by_product: dict[int, tuple[float, float]] = {}
         for product_id, cost_price, selling_price in result.tuples().all():
             next_price_by_product.setdefault(product_id, (cost_price, selling_price))
         return next_price_by_product
@@ -228,9 +231,8 @@ class ProductService:
         one. None when there's no stock to compute a real cost from,
         never a fabricated number.
         """
-        if cost is None:
+        if cost is None or selling_price is None:
             return
-        selling_price = selling_price if selling_price is not None else out.default_selling_price
         out.current_cost = cost
         out.current_selling_price = selling_price
         profit = selling_price - cost

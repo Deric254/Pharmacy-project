@@ -2,8 +2,8 @@
 Product bulk import.
 
 Two layers of defense, not one. The Excel template itself constrains
-what can be typed into it (a dropdown for unit, numeric-only cells for
-quantity and price) -- that's what makes a bad row hard to create in
+what can be typed into it (a dropdown for unit, a numeric-only cell for
+reorder point) -- that's what makes a bad row hard to create in
 the first place. But Excel-level validation can be bypassed (pasting
 values, editing with a different tool, a formula that evaluates past
 the constraint), so it is never trusted as the real guarantee. Every
@@ -48,8 +48,8 @@ _COMMON_UNITS = [
     "pack",
 ]
 
-_HEADERS = ["Name", "Barcode", "Unit", "Reorder point", "Selling price"]
-_EXAMPLE_ROW: list[str | int | float] = ["EXAMPLE - Paracetamol 500mg", "", "tablet", 20, 15.0]
+_HEADERS = ["Name", "Barcode", "Unit", "Reorder point"]
+_EXAMPLE_ROW: list[str | int | float] = ["EXAMPLE - Paracetamol 500mg", "", "tablet", 20]
 _MAX_ROWS = 2000  # generous for a small pharmacy's catalog; guards against an accidental huge file
 
 
@@ -76,7 +76,6 @@ def generate_import_template() -> bytes:
     ws.column_dimensions["B"].width = 18
     ws.column_dimensions["C"].width = 14
     ws.column_dimensions["D"].width = 16
-    ws.column_dimensions["E"].width = 16
 
     # Unit: a dropdown, not free text -- the actual mechanism that makes
     # "Tabs" / "tabs " / "Tablet " typo variants structurally impossible
@@ -104,19 +103,7 @@ def generate_import_template() -> bytes:
     ws.add_data_validation(reorder_validation)
     reorder_validation.add(f"D2:D{_MAX_ROWS}")
 
-    price_validation = DataValidation(
-        type="decimal",
-        operator="greaterThanOrEqual",
-        formula1=0,
-        allow_blank=False,
-        showErrorMessage=True,
-        errorTitle="Invalid selling price",
-        error="Selling price must be a number, 0 or greater.",
-    )
-    ws.add_data_validation(price_validation)
-    price_validation.add(f"E2:E{_MAX_ROWS}")
-
-    instructions = ws.cell(row=1, column=7, value="Delete the EXAMPLE row before importing.")
+    instructions = ws.cell(row=1, column=6, value="Delete the EXAMPLE row before importing.")
     instructions.font = Font(name="Arial", italic=True, size=9, color="991B1B")
 
     buffer = io.BytesIO()
@@ -157,8 +144,8 @@ async def _parse_and_validate(
 
     for offset, row in enumerate(rows):
         row_num = offset + 2  # 1-indexed, header is row 1
-        row_values: list[Any] = (list(row) + [None] * 5)[:5]
-        name_raw, barcode_raw, unit_raw, reorder_raw, price_raw = row_values
+        row_values: list[Any] = (list(row) + [None] * 4)[:4]
+        name_raw, barcode_raw, unit_raw, reorder_raw = row_values
         name = _clean_str(name_raw)
 
         if not name:
@@ -189,18 +176,6 @@ async def _parse_and_validate(
                 )
             )
             reorder_point = 0
-
-        try:
-            price = float(price_raw) if price_raw is not None else 0.0
-            if price < 0:
-                raise ValueError
-        except (TypeError, ValueError):
-            errors.append(
-                ImportRowError(
-                    row=row_num, field="Selling price", message="Must be a number, 0 or more."
-                )
-            )
-            price = 0.0
 
         name_key = name.lower()
         if name_key in seen_names:
@@ -257,7 +232,6 @@ async def _parse_and_validate(
                     barcode=barcode,
                     unit=unit,
                     reorder_point=reorder_point,
-                    default_selling_price=price,
                 )
             )
         except ValidationError as exc:

@@ -1,8 +1,8 @@
 """
 Product bulk import tests. The properties that matter:
   1. The template is a real, valid spreadsheet with real data
-     validation rules (dropdown for unit, numeric-only for quantity
-     and price) -- not just headers.
+     validation rules (dropdown for unit, numeric-only for reorder
+     point) -- not just headers.
   2. Import is genuinely all-or-nothing: if ANY row has a problem,
      ZERO rows are imported, even the clean ones in the same file.
   3. Every problem is reported at once, with the real row number, not
@@ -29,7 +29,7 @@ async def _login(client, username: str, password: str) -> str:
 def _build_workbook(rows: list[list[object]]) -> bytes:
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.append(["Name", "Barcode", "Unit", "Reorder point", "Selling price"])
+    ws.append(["Name", "Barcode", "Unit", "Reorder point"])
     for row in rows:
         ws.append(row)
     buffer = io.BytesIO()
@@ -43,20 +43,19 @@ class TestImportTemplate:
         wb = openpyxl.load_workbook(io.BytesIO(content))
         ws = wb.active
 
-        assert [c.value for c in ws[1]][:5] == [
+        assert [c.value for c in ws[1]][:4] == [
             "Name",
             "Barcode",
             "Unit",
             "Reorder point",
-            "Selling price",
         ]
         # Real Excel data validation, not just header text -- this is
-        # what makes a typo'd unit or a non-numeric price structurally
-        # hard to enter in the first place.
+        # what makes a typo'd unit or a non-numeric reorder point
+        # structurally hard to enter in the first place.
         validations = list(ws.data_validations.dataValidation)
-        assert len(validations) == 3
+        assert len(validations) == 2
         types = {v.type for v in validations}
-        assert types == {"list", "whole", "decimal"}
+        assert types == {"list", "whole"}
 
     async def test_template_download_requires_permission(self, client, employee_user):
         token = await _login(client, "joe", "pass1234")
@@ -100,8 +99,8 @@ class TestBulkImport:
         token = await _login(client, "lucy", "S3curePass!")
         content = _build_workbook(
             [
-                ["Genuinely Clean Row", "", "tablet", 10, 8.0],
-                ["Bad Reorder Point", "", "tablet", "not-a-number", 5.0],
+                ["Genuinely Clean Row", "", "tablet", 10],
+                ["Bad Reorder Point", "", "tablet", "not-a-number"],
             ]
         )
         r = await client.post(
@@ -124,9 +123,9 @@ class TestBulkImport:
         token = await _login(client, "lucy", "S3curePass!")
         content = _build_workbook(
             [
-                ["Bad Unit Row", "", "not-a-real-unit", 10, 5.0],
-                ["Bad Price Row", "", "tablet", 10, "not-a-number"],
-                ["Bad Reorder Row", "", "tablet", "not-a-number", 5.0],
+                ["Bad Unit Row", "", "not-a-real-unit", 10],
+                ["X" * 200, "", "tablet", 10],
+                ["Bad Reorder Row", "", "tablet", "not-a-number"],
             ]
         )
         r = await client.post(
@@ -143,8 +142,8 @@ class TestBulkImport:
         token = await _login(client, "lucy", "S3curePass!")
         content = _build_workbook(
             [
-                ["Metformin 500mg", "", "tablet", 10, 9.0],
-                ["metformin 500mg", "", "tablet", 10, 9.0],
+                ["Metformin 500mg", "", "tablet", 10],
+                ["metformin 500mg", "", "tablet", 10],
             ]
         )
         r = await client.post(
@@ -162,7 +161,7 @@ class TestBulkImport:
         headers = {"Authorization": f"Bearer {token}"}
         await client.post("/api/v1/products", json={"name": "Already Exists"}, headers=headers)
 
-        content = _build_workbook([["Already Exists", "", "tablet", 10, 5.0]])
+        content = _build_workbook([["Already Exists", "", "tablet", 10]])
         r = await client.post(
             "/api/v1/products/import",
             headers=headers,
@@ -197,7 +196,7 @@ class TestBulkImport:
 
     async def test_import_requires_permission(self, client, employee_user):
         token = await _login(client, "joe", "pass1234")
-        content = _build_workbook([["Some Product", "", "tablet", 10, 5.0]])
+        content = _build_workbook([["Some Product", "", "tablet", 10]])
         r = await client.post(
             "/api/v1/products/import",
             headers={"Authorization": f"Bearer {token}"},
@@ -232,7 +231,7 @@ class TestBulkImport:
         back as a normal, structured per-row error.
         """
         token = await _login(client, "lucy", "S3curePass!")
-        content = _build_workbook([["A" * 500, "", "tablet", 10, 5.0]])
+        content = _build_workbook([["A" * 500, "", "tablet", 10]])
         r = await client.post(
             "/api/v1/products/import",
             headers={"Authorization": f"Bearer {token}"},

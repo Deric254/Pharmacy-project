@@ -38,7 +38,7 @@ class TestBlanketLedgerReconciliation:
         for name, price in [("Consistency Product A", 10.0), ("Consistency Product B", 20.0)]:
             resp = await client.post(
                 "/api/v1/products",
-                json={"name": name, "default_selling_price": price},
+                json={"name": name},
                 headers=owner_headers,
             )
             product_id = resp.json()["id"]
@@ -53,6 +53,7 @@ class TestBlanketLedgerReconciliation:
                         "expiry_date": expiry,
                         "qty_received": qty,
                         "cost_price": cost,
+                        "selling_price": price,
                     },
                     headers=owner_headers,
                 )
@@ -100,7 +101,7 @@ class TestBlanketLedgerReconciliation:
 
         product_resp = await client.post(
             "/api/v1/products",
-            json={"name": "Interleave Test Product", "default_selling_price": 8.0},
+            json={"name": "Interleave Test Product"},
             headers=owner_headers,
         )
         product_id = product_resp.json()["id"]
@@ -111,6 +112,7 @@ class TestBlanketLedgerReconciliation:
                 "expiry_date": "2027-01-01",
                 "qty_received": 100,
                 "cost_price": 3.0,
+                "selling_price": 8.0,
             },
             headers=owner_headers,
         )
@@ -185,6 +187,7 @@ class TestSupplierBalanceConsistency:
                             "batch_number": f"SUPPLIER-CONS-{i}",
                             "expiry_date": "2027-01-01",
                             "unit_cost": 5.0,
+                            "selling_price": 9.0,
                         }
                     ],
                 },

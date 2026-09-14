@@ -429,7 +429,7 @@ export function PosPage() {
             >
               <p className="truncate text-sm font-medium">{product.name}</p>
               <p className="figure mt-1 text-sm text-ink-soft">
-                {formatCurrency(product.current_selling_price ?? product.default_selling_price)}
+                {formatCurrency(product.current_selling_price ?? 0)}
               </p>
               <p className="text-xs text-ink-soft">{product.total_qty_available} in stock</p>
               {product.margin_percent !== null && (
@@ -463,10 +463,7 @@ export function PosPage() {
                 <div className="flex justify-between text-sm">
                   <span className="truncate pr-2">{line.product.name}</span>
                   <span className="figure">
-                    {formatCurrency(
-                      (line.product.current_selling_price ?? line.product.default_selling_price) *
-                        line.quantity,
-                    )}
+                    {formatCurrency((line.product.current_selling_price ?? 0) * line.quantity)}
                   </span>
                 </div>
                 <div className="mt-1 flex items-center gap-2">

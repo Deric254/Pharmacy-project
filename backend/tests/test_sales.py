@@ -45,7 +45,7 @@ async def _make_product_with_batch(
     price: float = 10.0, qty: int = 20, expiry: str = "2027-01-01", cost: float | None = None
 ) -> int:
     async with AsyncSessionLocal() as db:
-        product = Product(name="Amoxicillin 500mg", default_selling_price=price)
+        product = Product(name="Amoxicillin 500mg")
         db.add(product)
         await db.flush()
         db.add(
@@ -56,6 +56,7 @@ async def _make_product_with_batch(
                 qty_received=qty,
                 qty_remaining=qty,
                 cost_price=cost if cost is not None else price / 2,
+                selling_price=price,
             )
         )
         await db.commit()
@@ -220,7 +221,7 @@ class TestCreateSale:
 
     async def test_checkout_draws_nearest_expiry_batch_first(self, client, employee_user):
         async with AsyncSessionLocal() as db:
-            product = Product(name="Paracetamol", default_selling_price=5.0)
+            product = Product(name="Paracetamol")
             db.add(product)
             await db.flush()
             db.add(
@@ -231,6 +232,7 @@ class TestCreateSale:
                     qty_received=50,
                     qty_remaining=50,
                     cost_price=2.0,
+                    selling_price=5.0,
                 )
             )
             db.add(
@@ -241,6 +243,7 @@ class TestCreateSale:
                     qty_received=10,
                     qty_remaining=10,
                     cost_price=2.0,
+                    selling_price=5.0,
                 )
             )
             await db.commit()
@@ -900,6 +903,7 @@ class TestExpiredStockNeverSold:
                     qty_received=20,
                     qty_remaining=20,
                     cost_price=5.0,
+                    selling_price=10.0,
                 )
             )
             await db.commit()

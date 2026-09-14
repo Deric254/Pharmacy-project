@@ -82,11 +82,9 @@ class SaleService:
                     self.db, item.product_id, item.quantity, lock=True
                 )
                 for batch, qty in allocations:
-                    unit_price = (
-                        batch.selling_price
-                        if batch.selling_price is not None
-                        else product.default_selling_price
-                    )
+                    # selling_price is required on every batch (migration
+                    # 0036) -- no product-level fallback to read any more.
+                    unit_price = batch.selling_price
                     subtotal += unit_price * qty
                     if unit_price < batch.cost_price:
                         raise HTTPException(
@@ -126,11 +124,9 @@ class SaleService:
             await self.db.flush()  # assigns sale.id without ending the transaction
 
             for product_id, (batch, qty) in all_allocations:
-                unit_price = (
-                    batch.selling_price
-                    if batch.selling_price is not None
-                    else products_by_id[product_id].default_selling_price
-                )
+                # selling_price is required on every batch (migration
+                # 0036) -- no product-level fallback to read any more.
+                unit_price = batch.selling_price
                 self.db.add(
                     SaleItem(
                         sale_id=sale.id,
@@ -235,21 +231,18 @@ class SaleService:
         return SaleOut.model_validate(sale)
 
     async def quote_sale(self, payload: SaleQuoteRequest) -> SaleQuoteOut:
-        products_by_id = await self._load_active_products(
-            [item.product_id for item in payload.items]
-        )
+        # Return value unused here -- called only to 404 on any
+        # missing/inactive product before quoting proceeds.
+        await self._load_active_products([item.product_id for item in payload.items])
         subtotal = 0.0
         for item in payload.items:
-            product = products_by_id[item.product_id]
             allocations = await select_batches_fefo(
                 self.db, item.product_id, item.quantity, lock=False
             )
             for batch, quantity in allocations:
-                unit_price = (
-                    batch.selling_price
-                    if batch.selling_price is not None
-                    else product.default_selling_price
-                )
+                # selling_price is required on every batch (migration
+                # 0036) -- no product-level fallback to read any more.
+                unit_price = batch.selling_price
                 subtotal += unit_price * quantity
         if payload.discount_amount > subtotal:
             raise HTTPException(

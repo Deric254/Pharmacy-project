@@ -26,7 +26,7 @@ async def _login(client, username: str, password: str) -> str:
 
 async def _make_product_with_batch(qty: int = 50, price: float = 10.0) -> int:
     async with AsyncSessionLocal() as db:
-        product = Product(name="Customer Test Product", default_selling_price=price)
+        product = Product(name="Customer Test Product")
         db.add(product)
         await db.flush()
         batch = MedicineBatch(
@@ -36,6 +36,7 @@ async def _make_product_with_batch(qty: int = 50, price: float = 10.0) -> int:
             qty_received=qty,
             qty_remaining=qty,
             cost_price=2.0,
+            selling_price=price,
         )
         db.add(batch)
         await db.flush()

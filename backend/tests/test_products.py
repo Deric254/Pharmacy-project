@@ -97,6 +97,7 @@ class TestBatchCreation:
                 "expiry_date": "2027-01-01",
                 "qty_received": 100,
                 "cost_price": 5.0,
+                "selling_price": 8.0,
             },
             headers=headers,
         )
@@ -118,6 +119,7 @@ class TestBatchCreation:
                 "expiry_date": "2027-01-01",
                 "qty_received": 50,
                 "cost_price": 5.0,
+                "selling_price": 8.0,
             },
             headers=headers,
         )
@@ -128,6 +130,7 @@ class TestBatchCreation:
                 "expiry_date": "2027-06-01",
                 "qty_received": 30,
                 "cost_price": 5.5,
+                "selling_price": 8.5,
             },
             headers=headers,
         )
@@ -194,24 +197,24 @@ class TestBatchCreation:
         )
         assert r.status_code == 201
 
-    async def test_omitted_selling_price_falling_back_to_a_stale_default_is_still_rejected(
-        self, client, owner_user
-    ):
+    async def test_omitted_selling_price_is_rejected_outright(self, client, owner_user):
         """
-        The gap this closes: BatchCreate's own validator only ever
-        sees a selling_price the caller actually typed. Leaving it
-        blank falls back to the product's default_selling_price
-        instead -- if that default is stale or was never set high
-        enough, the schema validator alone would never catch it.
+        The gap this used to close: BatchCreate's own validator only
+        ever saw a selling_price the caller actually typed. Leaving it
+        blank used to fall back to the product's default_selling_price
+        -- if that default was stale or never set high enough, the
+        schema validator alone would never catch it.
+
+        That fallback no longer exists at all (see migration 0036 --
+        a Product carries no price of its own any more), so the whole
+        class of bug is now structurally impossible rather than just
+        better-guarded: omitting selling_price on a manual batch entry
+        is rejected outright as a missing required field, with nothing
+        left to silently resolve to in its place.
         """
         token = await self._login(client, "lucy", "S3curePass!")
         headers = {"Authorization": f"Bearer {token}"}
-        product = await client.post(
-            "/api/v1/products",
-            json={"name": "Stale Default Product", "default_selling_price": 2.0},
-            headers=headers,
-        )
-        product_id = product.json()["id"]
+        product_id = await self._make_product(client, headers)
 
         r = await client.post(
             f"/api/v1/products/{product_id}/batches",
@@ -220,13 +223,13 @@ class TestBatchCreation:
                 "expiry_date": "2027-01-01",
                 "qty_received": 10,
                 "cost_price": 5.0,
-                # selling_price omitted on purpose -- falls back to
-                # the product's stale 2.0 default.
+                # selling_price omitted on purpose -- there is no
+                # fallback left for this to resolve to.
             },
             headers=headers,
         )
-        assert r.status_code == 400
-        assert "below cost price" in r.text
+        assert r.status_code == 422
+        assert "selling_price" in r.text
 
     async def test_price_update_cannot_drop_a_batch_below_its_own_cost(self, client, owner_user):
         token = await self._login(client, "lucy", "S3curePass!")
@@ -272,7 +275,7 @@ class TestProductExport:
         headers = {"Authorization": f"Bearer {token}"}
         await client.post(
             "/api/v1/products",
-            json={"name": "Exportable Product", "default_selling_price": 5.0},
+            json={"name": "Exportable Product"},
             headers=headers,
         )
 
@@ -424,7 +427,7 @@ class TestMarginAndMarkup:
         headers = {"Authorization": f"Bearer {token}"}
         r = await client.post(
             "/api/v1/products",
-            json={"name": "No Stock Yet", "default_selling_price": 20.0},
+            json={"name": "No Stock Yet"},
             headers=headers,
         )
         body = r.json()
@@ -444,7 +447,7 @@ class TestMarginAndMarkup:
         headers = {"Authorization": f"Bearer {token}"}
         create = await client.post(
             "/api/v1/products",
-            json={"name": "Margin Test Product", "default_selling_price": 20.0},
+            json={"name": "Margin Test Product"},
             headers=headers,
         )
         product_id = create.json()["id"]
@@ -455,6 +458,7 @@ class TestMarginAndMarkup:
                 "expiry_date": "2027-01-01",
                 "qty_received": 10,
                 "cost_price": 12.0,
+                "selling_price": 20.0,
             },
             headers=headers,
         )
@@ -481,7 +485,7 @@ class TestMarginAndMarkup:
         headers = {"Authorization": f"Bearer {token}"}
         create = await client.post(
             "/api/v1/products",
-            json={"name": "FEFO Margin Product", "default_selling_price": 20.0},
+            json={"name": "FEFO Margin Product"},
             headers=headers,
         )
         product_id = create.json()["id"]
@@ -493,6 +497,7 @@ class TestMarginAndMarkup:
                 "expiry_date": "2028-01-01",
                 "qty_received": 10,
                 "cost_price": 5.0,
+                "selling_price": 20.0,
             },
             headers=headers,
         )
@@ -504,6 +509,7 @@ class TestMarginAndMarkup:
                 "expiry_date": "2027-01-01",
                 "qty_received": 10,
                 "cost_price": 15.0,
+                "selling_price": 20.0,
             },
             headers=headers,
         )
@@ -516,7 +522,7 @@ class TestMarginAndMarkup:
         headers = {"Authorization": f"Bearer {token}"}
         create = await client.post(
             "/api/v1/products",
-            json={"name": "List Margin Product", "default_selling_price": 20.0},
+            json={"name": "List Margin Product"},
             headers=headers,
         )
         product_id = create.json()["id"]
@@ -527,6 +533,7 @@ class TestMarginAndMarkup:
                 "expiry_date": "2027-01-01",
                 "qty_received": 10,
                 "cost_price": 12.0,
+                "selling_price": 20.0,
             },
             headers=headers,
         )
@@ -557,7 +564,7 @@ class TestMarginAndMarkup:
         headers = {"Authorization": f"Bearer {token}"}
         create = await client.post(
             "/api/v1/products",
-            json={"name": "FEFO Price Visibility Product", "default_selling_price": 20.0},
+            json={"name": "FEFO Price Visibility Product"},
             headers=headers,
         )
         product_id = create.json()["id"]
@@ -662,7 +669,7 @@ class TestAvailableStockMeansSellable:
 
         product = await client.post(
             "/api/v1/products",
-            json={"name": "Expired Only Product", "default_selling_price": 20.0},
+            json={"name": "Expired Only Product"},
             headers=headers,
         )
         product_id = product.json()["id"]
@@ -674,6 +681,7 @@ class TestAvailableStockMeansSellable:
                 "expiry_date": yesterday,
                 "qty_received": 7,
                 "cost_price": 5.0,
+                "selling_price": 20.0,
             },
             headers=headers,
         )
@@ -746,6 +754,7 @@ class TestProductListOrdering:
                         "expiry_date": "2027-06-30",
                         "qty_received": qty,
                         "cost_price": 1.0,
+                        "selling_price": 2.0,
                     },
                     headers=headers,
                 )
@@ -783,7 +792,7 @@ class TestBatchCostCorrection:
     ) -> tuple[int, int]:
         product = await client.post(
             "/api/v1/products",
-            json={"name": f"Cost Correction Product {batch_number}", "default_selling_price": 30.0},
+            json={"name": f"Cost Correction Product {batch_number}"},
             headers=headers,
         )
         product_id = product.json()["id"]
@@ -1028,7 +1037,6 @@ class TestBatchExpiryCorrection:
             "/api/v1/products",
             json={
                 "name": f"Expiry Correction Product {batch_number}",
-                "default_selling_price": 30.0,
             },
             headers=headers,
         )

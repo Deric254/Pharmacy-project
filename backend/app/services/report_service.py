@@ -786,11 +786,12 @@ class ReportService:
                 func.coalesce(
                     func.sum(MedicineBatch.qty_remaining * MedicineBatch.cost_price), 0.0
                 ).label("cost"),
+                # selling_price is required on every batch (migration
+                # 0036) -- no product-level fallback to coalesce
+                # against any more; the outer coalesce still covers a
+                # product with zero batches at all (sum of nothing).
                 func.coalesce(
-                    func.sum(
-                        MedicineBatch.qty_remaining
-                        * func.coalesce(MedicineBatch.selling_price, Product.default_selling_price)
-                    ),
+                    func.sum(MedicineBatch.qty_remaining * MedicineBatch.selling_price),
                     0.0,
                 ).label("revenue"),
             )

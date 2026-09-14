@@ -29,9 +29,9 @@ async def _login(client, username: str, password: str) -> str:
     return str(r.json()["access_token"])
 
 
-async def _make_product(name: str, reorder_point: int = 10, price: float = 5.0) -> int:
+async def _make_product(name: str, reorder_point: int = 10) -> int:
     async with AsyncSessionLocal() as db:
-        product = Product(name=name, reorder_point=reorder_point, default_selling_price=price)
+        product = Product(name=name, reorder_point=reorder_point)
         db.add(product)
         await db.commit()
         return int(product.id)
@@ -48,6 +48,7 @@ async def _add_batch(
             qty_received=qty,
             qty_remaining=qty,
             cost_price=2.0,
+            selling_price=5.0,
         )
         db.add(batch)
         await db.flush()
@@ -491,6 +492,7 @@ class TestStockMovementHistory:
                         "batch_number": "PO-TRACE-1",
                         "expiry_date": "2027-06-30",
                         "unit_cost": 4.0,
+                        "selling_price": 8.0,
                     }
                 ],
             },
@@ -521,7 +523,7 @@ class TestSaleTriggeredLowStockEvent:
     async def test_sale_dropping_below_reorder_point_publishes_stock_low(
         self, client, employee_user
     ):
-        product_id = await _make_product("Event Test Product", reorder_point=10, price=5.0)
+        product_id = await _make_product("Event Test Product", reorder_point=10)
         await _add_batch(product_id, qty=12)
 
         pubsub = redis_client.pubsub()

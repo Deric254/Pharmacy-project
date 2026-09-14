@@ -679,7 +679,14 @@ function QuickPurchaseModal({
                           updateLine(index, {
                             productId: p.id,
                             productName: p.name,
-                            sellingPrice: p.default_selling_price,
+                            // Seeded from this product's current
+                            // effective price (whichever batch would
+                            // sell next) purely as a starting display
+                            // value -- sellingPriceTouched stays false,
+                            // so nothing is actually submitted unless
+                            // the person edits it (see the field's own
+                            // comment on why that distinction matters).
+                            sellingPrice: p.current_selling_price ?? 0,
                           })
                           setActiveSearchIndex(null)
                           setProductResults([])

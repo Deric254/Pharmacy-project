@@ -62,22 +62,21 @@ async def main(num_sales: int) -> None:
         )
         db.add(user)
 
-        products = [
-            Product(name=f"Load Test Product {i}", default_selling_price=10.0 + i)
-            for i in range(50)
-        ]
+        products = [Product(name=f"Load Test Product {i}") for i in range(50)]
         db.add_all(products)
         await db.flush()
 
         batches = []
         for p in products:
+            selling_price = 10.0 + products.index(p)
             b = MedicineBatch(
                 product_id=p.id,
                 batch_number=f"LT-{p.id}",
                 expiry_date=date(2028, 1, 1),
                 qty_received=10_000_000,
                 qty_remaining=10_000_000,
-                cost_price=p.default_selling_price / 2,
+                cost_price=selling_price / 2,
+                selling_price=selling_price,
             )
             batches.append(b)
         db.add_all(batches)

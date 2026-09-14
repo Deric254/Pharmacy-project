@@ -35,7 +35,7 @@ async def _make_product_with_batch(
     qty: int = 50, price: float = 10.0, cost: float = 4.0
 ) -> tuple[int, int]:
     async with AsyncSessionLocal() as db:
-        product = Product(name="Stock Take Test Product", default_selling_price=price)
+        product = Product(name="Stock Take Test Product")
         db.add(product)
         await db.flush()
         batch = MedicineBatch(
@@ -45,6 +45,7 @@ async def _make_product_with_batch(
             qty_received=qty,
             qty_remaining=qty,
             cost_price=cost,
+            selling_price=price,
         )
         db.add(batch)
         await db.flush()
@@ -709,7 +710,7 @@ class TestStockTakeExcelRoundTrip:
 
         product = await client.post(
             "/api/v1/products",
-            json={"name": "Excel Roundtrip Product", "default_selling_price": 20.0},
+            json={"name": "Excel Roundtrip Product"},
             headers=headers,
         )
         product_id = product.json()["id"]
@@ -720,6 +721,7 @@ class TestStockTakeExcelRoundTrip:
                 "expiry_date": "2027-06-30",
                 "qty_received": 75,
                 "cost_price": 8.0,
+                "selling_price": 20.0,
             },
             headers=headers,
         )
@@ -756,7 +758,7 @@ class TestStockTakeExcelRoundTrip:
 
         product = await client.post(
             "/api/v1/products",
-            json={"name": "Excel Autoclose Product", "default_selling_price": 20.0},
+            json={"name": "Excel Autoclose Product"},
             headers=headers,
         )
         product_id = product.json()["id"]
@@ -767,6 +769,7 @@ class TestStockTakeExcelRoundTrip:
                 "expiry_date": "2027-06-30",
                 "qty_received": 100,
                 "cost_price": 5.0,
+                "selling_price": 20.0,
             },
             headers=headers,
         )
@@ -837,7 +840,7 @@ class TestStockTakeExcelRoundTrip:
 
         product = await client.post(
             "/api/v1/products",
-            json={"name": "Blank Template Product", "default_selling_price": 15.0},
+            json={"name": "Blank Template Product"},
             headers=headers,
         )
         product_id = product.json()["id"]
@@ -848,6 +851,7 @@ class TestStockTakeExcelRoundTrip:
                 "expiry_date": "2027-06-30",
                 "qty_received": 40,
                 "cost_price": 5.0,
+                "selling_price": 15.0,
             },
             headers=headers,
         )
@@ -898,7 +902,7 @@ class TestStockTakeExcelRoundTrip:
 
         product = await client.post(
             "/api/v1/products",
-            json={"name": "Excel Tamper Product", "default_selling_price": 20.0},
+            json={"name": "Excel Tamper Product"},
             headers=headers,
         )
         product_id = product.json()["id"]
@@ -909,6 +913,7 @@ class TestStockTakeExcelRoundTrip:
                 "expiry_date": "2027-06-30",
                 "qty_received": 30,
                 "cost_price": 3.0,
+                "selling_price": 20.0,
             },
             headers=headers,
         )
@@ -988,7 +993,15 @@ class TestShrinkageValueIsFrozenAtClose:
 
         correct_resp = await client.patch(
             f"/api/v1/products/{product_id}/batches/{batch_id}/cost",
-            json={"cost_price": 50.0, "reason": "correcting cost long after this count closed"},
+            # Below the batch's selling price (10.0, from
+            # _make_product_with_batch's default) -- a real, valid
+            # correction. 50.0 was used here before selling_price was
+            # required (it was never actually set on the batch, so the
+            # below-selling-price guard was silently skipped); now that
+            # guard is real, so the test needs a cost correction that's
+            # actually legal, not one that happens to slip past a gap
+            # that no longer exists.
+            json={"cost_price": 6.0, "reason": "correcting cost long after this count closed"},
             headers=headers,
         )
         assert correct_resp.status_code == 200, correct_resp.text

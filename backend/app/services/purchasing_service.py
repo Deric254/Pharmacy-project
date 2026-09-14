@@ -129,32 +129,26 @@ class PurchasingService:
                 # ordering already found and hardened in
                 # RefundService._reserve_refund_quantity, not by
                 # anything this method itself guaranteed).
-                # Only ever compare/apply a price the purchaser actually
-                # typed on THIS line (line.selling_price, still None when
-                # left blank) -- never the resolved default. Two real bugs
-                # otherwise follow from resolving to product.default_selling_price
-                # before this point: (1) a genuinely blank line would get
-                # compared against the batch's real price and could
-                # wrongly 409 a plain restock that never mentioned price
-                # at all; (2) an explicit price on a batch that had none
-                # yet would fail this `is not None` check on the *existing*
-                # side and silently vanish -- never applied, never rejected,
-                # just dropped -- confirmed live: submitting selling_price
-                # on a second delivery of a batch with no price set left
-                # the batch's selling_price as None afterward.
-                if line.selling_price is not None:
-                    if (
-                        existing_batch.selling_price is not None
-                        and existing_batch.selling_price != line.selling_price
-                    ):
-                        raise HTTPException(
-                            status_code=409,
-                            detail=(
-                                "This batch already has a different selling price. "
-                                "Use a different batch number or edit the existing batch."
-                            ),
-                        )
-                    existing_batch.selling_price = line.selling_price
+                # A restock is allowed to say nothing about price at
+                # all -- it already has one from when this batch was
+                # first created, and blank here means "keep it".
+                # line.selling_price is only ever compared/checked when
+                # the caller actually stated one; otherwise this batch's
+                # existing (guaranteed non-null -- migration 0036) price
+                # is left exactly as-is, untouched. Deliberately
+                # changing an existing batch's price stays a separate,
+                # audited action (update_selling_price) -- not something
+                # that happens as a side effect of receiving stock, and
+                # a mismatched explicit price here is a conflict, not a
+                # silent overwrite.
+                if line.selling_price is not None and existing_batch.selling_price != line.selling_price:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "This batch already has a different selling price. "
+                            "Use a different batch number or edit the existing batch."
+                        ),
+                    )
                 # session.execute() autoflushes pending changes first
                 # (the selling_price assignment just above, if any) --
                 # so that reaches the row before this statement runs,
@@ -224,26 +218,30 @@ class PurchasingService:
                 await self.db.refresh(existing_batch)
                 batch = existing_batch
             else:
-                # default_selling_price == 0.0 is this codebase's
-                # existing "no real price set yet" sentinel, not a
-                # deliberate give-it-away price -- see the identical
-                # reasoning in BatchService.create_batch. Only a
-                # genuinely-set, non-zero default that's simply too
-                # low gets caught here.
-                resolved_selling_price = (
-                    line.selling_price
-                    if line.selling_price is not None
-                    else product.default_selling_price
-                )
-                if resolved_selling_price != 0 and resolved_selling_price < line.unit_cost:
+                # A genuinely new batch has nothing to inherit a price
+                # from any more -- no product-level default exists.
+                # Blank is only ever valid for a restock (handled in
+                # the branch above, where the batch already has its
+                # own price); here it's a real gap the caller must
+                # fill, so it's rejected as a clear business-rule
+                # error rather than silently defaulting to 0 or
+                # anything else guessed on its behalf.
+                if line.selling_price is None:
                     raise HTTPException(
                         status_code=400,
                         detail=(
-                            f"Selling price ({resolved_selling_price}) for batch "
+                            f"Batch {line.batch_number} is new stock -- a selling price is "
+                            "required (no existing batch to inherit one from)."
+                        ),
+                    )
+                if line.selling_price < line.unit_cost:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Selling price ({line.selling_price}) for batch "
                             f"{line.batch_number} is below its cost price ({line.unit_cost}) "
-                            "-- every unit sold from it would lose money. Set an explicit "
-                            "selling price for this line, or update the product's default "
-                            "selling price first."
+                            "-- every unit sold from it would lose money. Correct the "
+                            "selling price for this line."
                         ),
                     )
                 batch = MedicineBatch(
@@ -253,7 +251,7 @@ class PurchasingService:
                     qty_received=line.quantity,
                     qty_remaining=line.quantity,
                     cost_price=line.unit_cost,
-                    selling_price=resolved_selling_price,
+                    selling_price=line.selling_price,
                 )
                 self.db.add(batch)
             await self.db.flush()

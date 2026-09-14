@@ -10,7 +10,9 @@ class BatchCreate(BaseModel):
     expiry_date: date
     qty_received: PositiveQuantity
     cost_price: Money
-    selling_price: Money | None = None
+    # Required, same discipline as cost_price -- no product-level
+    # fallback exists to borrow from any more (see migration 0036).
+    selling_price: Money
 
     @model_validator(mode="after")
     def selling_price_must_not_be_below_cost(self) -> "BatchCreate":
@@ -20,7 +22,7 @@ class BatchCreate(BaseModel):
         # typo (swapped fields, a decimal in the wrong place) rather
         # than a deliberate loss-leader, and the one place to catch it
         # is here, before it's ever possible to sell at this price.
-        if self.selling_price is not None and self.selling_price < self.cost_price:
+        if self.selling_price < self.cost_price:
             raise ValueError(
                 f"Selling price ({self.selling_price}) is below cost price "
                 f"({self.cost_price}) -- this batch would lose money on every unit sold."
@@ -50,7 +52,7 @@ class BatchOut(BaseModel):
     qty_received: int
     qty_remaining: int
     cost_price: float
-    selling_price: float | None
+    selling_price: float
     created_at: datetime
 
     model_config = {"from_attributes": True}

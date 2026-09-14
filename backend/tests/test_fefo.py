@@ -38,6 +38,7 @@ async def _make_product_with_batches(db, batches: list[tuple[str, str, int]]) ->
                 qty_received=qty,
                 qty_remaining=qty,
                 cost_price=1.0,
+                selling_price=2.0,
             )
         )
     await db.commit()

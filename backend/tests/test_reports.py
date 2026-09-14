@@ -50,7 +50,7 @@ async def _make_product_with_batch(
     name: str = "Report Test Product",
 ) -> tuple[int, int]:
     async with AsyncSessionLocal() as db:
-        product = Product(name=name, default_selling_price=price)
+        product = Product(name=name)
         db.add(product)
         await db.flush()
         batch = MedicineBatch(
@@ -60,6 +60,7 @@ async def _make_product_with_batch(
             qty_received=qty,
             qty_remaining=qty,
             cost_price=cost,
+            selling_price=price,
         )
         db.add(batch)
         await db.flush()
@@ -160,7 +161,7 @@ class TestSalesSummaryAndProfit:
         sold from, not a flat product-level cost assumption.
         """
         async with AsyncSessionLocal() as db:
-            product = Product(name="Dual Cost Product", default_selling_price=10.0)
+            product = Product(name="Dual Cost Product")
             db.add(product)
             await db.flush()
             cheap_batch = MedicineBatch(
@@ -171,6 +172,7 @@ class TestSalesSummaryAndProfit:
                 qty_received=5,
                 qty_remaining=5,
                 cost_price=3.0,
+                selling_price=10.0,
             )
             expensive_batch = MedicineBatch(
                 product_id=product.id,
@@ -179,6 +181,7 @@ class TestSalesSummaryAndProfit:
                 qty_received=5,
                 qty_remaining=5,
                 cost_price=7.0,
+                selling_price=10.0,
             )
             db.add_all([cheap_batch, expensive_batch])
             await db.commit()
@@ -441,7 +444,7 @@ class TestProductCoOccurrence:
         across.
         """
         async with AsyncSessionLocal() as db:
-            product = Product(name="FEFO Split Product", default_selling_price=5.0)
+            product = Product(name="FEFO Split Product")
             db.add(product)
             await db.flush()
             batch1 = MedicineBatch(
@@ -451,6 +454,7 @@ class TestProductCoOccurrence:
                 qty_received=10,
                 qty_remaining=10,
                 cost_price=2.0,
+                selling_price=5.0,
             )
             batch2 = MedicineBatch(
                 product_id=product.id,
@@ -459,6 +463,7 @@ class TestProductCoOccurrence:
                 qty_received=10,
                 qty_remaining=10,
                 cost_price=2.0,
+                selling_price=5.0,
             )
             db.add_all([batch1, batch2])
             await db.commit()
@@ -613,6 +618,7 @@ class TestReceivingDiscrepancies:
                         "batch_number": "SHORT",
                         "expiry_date": "2027-01-01",
                         "unit_cost": 5.0,
+                        "selling_price": 9.0,
                     }
                 ],
             },
@@ -836,7 +842,7 @@ class TestKpiDashboard:
         token = await _login(client, "lucy", "S3curePass!")
 
         async with AsyncSessionLocal() as db:
-            expensive = Product(name="Expensive Product", default_selling_price=100.0)
+            expensive = Product(name="Expensive Product")
             db.add(expensive)
             await db.flush()
             db.add(
@@ -847,6 +853,7 @@ class TestKpiDashboard:
                     qty_received=10,
                     qty_remaining=10,
                     cost_price=50.0,
+                    selling_price=100.0,
                 )
             )
             await db.commit()
@@ -960,9 +967,7 @@ class TestKpiDashboard:
     async def test_low_stock_and_expiring_counts_reflect_real_inventory(self, client, owner_user):
         # Reorder point 10, stock only 3 -- genuinely low.
         async with AsyncSessionLocal() as db:
-            product = Product(
-                name="Low Stock KPI Product", default_selling_price=5.0, reorder_point=10
-            )
+            product = Product(name="Low Stock KPI Product", reorder_point=10)
             db.add(product)
             await db.flush()
             db.add(
@@ -973,6 +978,7 @@ class TestKpiDashboard:
                     qty_received=3,
                     qty_remaining=3,
                     cost_price=1.0,
+                    selling_price=5.0,
                 )
             )
             await db.commit()
@@ -1344,7 +1350,7 @@ class TestRevenuePotential:
 
         product = await client.post(
             "/api/v1/products",
-            json={"name": "Revenue Potential Product", "default_selling_price": 20.0},
+            json={"name": "Revenue Potential Product"},
             headers=headers,
         )
         product_id = product.json()["id"]
@@ -1355,6 +1361,7 @@ class TestRevenuePotential:
                 "expiry_date": "2027-06-30",
                 "qty_received": 50,
                 "cost_price": 8.0,
+                "selling_price": 20.0,
             },
             headers=headers,
         )
@@ -1376,7 +1383,7 @@ class TestRevenuePotential:
         headers = {"Authorization": f"Bearer {token}"}
         await client.post(
             "/api/v1/products",
-            json={"name": "No Stock Product", "default_selling_price": 10.0},
+            json={"name": "No Stock Product"},
             headers=headers,
         )
 
@@ -1492,7 +1499,7 @@ class TestStockRunway:
 
         slow_product = await client.post(
             "/api/v1/products",
-            json={"name": "Slow Moving Runway Product", "default_selling_price": 10.0},
+            json={"name": "Slow Moving Runway Product"},
             headers=headers,
         )
         slow_id = slow_product.json()["id"]
@@ -1503,6 +1510,7 @@ class TestStockRunway:
                 "expiry_date": "2027-06-30",
                 "qty_received": 1000,
                 "cost_price": 4.0,
+                "selling_price": 10.0,
             },
             headers=headers,
         )

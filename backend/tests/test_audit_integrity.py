@@ -119,6 +119,7 @@ class TestAuditLogCompleteness:
                 qty_received=50,
                 qty_remaining=50,
                 cost_price=2.0,
+                selling_price=5.0,
             )
             db.add(batch)
             await db.commit()
@@ -152,7 +153,7 @@ class TestSoftDeleteIntegrity:
 
         create_resp = await client.post(
             "/api/v1/products",
-            json={"name": "Soon Discontinued", "default_selling_price": 5.0},
+            json={"name": "Soon Discontinued"},
             headers=owner_headers,
         )
         product_id = create_resp.json()["id"]
@@ -163,6 +164,7 @@ class TestSoftDeleteIntegrity:
                 "expiry_date": "2027-01-01",
                 "qty_received": 10,
                 "cost_price": 2.0,
+                "selling_price": 5.0,
             },
             headers=owner_headers,
         )
@@ -199,7 +201,7 @@ class TestSoftDeleteIntegrity:
 
         create_resp = await client.post(
             "/api/v1/products",
-            json={"name": "To Be Discontinued", "default_selling_price": 5.0},
+            json={"name": "To Be Discontinued"},
             headers=owner_headers,
         )
         product_id = create_resp.json()["id"]
@@ -210,6 +212,7 @@ class TestSoftDeleteIntegrity:
                 "expiry_date": "2027-01-01",
                 "qty_received": 10,
                 "cost_price": 2.0,
+                "selling_price": 5.0,
             },
             headers=owner_headers,
         )

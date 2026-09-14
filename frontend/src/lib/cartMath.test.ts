@@ -6,7 +6,7 @@ function product(overrides: Partial<ProductOut> = {}): ProductOut {
   return {
     id: 1,
     name: 'Test Product',
-    default_selling_price: 10,
+    current_selling_price: 10,
     unit: 'unit',
     is_active: true,
     total_qty_available: 100,
@@ -15,7 +15,7 @@ function product(overrides: Partial<ProductOut> = {}): ProductOut {
 }
 
 function line(id: number, price: number, quantity: number): CartLine {
-  return { product: product({ id, default_selling_price: price }), quantity }
+  return { product: product({ id, current_selling_price: price }), quantity }
 }
 
 describe('calculateSubtotal', () => {

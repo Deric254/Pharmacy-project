@@ -35,9 +35,9 @@ async def _make_supplier(name: str = "PO Import Supplier") -> int:
         return int(supplier.id)
 
 
-async def _make_product(name: str, price: float = 20.0) -> int:
+async def _make_product(name: str) -> int:
     async with AsyncSessionLocal() as db:
-        product = Product(name=name, default_selling_price=price)
+        product = Product(name=name)
         db.add(product)
         await db.commit()
         return int(product.id)
@@ -46,7 +46,7 @@ async def _make_product(name: str, price: float = 20.0) -> int:
 def _build_workbook(rows: list[list[object]]) -> bytes:
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.append(["Product name", "Quantity", "Batch number", "Expiry date", "Unit cost"])
+    ws.append(["Product name", "Quantity", "Batch number", "Expiry date", "Unit cost", "Selling price"])
     for row in rows:
         ws.append(row)
     buffer = io.BytesIO()
@@ -106,8 +106,8 @@ class TestPurchaseOrderBulkImport:
 
         content = _build_workbook(
             [
-                ["Amoxicillin 500mg", 100, "AMX-001", "2027-06-30", 10.0],
-                ["paracetamol 500mg", 200, "PARA-001", "2027-06-30", 4.0],  # lowercase on purpose
+                ["Amoxicillin 500mg", 100, "AMX-001", "2027-06-30", 10.0, 18.0],
+                ["paracetamol 500mg", 200, "PARA-001", "2027-06-30", 4.0, 8.0],  # lowercase on purpose
             ]
         )
         r = await client.post(
@@ -260,7 +260,7 @@ class TestPurchaseOrderBulkImport:
         token = await _login(client, "lucy", "S3curePass!")
         headers = {"Authorization": f"Bearer {token}"}
 
-        content = _build_workbook([["Reupload Test Product", 100, "REUP1", "2027-06-30", 10.0]])
+        content = _build_workbook([["Reupload Test Product", 100, "REUP1", "2027-06-30", 10.0, 18.0]])
 
         first = await client.post(
             "/api/v1/purchase-orders/import",

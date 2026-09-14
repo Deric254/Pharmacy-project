@@ -62,32 +62,30 @@ class TestMoneyTypeRejectsNonFiniteValues:
 class TestBatchCreationRejectsGarbageMoney:
     """
     The exact live scenario that was reproduced: POST a batch with a
-    non-standard-JSON Infinity literal as the price. Before the fix,
+    non-standard-JSON Infinity literal as its price. Before the fix,
     this returned a 500 -- AFTER the row was already committed. Now it
     must be rejected before any database write happens at all.
 
-    This used to target POST /products directly (product creation took
-    a price of its own -- default_selling_price). It no longer does --
-    a Product carries no price at all now (see migration 0036), so
-    that specific attack surface is gone by construction, not just
-    patched. Batch creation is where a real Money value still enters
-    the system at creation time, so that's what actually needs this
-    guarantee proven live.
+    Product itself carries no price anymore (see migration
+    0036_batch_selling_price_required) -- cost_price and selling_price
+    only exist on a batch, so that's where this real bug actually
+    lives now.
     """
+
+    async def _make_product(self, client, token: str) -> int:
+        r = await client.post(
+            "/api/v1/products",
+            json={"name": "Money Validation Product"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        return int(r.json()["id"])
 
     async def test_infinity_price_is_rejected_not_committed(self, client, owner_user):
         login = await client.post(
             "/api/v1/auth/login", json={"username": "lucy", "password": "S3curePass!"}
         )
         token = login.json()["access_token"]
-        headers = {"Authorization": f"Bearer {token}"}
-
-        product_r = await client.post(
-            "/api/v1/products",
-            json={"name": "Bad Batch Target", "unit": "box", "reorder_point": 10},
-            headers=headers,
-        )
-        product_id = product_r.json()["id"]
+        product_id = await self._make_product(client, token)
 
         # httpx's json= parameter serializes via the standard library,
         # which (matching what a raw client actually sent when this
@@ -96,44 +94,37 @@ class TestBatchCreationRejectsGarbageMoney:
         r = await client.post(
             f"/api/v1/products/{product_id}/batches",
             content=(
-                '{"batch_number":"BAD-1","expiry_date":"2030-01-01","qty_received":10,'
-                '"cost_price":5.0,"selling_price":Infinity}'
+                '{"batch_number":"BAD-MONEY-1","expiry_date":"2027-01-01",'
+                '"qty_received":10,"cost_price":5.0,"selling_price":Infinity}'
             ),
-            headers={**headers, "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         )
         assert r.status_code == 422
 
         # And confirm nothing was actually written -- the whole point
         # is that a 500 here previously meant "already too late."
-        batches_r = await client.get(f"/api/v1/products/{product_id}/batches", headers=headers)
-        assert batches_r.json() == []
+        list_r = await client.get(
+            f"/api/v1/products/{product_id}/batches",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert list_r.json() == []
 
     async def test_absurdly_large_price_is_rejected(self, client, owner_user):
         login = await client.post(
             "/api/v1/auth/login", json={"username": "lucy", "password": "S3curePass!"}
         )
         token = login.json()["access_token"]
-        headers = {"Authorization": f"Bearer {token}"}
-
-        product_r = await client.post(
-            "/api/v1/products",
-            json={"name": "Bad Batch Target", "unit": "box", "reorder_point": 10},
-            headers=headers,
-        )
-        product_id = product_r.json()["id"]
+        product_id = await self._make_product(client, token)
 
         r = await client.post(
             f"/api/v1/products/{product_id}/batches",
             json={
-                "batch_number": "BAD-2",
-                "expiry_date": "2030-01-01",
+                "batch_number": "BAD-MONEY-2",
+                "expiry_date": "2027-01-01",
                 "qty_received": 10,
                 "cost_price": 5.0,
                 "selling_price": 999999999999999999999999999.99,
             },
-            headers=headers,
+            headers={"Authorization": f"Bearer {token}"},
         )
         assert r.status_code == 422
-
-        batches_r = await client.get(f"/api/v1/products/{product_id}/batches", headers=headers)
-        assert batches_r.json() == []

@@ -14,9 +14,9 @@ Purchasing tests. The properties that matter:
 """
 
 import asyncio
+from datetime import date
 
 import pytest
-from sqlalchemy import select
 
 from app.core.database import AsyncSessionLocal
 from app.models.medicine_batch import MedicineBatch
@@ -168,7 +168,7 @@ class TestRecordPayment:
                         "batch_number": "PAY-BAL-1",
                         "expiry_date": "2027-06-30",
                         "unit_cost": 20.0,
-                        "selling_price": 35.0,
+                        "selling_price": 30.0,
                     }
                 ],
             },
@@ -283,7 +283,7 @@ class TestQuickPurchase:
                         "batch_number": "MULTI-A",
                         "expiry_date": "2027-06-30",
                         "unit_cost": 5.0,
-                        "selling_price": 9.0,
+                        "selling_price": 10.0,
                     },
                     {
                         "product_id": product2,
@@ -403,7 +403,7 @@ class TestQuickPurchase:
             "batch_number": "MERGE-001",
             "expiry_date": "2027-06-30",
             "unit_cost": 10.0,
-            "selling_price": 18.0,
+            "selling_price": 20.0,
         }
         r1 = await client.post(
             "/api/v1/purchase-orders/quick-purchase",
@@ -467,7 +467,7 @@ class TestQuickPurchase:
                             "batch_number": "SAME-NUMBER",
                             "expiry_date": expiry,
                             "unit_cost": 5.0,
-                            "selling_price": 9.0,
+                            "selling_price": 10.0,
                         }
                     ],
                 },
@@ -477,55 +477,77 @@ class TestQuickPurchase:
         batches = await client.get(f"/api/v1/products/{product_id}/batches", headers=headers)
         assert len(batches.json()) == 2
 
-    async def test_batch_selling_price_cannot_be_null_at_the_database_level(
-        self, client, owner_user
-    ):
+    async def test_new_batch_without_selling_price_is_rejected(self, client, owner_user):
         """
-        Historical context: a batch used to be able to have no
-        selling_price of its own at all (nullable column, resolved via
-        product.default_selling_price at read time -- see migration
-        0036's docstring for the exact bug that caused). That fallback
-        is gone, and so is the nullability itself: selling_price is
-        NOT NULL on the table now, not just "required" at the API
-        schema layer. This proves the database itself refuses the
-        state, as a second, independent layer of defense -- not just
-        that the API happens to validate it today.
+        The real invariant this whole area of the code exists to
+        protect, post migration 0036_batch_selling_price_required:
+        a genuinely new batch (no existing row for this product/batch
+        number/expiry) can never be created without its own explicit
+        selling price. There is no product-level default left to fall
+        back to, so a missing price here is a clear, actionable error,
+        never a silent 0 or a borrowed number.
         """
-        from sqlalchemy.exc import IntegrityError
-
-        product_id = await _make_product("DB Constraint Product")
+        product_id = await _make_product("No Price New Batch Product")
         token = await _login(client, "lucy", "S3curePass!")
         headers = {"Authorization": f"Bearer {token}"}
+
         supplier = await client.post(
-            "/api/v1/suppliers", json={"name": "DB Constraint Supplier"}, headers=headers
+            "/api/v1/suppliers", json={"name": "No Price Supplier"}, headers=headers
         )
+        supplier_id = supplier.json()["id"]
+
         r = await client.post(
             "/api/v1/purchase-orders/quick-purchase",
             json={
-                "supplier_id": supplier.json()["id"],
+                "supplier_id": supplier_id,
                 "lines": [
                     {
                         "product_id": product_id,
-                        "quantity": 10,
-                        "batch_number": "DBCHECK-001",
+                        "quantity": 100,
+                        "batch_number": "NEW-NO-PRICE",
                         "expiry_date": "2027-06-30",
                         "unit_cost": 10.0,
-                        "selling_price": 20.0,
+                        # no selling_price -- this batch doesn't exist yet,
+                        # so there's nothing to fall back to.
                     }
                 ],
             },
             headers=headers,
         )
-        assert r.status_code == 201, r.text
+        assert r.status_code == 400, r.text
+        assert "is new stock" in r.text and "selling price is required" in r.text
+
+        product = await client.get(f"/api/v1/products/{product_id}", headers=headers)
+        assert product.json()["total_qty_available"] == 0  # nothing was received
+
+    async def test_batch_selling_price_cannot_be_forced_to_null(self, client, owner_user):
+        """
+        Belt-and-suspenders check on the migration itself: even
+        bypassing the API entirely and writing to the ORM directly,
+        the database's own NOT NULL constraint on
+        medicine_batches.selling_price refuses a null value. The
+        app-level "new batch needs a price" rule above is what users
+        actually see, but this is the guarantee that holds even if
+        that check were ever accidentally removed upstream.
+        """
+        from sqlalchemy.exc import IntegrityError
+
+        product_id = await _make_product("Cannot Null Price Product")
 
         async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(MedicineBatch).where(MedicineBatch.batch_number == "DBCHECK-001")
+            batch = MedicineBatch(
+                product_id=product_id,
+                batch_number="NULL-ATTEMPT",
+                expiry_date=date(2027, 6, 30),
+                qty_received=10,
+                qty_remaining=10,
+                cost_price=5.0,
+                selling_price=None,  # type: ignore[arg-type]
             )
-            batch = result.scalar_one()
-            batch.selling_price = None
+            db.add(batch)
             with pytest.raises(IntegrityError):
                 await db.commit()
+            await db.rollback()
 
     async def test_plain_restock_never_blocked_by_unspecified_price(self, client, owner_user):
         """
@@ -638,47 +660,6 @@ class TestQuickPurchase:
         assert f"supplier_id={supplier_id}" in matching[0]["new_value"]
         assert "total_owed=240.00" in matching[0]["new_value"]  # 30 * 8.0
 
-    async def test_new_batch_with_no_price_is_rejected(self, client, owner_user):
-        """
-        A genuinely new batch has nothing to inherit a price from any
-        more -- no product-level default exists (see migration 0036).
-        Omitting selling_price on a new batch line is rejected outright,
-        naming the real reason (new stock, no price to inherit), not
-        silently resolved to anything -- including 0, including a
-        stale product default that used to exist here.
-        """
-        product_id = await _make_product("No Price New Batch Product")
-        token = await _login(client, "lucy", "S3curePass!")
-        headers = {"Authorization": f"Bearer {token}"}
-        supplier = await client.post(
-            "/api/v1/suppliers", json={"name": "No Price Supplier"}, headers=headers
-        )
-        supplier_id = supplier.json()["id"]
-
-        r = await client.post(
-            "/api/v1/purchase-orders/quick-purchase",
-            json={
-                "supplier_id": supplier_id,
-                "lines": [
-                    {
-                        "product_id": product_id,
-                        "quantity": 20,
-                        "batch_number": "NOPRICE-QP-1",
-                        "expiry_date": "2027-06-30",
-                        "unit_cost": 15.0,
-                        # no selling_price -- nothing left to inherit
-                        # from, so this must be rejected outright.
-                    }
-                ],
-            },
-            headers=headers,
-        )
-        assert r.status_code == 400
-        assert "selling price is required" in r.text
-
-        product = await client.get(f"/api/v1/products/{product_id}", headers=headers)
-        assert product.json()["total_qty_available"] == 0  # nothing was received
-
     async def test_new_batch_below_cost_is_rejected(self, client, owner_user):
         product_id = await _make_product("Below Cost New Batch Product")
         token = await _login(client, "lucy", "S3curePass!")
@@ -699,7 +680,7 @@ class TestQuickPurchase:
                         "batch_number": "LOSS-QP-1",
                         "expiry_date": "2027-06-30",
                         "unit_cost": 15.0,
-                        "selling_price": 5.0,  # explicitly below cost
+                        "selling_price": 5.0,  # explicitly below cost -- must be rejected
                     }
                 ],
             },
@@ -811,7 +792,7 @@ class TestQuickPurchaseConcurrency:
                         "batch_number": "CONC-BATCH-1",
                         "expiry_date": "2027-06-30",
                         "unit_cost": 10.0,
-                        "selling_price": 18.0,
+                        "selling_price": 20.0,
                     }
                 ],
             }
@@ -866,7 +847,7 @@ class TestQuickPurchaseConcurrency:
                             "batch_number": "CONC-BATCH-5X",
                             "expiry_date": "2027-06-30",
                             "unit_cost": 10.0,
-                            "selling_price": 18.0,
+                            "selling_price": 20.0,
                         }
                     ],
                 },
@@ -915,7 +896,7 @@ class TestQuickPurchaseRespectsStockTakeLock:
                         "batch_number": "LOCK-BATCH-1",
                         "expiry_date": "2027-06-30",
                         "unit_cost": 10.0,
-                        "selling_price": 18.0,
+                        "selling_price": 20.0,
                     }
                 ],
             },

@@ -97,7 +97,7 @@ class TestBatchCreation:
                 "expiry_date": "2027-01-01",
                 "qty_received": 100,
                 "cost_price": 5.0,
-                "selling_price": 8.0,
+                "selling_price": 10.0,
             },
             headers=headers,
         )
@@ -119,7 +119,7 @@ class TestBatchCreation:
                 "expiry_date": "2027-01-01",
                 "qty_received": 50,
                 "cost_price": 5.0,
-                "selling_price": 8.0,
+                "selling_price": 10.0,
             },
             headers=headers,
         )
@@ -130,7 +130,7 @@ class TestBatchCreation:
                 "expiry_date": "2027-06-01",
                 "qty_received": 30,
                 "cost_price": 5.5,
-                "selling_price": 8.5,
+                "selling_price": 11.0,
             },
             headers=headers,
         )
@@ -152,6 +152,7 @@ class TestBatchCreation:
                 "expiry_date": "2027-01-01",
                 "qty_received": 10,
                 "cost_price": 1.0,
+                "selling_price": 2.0,
             },
             headers={"Authorization": f"Bearer {employee_token}"},
         )
@@ -199,22 +200,22 @@ class TestBatchCreation:
 
     async def test_omitted_selling_price_is_rejected_outright(self, client, owner_user):
         """
-        The gap this used to close: BatchCreate's own validator only
-        ever saw a selling_price the caller actually typed. Leaving it
-        blank used to fall back to the product's default_selling_price
-        -- if that default was stale or never set high enough, the
-        schema validator alone would never catch it.
-
-        That fallback no longer exists at all (see migration 0036 --
-        a Product carries no price of its own any more), so the whole
-        class of bug is now structurally impossible rather than just
-        better-guarded: omitting selling_price on a manual batch entry
-        is rejected outright as a missing required field, with nothing
-        left to silently resolve to in its place.
+        The old gap this used to guard against (a stale product-level
+        default silently applied when selling_price was left blank,
+        possibly still below cost) can no longer exist at all --
+        selling_price is a required field on every batch now (see
+        migration 0036_batch_selling_price_required), so omitting it
+        is rejected immediately, before there's ever a number to check
+        against cost in the first place.
         """
         token = await self._login(client, "lucy", "S3curePass!")
         headers = {"Authorization": f"Bearer {token}"}
-        product_id = await self._make_product(client, headers)
+        product = await client.post(
+            "/api/v1/products",
+            json={"name": "No Default Product"},
+            headers=headers,
+        )
+        product_id = product.json()["id"]
 
         r = await client.post(
             f"/api/v1/products/{product_id}/batches",
@@ -224,12 +225,11 @@ class TestBatchCreation:
                 "qty_received": 10,
                 "cost_price": 5.0,
                 # selling_price omitted on purpose -- there is no
-                # fallback left for this to resolve to.
+                # product-level default left to fall back to at all.
             },
             headers=headers,
         )
         assert r.status_code == 422
-        assert "selling_price" in r.text
 
     async def test_price_update_cannot_drop_a_batch_below_its_own_cost(self, client, owner_user):
         token = await self._login(client, "lucy", "S3curePass!")
@@ -497,7 +497,7 @@ class TestMarginAndMarkup:
                 "expiry_date": "2028-01-01",
                 "qty_received": 10,
                 "cost_price": 5.0,
-                "selling_price": 20.0,
+                "selling_price": 10.0,
             },
             headers=headers,
         )
@@ -509,7 +509,7 @@ class TestMarginAndMarkup:
                 "expiry_date": "2027-01-01",
                 "qty_received": 10,
                 "cost_price": 15.0,
-                "selling_price": 20.0,
+                "selling_price": 30.0,
             },
             headers=headers,
         )
@@ -681,7 +681,7 @@ class TestAvailableStockMeansSellable:
                 "expiry_date": yesterday,
                 "qty_received": 7,
                 "cost_price": 5.0,
-                "selling_price": 20.0,
+                "selling_price": 10.0,
             },
             headers=headers,
         )
@@ -729,6 +729,7 @@ class TestAvailableStockMeansSellable:
                 "expiry_date": yesterday,
                 "qty_received": 50,  # well above reorder_point, but expired
                 "cost_price": 5.0,
+                "selling_price": 10.0,
             },
             headers=headers,
         )

@@ -536,6 +536,77 @@ class InventoryService:
         ]
         return StockMovementPage(entries=entries, total=total, limit=limit, offset=offset)
 
+    async def list_all_movements_for_export(
+        self,
+        product_id: int | None = None,
+        batch_id: int | None = None,
+        movement_type: MovementType | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> list[StockMovementOut]:
+        """
+        Every matching movement, not one page of them -- an export
+        silently capped at the same page limit as the on-screen list
+        would be a real accuracy gap for exactly the ledger this
+        method exists to make auditable (see list_movements' own
+        docstring). Same filters and shape as list_movements() above,
+        just without limit/offset, mirroring SaleService and
+        AuditLogService's own list_all_for_export methods.
+        """
+        query = (
+            select(
+                StockMovement.id,
+                StockMovement.batch_id,
+                MedicineBatch.batch_number,
+                MedicineBatch.product_id,
+                Product.name,
+                StockMovement.movement_type,
+                StockMovement.quantity_delta,
+                StockMovement.reason,
+                StockMovement.reference,
+                StockMovement.created_by_user_id,
+                User.full_name,
+                StockMovement.created_at,
+            )
+            .join(MedicineBatch, MedicineBatch.id == StockMovement.batch_id)
+            .join(Product, Product.id == MedicineBatch.product_id)
+            .outerjoin(User, User.id == StockMovement.created_by_user_id)
+        )
+
+        if product_id is not None:
+            query = query.where(MedicineBatch.product_id == product_id)
+        if batch_id is not None:
+            query = query.where(StockMovement.batch_id == batch_id)
+        if movement_type is not None:
+            query = query.where(StockMovement.movement_type == movement_type)
+        if start_date is not None:
+            utc_start, _ = await local_day_bounds_utc(self.db, start_date)
+            query = query.where(StockMovement.created_at >= utc_start)
+        if end_date is not None:
+            _, utc_end = await local_day_bounds_utc(self.db, end_date)
+            query = query.where(StockMovement.created_at < utc_end)
+
+        query = query.order_by(StockMovement.created_at.desc(), StockMovement.id.desc())
+        rows = (await self.db.execute(query)).all()
+
+        return [
+            StockMovementOut(
+                id=row[0],
+                batch_id=row[1],
+                batch_number=row[2],
+                product_id=row[3],
+                product_name=row[4],
+                movement_type=row[5],
+                quantity_delta=row[6],
+                reason=row[7],
+                reference=row[8],
+                created_by_user_id=row[9],
+                created_by_name=row[10],
+                created_at=row[11],
+            )
+            for row in rows
+        ]
+
     async def _max_alert_window(self) -> int:
         result = await self.db.execute(select(BusinessConfig).where(BusinessConfig.id == 1))
         config = result.scalar_one_or_none()

@@ -77,7 +77,7 @@ async def list_customers(
     rows: list[list[object]] = [
         [c.id, c.name, c.phone or "", c.email or "", c.loyalty_points] for c in customers
     ]
-    return build_export_response(export, customers, "Customers", headers, rows)
+    return await build_export_response(export, customers, "Customers", headers, rows)
 
 
 @router.post(

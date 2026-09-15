@@ -101,7 +101,7 @@ async def list_products(
         ]
         for p in products
     ]
-    return build_export_response(export, products, "Products", headers, rows)
+    return await build_export_response(export, products, "Products", headers, rows)
 
 
 @router.get(

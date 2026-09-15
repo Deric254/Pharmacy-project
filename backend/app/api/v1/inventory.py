@@ -15,11 +15,11 @@ from app.schemas.inventory import (
     ExpiringBatchOut,
     LowStockProductOut,
     ReconciliationIssueOut,
-    StockMovementPage,
     StockValuationOut,
     WriteOffResult,
 )
 from app.services.inventory_service import InventoryService
+from app.services.report_export_service import ExportFormat, build_export_response
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 
@@ -91,7 +91,6 @@ async def reconcile(db: Annotated[AsyncSession, Depends(get_db)]) -> list[Reconc
 
 @router.get(
     "/movements",
-    response_model=StockMovementPage,
     dependencies=[Depends(require_permission("inventory.adjust"))],
 )
 async def list_movements(
@@ -103,8 +102,46 @@ async def list_movements(
     end_date: date | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-) -> StockMovementPage:
-    return await InventoryService(db).list_movements(
+    export: ExportFormat = "json",
+) -> object:
+    service = InventoryService(db)
+    if export != "json":
+        # Every matching movement, not just the page currently on
+        # screen -- see list_all_movements_for_export's own docstring
+        # for why exporting the current page would silently under-report.
+        entries = await service.list_all_movements_for_export(
+            product_id=product_id,
+            batch_id=batch_id,
+            movement_type=movement_type,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        headers = [
+            "Date/time",
+            "Product",
+            "Batch",
+            "Type",
+            "Quantity change",
+            "Reason",
+            "Reference",
+            "By",
+        ]
+        rows: list[list[object]] = [
+            [
+                e.created_at.isoformat(),
+                e.product_name,
+                e.batch_number,
+                e.movement_type,
+                e.quantity_delta,
+                e.reason or "",
+                e.reference or "",
+                e.created_by_name or "",
+            ]
+            for e in entries
+        ]
+        return await build_export_response(export, entries, "Stock Movements", headers, rows)
+
+    return await service.list_movements(
         product_id=product_id,
         batch_id=batch_id,
         movement_type=movement_type,

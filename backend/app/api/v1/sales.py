@@ -83,7 +83,7 @@ async def list_sales(
             ]
             for e in entries
         ]
-        return build_export_response(export, entries, "Sales", headers, rows)
+        return await build_export_response(export, entries, "Sales", headers, rows)
 
     return await service.list_sales(start_date, end_date, limit, offset)
 

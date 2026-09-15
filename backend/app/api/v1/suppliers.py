@@ -47,7 +47,7 @@ async def list_suppliers(
         ]
         for s in suppliers
     ]
-    return build_export_response(export, suppliers, "Suppliers", headers, rows)
+    return await build_export_response(export, suppliers, "Suppliers", headers, rows)
 
 
 @router.post(

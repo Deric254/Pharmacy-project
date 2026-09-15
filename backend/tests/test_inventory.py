@@ -518,6 +518,69 @@ class TestStockMovementHistory:
         )
         assert r.status_code == 403
 
+    async def test_excel_export_returns_every_matching_movement_not_one_page(
+        self, client, owner_user
+    ):
+        """
+        The real gap this closes: every other ledger-shaped view
+        (Sales, Audit Logs, Customers, Suppliers, Products) supports
+        export -- Stock Movements never did, despite being exactly the
+        kind of record a real accounting or compliance review needs.
+        Also confirms export returns everything matching the filter,
+        not just one page -- created 3 movements, requested with
+        limit=1 to prove the export ignores that pagination entirely.
+        """
+        product_id = await _make_product("Exportable Movement Product")
+        await _add_batch(product_id, qty=10, batch_number="EXP-M1")
+        await _add_batch(product_id, qty=20, batch_number="EXP-M2")
+        await _add_batch(product_id, qty=30, batch_number="EXP-M3")
+
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        r = await client.get(
+            "/api/v1/inventory/movements",
+            params={"product_id": product_id, "limit": 1, "export": "excel"},
+            headers=headers,
+        )
+        assert r.status_code == 200
+        assert (
+            r.headers["content-type"]
+            == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+        import io
+        import zipfile
+
+        assert zipfile.is_zipfile(io.BytesIO(r.content))
+
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(io.BytesIO(r.content))
+        sheet = workbook.active
+        assert sheet is not None
+        data_rows = list(sheet.iter_rows(min_row=2, values_only=True))
+        # All 3 purchase movements, despite limit=1 on the request --
+        # export must never silently under-report to match the
+        # on-screen page size.
+        assert len(data_rows) == 3
+        assert {row[3] for row in data_rows} == {"PURCHASE"}  # Type column
+        assert {row[4] for row in data_rows} == {10, 20, 30}  # Quantity change column
+
+    async def test_json_export_is_still_the_default(self, client, owner_user):
+        product_id = await _make_product("JSON Default Movement Product")
+        await _add_batch(product_id, qty=15)
+
+        token = await _login(client, "lucy", "S3curePass!")
+        r = await client.get(
+            "/api/v1/inventory/movements",
+            params={"product_id": product_id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("application/json")
+        assert r.json()["total"] == 1
+
 
 class TestSaleTriggeredLowStockEvent:
     async def test_sale_dropping_below_reorder_point_publishes_stock_low(

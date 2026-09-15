@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { inventoryApi } from '../api/domain'
-import { ApiError } from '../api/client'
+import { ApiError, downloadExport } from '../api/client'
 import type { StockMovementOut } from '../types/api'
 
 const PAGE_SIZE = 25
@@ -70,14 +70,29 @@ export function StockMovementsPage() {
   const hasPrevPage = offset > 0
   const scoped = Boolean(productIdParam || batchIdParam)
 
+  function exportCurrentView() {
+    const query: Record<string, string | number> = {}
+    if (productIdParam) query.product_id = Number(productIdParam)
+    if (batchIdParam) query.batch_id = Number(batchIdParam)
+    if (movementType) query.movement_type = movementType
+    if (startDate) query.start_date = startDate
+    if (endDate) query.end_date = endDate
+    void downloadExport('/inventory/movements', query, 'excel')
+  }
+
   return (
     <div className="p-6">
       <div className="mb-1 flex items-center justify-between">
         <h1 className="font-display text-2xl text-ink">Stock Movement History</h1>
+        <button
+          onClick={exportCurrentView}
+          className="border border-rule px-3 py-1.5 text-sm text-ink-soft hover:border-brass"
+        >
+          Export to Excel
+        </button>
       </div>
       <p className="mb-4 text-sm text-ink-soft">
-        The complete, append-only ledger of every stock change -- purchases, sales, adjustments,
-        and returns -- with who made it and when.
+      Stock movement Trace
       </p>
 
       {scoped && (

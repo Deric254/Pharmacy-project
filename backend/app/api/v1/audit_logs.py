@@ -42,7 +42,7 @@ async def list_audit_logs(
             ]
             for e in entries
         ]
-        return build_export_response(export, entries, "Audit Trail", headers, rows)
+        return await build_export_response(export, entries, "Audit Trail", headers, rows)
 
     page: AuditLogPage = await service.list_entries(
         entity_type=entity_type,

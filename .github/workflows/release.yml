@@ -1,276 +1,779 @@
 name: Release
 
-# Runs only after CI has passed on main (workflow_run), so a release can
-# NEVER be cut from code that failed lint/type-check/tests.
+# FULLY AUTOMATED: push to main -> version auto-bumps -> a tag is
+# created and pushed -> that same run builds Windows/macOS/Linux
+# installers AND an Android APK -> all attached to ONE GitHub Release.
+# No manual `git tag` step needed for the normal case.
+#
+# Commit message controls the bump size (defaults to patch):
+#   git commit -m "fix: correct rounding in reports"        -> patch bump (0.1.0 -> 0.1.1)
+#   git commit -m "feat: add units of measure [minor]"      -> minor bump (0.1.0 -> 0.2.0)
+#   git commit -m "feat!: new module format [major]"        -> major bump (0.1.0 -> 1.0.0)
+#
+# Include "[skip ci]" anywhere in the commit message to push to main
+# WITHOUT triggering a release at all (docs-only changes, etc.) — this
+# is GitHub's own built-in convention, not something custom here.
+#
+# You can still cut a specific release manually the old way too:
+#   git tag v1.2.3 && git push --tags
+# — pushing a tag directly skips the auto-bump step and releases
+# exactly that version instead.
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
+  push:
     branches: [main]
+    tags:
+      - "v*.*.*"
 
+# Required so the workflow can push the version-bump commit/tag back to
+# the repo, and create/upload to a release.
 permissions:
   contents: write
-  issues: write
-  pull-requests: write
 
 jobs:
-  release:
-    if: github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
+  # ------------------------------------------------------------------
+  # The actual quality gate. Without this job, nothing in this
+  # pipeline ever ran a test, a lint check, or even confirmed the code
+  # compiles before bumping the version, tagging it, and building real
+  # installers -- a broken commit could reach a real release. Runs on
+  # every trigger this workflow has (a normal push to main AND a
+  # direct tag push), not just one of them, since a manually-cut
+  # release deserves the same guarantee as an automatic one.
+  # ------------------------------------------------------------------
+  test-and-lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same system libraries the desktop (ubuntu-24.04) build already
+      # installs, and for the same reason: this job now compiles the
+      # real `tauri` crate too (via `cargo test --lib`, which builds
+      # the whole crate including its real GUI dependencies, not just
+      # the test code) — without these, gtk/glib-related sys crates
+      # fail at their own build-script step looking for system
+      # libraries that were never installed on this runner.
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust build cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Lint frontend
+        run: npm run lint
+
+      - name: Type-check and build frontend
+        run: npm run build
+
+      - name: Run backend tests
+        working-directory: src-tauri
+        run: cargo test --lib
+
+  # ------------------------------------------------------------------
+  # Figures out the version for this run. If triggered by a direct tag
+  # push, uses that tag as-is (manual release path). If triggered by a
+  # normal push to main, computes the next version from the commit
+  # message, writes it into every file that needs to agree
+  # (package.json, package-lock.json, tauri.conf.json, Cargo.toml),
+  # commits, tags, and pushes — all in one step so there's no window
+  # where those files disagree with each other or with the tag.
+  # ------------------------------------------------------------------
+  bump-version:
+    needs: test-and-lint
+    if: ${{ github.ref_type == 'tag' || !contains(github.event.head_commit.message, 'chore(release):') }}
+    runs-on: ubuntu-24.04
     outputs:
-      released: ${{ steps.detect.outputs.released }}
-      tag: ${{ steps.detect.outputs.tag }}
+      new_tag: ${{ steps.resolve.outputs.new_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: main
+          ref: ${{ github.ref_name }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      # Manual path: a tag was pushed directly. Use it as-is, skip bumping.
+      - name: Use pushed tag directly
+        if: startsWith(github.ref, 'refs/tags/v')
+        id: use-tag
+        run: echo "new_tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
 
-      - name: Install python-semantic-release
-        # python-semantic-release 9.x depends on GitPython but doesn't pin
-        # it. GitPython 3.1.45+ removed the private Actor.name_email_regex
-        # attribute that psr 9.x's config parsing relies on internally,
-        # which breaks every psr 9.x release with:
-        #   "type object 'Actor' has no attribute 'name_email_regex'"
-        # Pinning GitPython here keeps the install deterministic instead
-        # of silently picking up whatever GitPython release is newest on
-        # the day the workflow happens to run.
-        run: pip install "python-semantic-release==9.*" "GitPython==3.1.44"
-
-      - name: Determine and apply version bump
-        id: release
-        # All of python-semantic-release's config lives in
-        # backend/pyproject.toml ([tool.semantic_release], with paths like
-        # "app/__init__.py" and "../CHANGELOG.md" written relative to that
-        # directory) -- there is no config at the repo root. Without this,
-        # `semantic-release` runs from the repo root, silently finds no
-        # config, and falls back to its built-in defaults: it still creates
-        # a tag and a commit, but never touches backend/pyproject.toml's
-        # version or backend/app/__init__.py's __version__, and uses the
-        # wrong commit message template. Matches the working-directory
-        # convention the backend/frontend/electron steps below already use.
-        working-directory: backend
+      # Automatic path: a normal push to main. Compute + apply the bump.
+      - name: Compute and apply next version
+        if: startsWith(github.ref, 'refs/heads/')
+        id: auto-bump
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Passed as an env var, NOT interpolated directly into the
+          # script below — a commit message is attacker-controlled text
+          # (anyone who can push, or in some setups anyone who can open
+          # a PR) and textually splicing it into a shell script is a
+          # real injection vector. An env var is just data to the shell,
+          # no matter what it contains.
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
-          BEFORE_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "none")
-
-          # Conventional Commits first -- fix:/feat:/BREAKING CHANGE:
-          # still get correctly-sized patch/minor/major bumps exactly
-          # as before, for anyone who does write them that way.
-          semantic-release version
-
-          AFTER_NORMAL_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "none")
-
-          # But every push should produce a real, downloadable release
-          # -- not require remembering a specific commit message
-          # prefix. If nothing matched the Conventional Commits format
-          # (the common case for a plain "fixed stuff" message), force
-          # a patch bump instead of silently doing nothing.
-          if [ "$BEFORE_TAG" = "$AFTER_NORMAL_TAG" ]; then
-            semantic-release version --patch
+          set -euo pipefail
+          BUMP="patch"
+          if echo "$COMMIT_MSG" | grep -qiE '\[major\]'; then BUMP="major"
+          elif echo "$COMMIT_MSG" | grep -qiE '\[minor\]'; then BUMP="minor"
           fi
+          echo "Bump type: $BUMP (from commit message)"
 
-          semantic-release publish
-          echo "BEFORE_TAG=$BEFORE_TAG" >> "$GITHUB_ENV"
+          NEW_VERSION=$(npm version "$BUMP" --no-git-tag-version | sed 's/^v//')
 
-      # python-semantic-release's raw CLI (as opposed to its GitHub
-      # Action wrapper) doesn't expose a "did anything actually get
-      # released" output on its own -- when there are no
-      # release-worthy commits since the last tag, `version`/`publish`
-      # are harmless no-ops that leave the repo exactly as it was. The
-      # Windows executable build below only makes sense (and only has
-      # something to attach itself to) when a real release happened,
-      # so detect that the simple, dependable way: did the latest tag
-      # actually change.
-      - name: Detect whether a release was actually cut
-        id: detect
+          # Guard against a leftover tag from a previous attempt (a force
+          # push resets the branch but does NOT delete tags already on
+          # the remote) — keep bumping patch until we land on a version
+          # that isn't already tagged, instead of failing outright.
+          while git ls-remote --tags origin | grep -q "refs/tags/v${NEW_VERSION}$"; do
+            echo "Tag v$NEW_VERSION already exists on the remote — bumping patch again"
+            NEW_VERSION=$(npm version patch --no-git-tag-version | sed 's/^v//')
+          done
+          echo "New version: $NEW_VERSION"
+
+          node -e "
+            const fs = require('fs');
+            const path = 'src-tauri/tauri.conf.json';
+            const conf = JSON.parse(fs.readFileSync(path));
+            conf.version = '$NEW_VERSION';
+            fs.writeFileSync(path, JSON.stringify(conf, null, 2) + '\n');
+          "
+          # Only the [package] version at the top of the file — Cargo.toml
+          # also has many dependency 'version = "..."' lines below it that
+          # must NOT be touched, so this is deliberately limited to the
+          # first match only.
+          sed -i "0,/^version = /s/^version = .*/version = \"$NEW_VERSION\"/" src-tauri/Cargo.toml
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
+          git commit -m "chore(release): v$NEW_VERSION [skip ci]"
+          git tag "v$NEW_VERSION"
+          git push origin HEAD:${{ github.ref_name }}
+          git push origin "v$NEW_VERSION"
+          echo "new_tag=v$NEW_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve final tag output
+        id: resolve
         run: |
-          AFTER_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "none")
-          if [ "$BEFORE_TAG" != "$AFTER_TAG" ] && [ "$AFTER_TAG" != "none" ]; then
-            echo "released=true" >> "$GITHUB_OUTPUT"
-            echo "tag=$AFTER_TAG" >> "$GITHUB_OUTPUT"
+          if [ -n "${{ steps.use-tag.outputs.new_tag || '' }}" ]; then
+            echo "new_tag=${{ steps.use-tag.outputs.new_tag }}" >> "$GITHUB_OUTPUT"
           else
-            echo "released=false" >> "$GITHUB_OUTPUT"
+            echo "new_tag=${{ steps.auto-bump.outputs.new_tag }}" >> "$GITHUB_OUTPUT"
           fi
 
-      # Version bump reads Conventional Commits from the messages since
-      # the last tag, when they're written that way:
-      #   fix:        -> PATCH  (1.2.3 -> 1.2.4)
-      #   feat:       -> MINOR  (1.2.3 -> 1.3.0)
-      #   feat!: / BREAKING CHANGE: -> MAJOR (1.2.3 -> 2.0.0)
-      # Every push still cuts a release either way -- if nothing
-      # matched that format, the step above forces a patch bump
-      # instead of silently doing nothing. Deliberate tradeoff: a
-      # purely cosmetic commit still bumps the version, in exchange
-      # for never having to remember a specific prefix to get a real,
-      # downloadable release out of a push.
+  # ------------------------------------------------------------------
+  # THE ACTUAL BUG THIS FIXES: `desktop` (a 4-way matrix) and `android`
+  # both only depended on `bump-version`, so all 5 jobs started at the
+  # same time. Each one independently asks "does a release for this
+  # tag exist yet?" before creating one — but `desktop` uses
+  # tauri-apps/tauri-action and `android` uses softprops/action-gh-release,
+  # two entirely separate codebases with no coordination between them.
+  # When both check before either has finished creating the release,
+  # each concludes "no" and creates its own — producing TWO separate
+  # draft releases for the same tag, each holding only whichever
+  # assets happened to land in it, instead of one release with all of
+  # them. (The 4 desktop matrix jobs racing each other is fine —
+  # tauri-action is built for exactly that. It's specifically a
+  # *different* action running in true parallel with it that isn't
+  # coordinated.)
+  #
+  # Fix: create the draft release exactly once, here, and have every
+  # other job attach to that specific release (by id) instead of each
+  # independently finding-or-creating it by tag name.
+  # ------------------------------------------------------------------
+  create-release:
+    needs: bump-version
+    runs-on: ubuntu-24.04
+    outputs:
+      release_id: ${{ steps.create.outputs.id }}
+    steps:
+      - name: Create the draft release
+        id: create
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.bump-version.outputs.new_tag }}
+          name: "SME Pro ${{ needs.bump-version.outputs.new_tag }}"
+          body: "Automated release. See commit history for what changed."
+          draft: true
 
-  build-windows-exe:
-    needs: release
-    if: needs.release.outputs.released == 'true'
-    runs-on: windows-latest
+  # ------------------------------------------------------------------
+  # Desktop: Windows / macOS (Intel + Apple Silicon) / Linux, exactly
+  # as before — now just parameterized on bump-version's output tag
+  # instead of the raw push ref, so it builds the exact bumped-version
+  # commit whether this run came from an auto-bump or a manual tag.
+  # ------------------------------------------------------------------
+  desktop:
+    needs: [bump-version, create-release]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-24.04
+            args: ""
+          - platform: macos-latest
+            args: "--target aarch64-apple-darwin"
+          - platform: macos-latest
+            args: "--target x86_64-apple-darwin"
+          - platform: windows-latest
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.release.outputs.tag }}
+          ref: ${{ needs.bump-version.outputs.new_tag }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: "pip"
-          cache-dependency-path: backend/requirements*.txt
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-24.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
 
-      - name: Set up Node
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
-          cache: "npm"
-          cache-dependency-path: frontend/package-lock.json
+          node-version: 20
 
-      - name: Install backend dependencies
-        working-directory: backend
-        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
-      - name: Build the frontend
-        working-directory: frontend
-        run: |
-          npm ci
-          npm run build
+      - name: Rust build cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+          # Bumped once to force a clean cache after a stale cached
+          # target/ dir was found to ship an outdated embedded exe icon
+          # (see build.rs cargo:rerun-if-changed=icons fix). Bump again
+          # any time a cache-invisible asset change needs to force a
+          # full rebuild.
+          prefix-key: "v2-icon-fix"
 
-      - name: Build the executable
-        run: pyinstaller pyinstaller/pharmacy-erp.spec --distpath dist --noconfirm
+      - name: Install frontend dependencies
+        run: npm ci
 
-      - name: Smoke-test the built exe actually starts and serves
-        shell: bash
-        run: |
-          # A successful PyInstaller build proves the bundling worked,
-          # not that the resulting exe actually runs -- an import
-          # missed by hiddenimports, a bundled data file in the wrong
-          # place, anything like that would still "build" fine and
-          # then fail the instant someone double-clicks it. Actually
-          # running it here, then driving the real HTTP setup flow the
-          # web UI itself uses (not a console prompt -- desktop_main.py
-          # no longer has one, since Electron launches it with no
-          # console at all), is what catches that before it ships.
-          # LOCALAPPDATA specifically -- see desktop_main.py's
-          # _app_data_dir(), which reads that exact variable.
-          export LOCALAPPDATA="$RUNNER_TEMP/exe-smoke-test"
-          mkdir -p "$LOCALAPPDATA"
-          "./dist/Pharmacy-ERP/Pharmacy-ERP.exe" &
-          EXE_PID=$!
-
-          ready=""
-          for i in $(seq 1 30); do
-            if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/health 2>/dev/null | grep -q 200; then
-              ready="yes"
-              break
-            fi
-            sleep 1
-          done
-          if [ -z "$ready" ]; then
-            echo "::error::Built exe never answered /health after 30s -- failing the release rather than shipping a broken asset."
-            kill "$EXE_PID" 2>/dev/null || true
-            exit 1
-          fi
-
-          echo "Exe is up. Driving the real setup flow, then verifying login works end-to-end..."
-          setup_status=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:8000/api/v1/setup/first-user \
-            -H "Content-Type: application/json" \
-            -d '{"full_name":"CI Smoke Test","username":"smoketest","password":"SmokeTestPass123","security_question":"CI question?","security_answer":"CI answer"}')
-          if [ "$setup_status" != "204" ]; then
-            echo "::error::Setup smoke test got HTTP $setup_status from /setup/first-user, expected 204 -- failing the release rather than shipping a broken asset."
-            kill "$EXE_PID" 2>/dev/null || true
-            exit 1
-          fi
-
-          login_status=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:8000/api/v1/auth/login \
-            -H "Content-Type: application/json" \
-            -d '{"username":"smoketest","password":"SmokeTestPass123"}')
-          kill "$EXE_PID" 2>/dev/null || true
-
-          if [ "$login_status" != "200" ]; then
-            echo "::error::Login smoke test got HTTP $login_status, expected 200 -- failing the release rather than shipping a broken asset."
-            exit 1
-          fi
-          echo "Smoke test passed: the exe migrates, the real setup endpoint creates the first user, and login works."
-
-      - name: Generate the Windows icon from logo.png
-        shell: bash
-        run: |
-          # The real, confirmed root cause of the icon not appearing in
-          # CI-built installers: the local build (build-installer.bat)
-          # already runs this exact conversion before calling
-          # electron-builder, producing a real multi-resolution .ico.
-          # This workflow never did, so electron-builder was instead
-          # handed the raw PNG directly and left to convert it
-          # implicitly -- which behaves inconsistently and can silently
-          # produce a worse (or no) result compared to the same
-          # deterministic conversion the local build already relies on.
-          cd backend
-          python -m scripts.make_icon ../electron/build/logo.png
-          if [ ! -f "../electron/build/icon.ico" ]; then
-            echo "::error::Icon generation did not produce electron/build/icon.ico."
-            exit 1
-          fi
-          echo "Generated electron/build/icon.ico from logo.png."
-
-      - name: Build the Electron desktop installer
-        working-directory: electron
-        shell: bash
-        run: |
-          # Verify the icon is actually present in what GitHub checked
-          # out -- if it's only ever been added locally and never
-          # committed/pushed, electron-builder would otherwise fall
-          # back to a generic default icon silently, and the build
-          # would still "succeed" while shipping without the real logo.
-          if [ ! -f "build/logo.png" ]; then
-            echo "::error::electron/build/logo.png is missing from this checkout. It must be committed and pushed to the repository -- a file that only exists on a local machine will never reach this build."
-            exit 1
-          fi
-
-          # Real version, not the hardcoded placeholder in package.json --
-          # otherwise every release would ship an installer claiming to be
-          # v0.1.0 regardless of what it actually is.
-          npm version "${{ needs.release.outputs.tag }}" --no-git-tag-version --allow-same-version
-          npm install
-          npm run build:win
-
-      - name: Package the standalone backend build
-        shell: bash
-        run: |
-          # A onedir build genuinely cannot run on its own without the
-          # dependency files sitting next to it -- unlike the old
-          # onefile exe, shipping just Pharmacy-ERP.exe alone here
-          # would produce a release asset that fails the instant
-          # someone actually tries to run it.
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The signing key is what makes auto-update trustworthy: the
+          # updater plugin verifies every downloaded update against the
+          # public key baked into tauri.conf.json before installing it.
+          # Generate your OWN key (`npm run tauri signer generate`) and
+          # store the private half + its password as repo secrets —
+          # never commit the private key itself.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          # releaseId pins this to the ONE release create-release
+          # already made — tauri-action skips its own find-or-create
+          # lookup entirely once releaseId is set (its README: "If
+          # releaseId is set, the action will use this release to
+          # upload assets to"), which is what stops it from racing the
+          # android job's own release creation — see create-release's
+          # doc comment above.
           #
-          # `zip` isn't available on windows-latest runners (Git Bash
-          # doesn't ship it), so use PowerShell's built-in
-          # Compress-Archive instead -- no extra install needed.
-          powershell -NoProfile -Command "Compress-Archive -Path 'dist/Pharmacy-ERP/*' -DestinationPath 'dist/Pharmacy-ERP-${{ needs.release.outputs.tag }}.zip' -Force"
-          # electron-builder's own default NSIS naming
-          # ("<productName> Setup <version>.exe") -- found by its
-          # actual glob rather than hardcoded, since that pattern can
-          # shift between electron-builder versions.
-          installer_path=$(find electron/dist -maxdepth 1 -name "*.exe" | head -n 1)
-          if [ -z "$installer_path" ]; then
-            echo "::error::No installer .exe found under electron/dist after the Electron build."
-            exit 1
-          fi
-          mv "$installer_path" "dist/Pharmacy-ERP-Setup-${{ needs.release.outputs.tag }}.exe"
+          # tagName is kept alongside it (not either/or — the action
+          # supports passing both) specifically because tauri-action's
+          # own README warns that a releaseId with no tagName makes
+          # the generated latest.json point updater downloads at
+          # `releases/latest/download/<bundle>` instead of this exact
+          # tagged release, which UpdateChecker.tsx relies on being
+          # unambiguous.
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          tagName: ${{ needs.bump-version.outputs.new_tag }}
+          args: ${{ matrix.args }}
 
-      - name: Attach the executables to the release
+  # ------------------------------------------------------------------
+  # Android: builds a real APK and attaches it to the SAME release
+  # create-release already made (by id, not by re-deriving it from the
+  # tag — see create-release's doc comment for why "whichever job
+  # finishes first creates it, the other attaches" turned out to be
+  # unsafe across two different release-management actions running in
+  # parallel).
+  #
+  # Uses DEBUG signing by default, which Android genuinely allows you to
+  # install and run — it is NOT a placeholder or a broken build, just
+  # not suitable for the Play Store. For Play Store distribution, add a
+  # real release keystore as repo secrets (ANDROID_KEYSTORE_BASE64,
+  # ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD)
+  # and this job will automatically switch to using it instead — see
+  # the "Decode signing keystore" step below, which only runs if that
+  # secret is actually set.
+  # ------------------------------------------------------------------
+  android:
+    needs: [bump-version, create-release]
+    runs-on: ubuntu-24.04
+    # NOTE ON ANDROID ARCHITECTURES: only building aarch64 (64-bit ARM)
+    # and armv7 (32-bit ARM) — real Android phones. i686 and x86_64 are
+    # essentially emulator-only architectures nobody's actual phone uses.
+    # x86_64 additionally hit a genuine, unrelated upstream problem:
+    # OpenSSL's x86_64 SM4 cipher assembly (crypto/sm4/sm4-x86_64.S)
+    # uses very new CPU instructions (vsm4key4/vsm4rnds4) that NDK 26's
+    # bundled assembler doesn't recognize yet — traced by reading
+    # openssl-src's actual source; confirmed it has no supported way to
+    # disable assembly for arbitrary targets, an OPENSSL_NO_ASM env var
+    # does nothing at all for this crate (only OpenSSL's own Configure
+    # script run directly reads that name).
+    #
+    # The actual mechanism that excludes these architectures is the
+    # explicit `--target aarch64 --target armv7` flags on the
+    # `tauri android build` command below — NOT which rustup targets are
+    # installed. Confirmed by reading tauri-cli's own source
+    # (cargo-mobile2's get_targets_or_all(): an empty target list
+    # defaults to Target::all(), i.e. all four architectures regardless
+    # of what rustup has installed) — an earlier version of this fix
+    # tried removing the architectures from rustup alone, which looked
+    # right but did nothing, proven by a real failed build log still
+    # showing Gradle attempting x86_64.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.bump-version.outputs.new_tag }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Free disk space
+        # A GitHub-hosted runner starts with ~14GB already used by
+        # preinstalled software this job never touches (.NET, existing
+        # Android emulator images, GHC, etc). Rust + the Android NDK +
+        # SDK + a full Gradle build in the SAME job can genuinely run
+        # the remaining space out, which shows up as a confusing failure
+        # deep inside the Gradle step rather than a clear "disk full"
+        # message. Clearing unused preinstalled stuff first is cheap
+        # insurance against that specific failure mode.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android/sdk/ndk-bundle \
+            /opt/ghc /usr/local/.ghcup /usr/local/share/boost \
+            "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
+          df -h /
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cache Gradle dependencies
+        # THE ACTUAL FIX for a real failure: "Build APK" failed with
+        # HTTP 429 (Too Many Requests) from repo.maven.apache.org and
+        # plugins.gradle.org while resolving Kotlin Gradle plugin
+        # dependencies — Maven Central rate-limiting the shared IP
+        # pool GitHub-hosted runners draw from, not a code problem.
+        # Without this, every single Android run re-downloaded the
+        # ENTIRE Gradle/Kotlin plugin dependency tree from scratch —
+        # nothing was ever being reused between runs, which is exactly
+        # what makes tripping that rate limit likely. gradle/actions/
+        # setup-gradle is the official, purpose-built action for this
+        # (handles both the dependency cache and the Gradle wrapper
+        # distribution itself, with safe, known-correct cache-key
+        # invalidation) rather than a hand-rolled actions/cache config
+        # that would need to get that invalidation logic right itself.
+        # This doesn't make a 429 impossible on a stone-cold cache (the
+        # very first run after this still downloads everything once),
+        # but every run after that reuses what didn't change instead
+        # of hammering Maven Central again — the actual fix; simply
+        # re-running the failed job is a workaround for one bad
+        # moment, not a fix for hitting this repeatedly.
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools"
+
+      - name: Install Android NDK
+        run: sdkmanager --install "ndk;26.1.10909125"
+
+      - name: Setup Rust with Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi
+
+      - name: Rust build cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Scaffold Android project
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/26.1.10909125"
+          npm run tauri android init
+
+      - name: Write local.properties
+        # Gradle traditionally reads SDK/NDK locations from this file,
+        # not just from ANDROID_HOME/NDK_HOME environment variables — a
+        # freshly-scaffolded project (generated mid-CI, never opened in
+        # Android Studio) doesn't have one yet, and some Android Gradle
+        # Plugin versions don't reliably fall back to the env vars alone
+        # in a non-interactive CI shell. Writing it explicitly removes
+        # that ambiguity rather than hoping the env vars are enough.
+        run: |
+          cat > src-tauri/gen/android/local.properties <<EOF
+          sdk.dir=$ANDROID_HOME
+          ndk.dir=$ANDROID_HOME/ndk/26.1.10909125
+          EOF
+          cat src-tauri/gen/android/local.properties
+
+      - name: Apply loopback network security config
+        # Same fix mobile-android.sh applies locally — Android blocks
+        # plain HTTP by default; our backend talks to 127.0.0.1 only
+        # (loopback inside the app's own process), which needs an
+        # explicit exception or the app can't reach its own API.
+        run: |
+          XML_DIR="src-tauri/gen/android/app/src/main/res/xml"
+          mkdir -p "$XML_DIR"
+          cat > "$XML_DIR/network_security_config.xml" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <network-security-config>
+              <domain-config cleartextTrafficPermitted="true">
+                  <domain includeSubdomains="false">127.0.0.1</domain>
+              </domain-config>
+          </network-security-config>
+          EOF
+          MANIFEST="src-tauri/gen/android/app/src/main/AndroidManifest.xml"
+          python3 -c "
+          import re
+          path = '$MANIFEST'
+          with open(path) as f:
+              content = f.read()
+          if 'networkSecurityConfig' not in content:
+              content = re.sub(r'(<application\b)', r'\1 android:networkSecurityConfig=\"@xml/network_security_config\"', content, count=1)
+              with open(path, 'w') as f:
+                  f.write(content)
+          "
+
+      - name: Add foreground service to keep the local API server alive
+        # THE GAP THIS CLOSES: android_service.rs's own doc comment
+        # flags this explicitly — the local API server this app's
+        # frontend depends on runs on a plain background thread, which
+        # Android's background execution limits (API 26+) reclaim
+        # within minutes of the app leaving the foreground, with no
+        # foreground service or persistent notification protecting it.
+        # This copies in a real Kotlin foreground service (see
+        # src-tauri/android/com/smepro/app/) and wires it to start at
+        # process launch via a custom Application subclass, rather than
+        # patching Tauri's generated MainActivity.kt directly — that
+        # file's exact template content isn't something this repo
+        # controls, so a text patch against it would be fragile across
+        # Tauri versions. A single `android:name` attribute on
+        # `<application>` is not.
+        #
+        # NOT verified against a real device/emulator — this sandbox
+        # has neither. What IS confirmed: this is standard, documented
+        # Android platform API (Service + startForeground +
+        # NotificationChannel), and the manifest edits below are
+        # idempotent regex/string patches guarded by "already patched"
+        # checks, same pattern as the network-security-config and
+        # REQUEST_INSTALL_PACKAGES steps already proven working in this
+        # same job.
+        run: |
+          JAVA_DIR="src-tauri/gen/android/app/src/main/java/com/smepro/app"
+          mkdir -p "$JAVA_DIR"
+          cp src-tauri/android/com/smepro/app/SmeProForegroundService.kt "$JAVA_DIR/"
+          cp src-tauri/android/com/smepro/app/SmeProApplication.kt "$JAVA_DIR/"
+
+          MANIFEST="src-tauri/gen/android/app/src/main/AndroidManifest.xml"
+          python3 -c "
+          import re
+          path = '$MANIFEST'
+          with open(path) as f:
+              content = f.read()
+
+          if 'FOREGROUND_SERVICE' not in content:
+              content = re.sub(
+                  r'(<manifest\b[^>]*>)',
+                  r'\1\n    <uses-permission android:name=\"android.permission.FOREGROUND_SERVICE\" />'
+                  r'\n    <uses-permission android:name=\"android.permission.FOREGROUND_SERVICE_DATA_SYNC\" />',
+                  content, count=1,
+              )
+
+          if 'android:name=\".SmeProApplication\"' not in content:
+              content = re.sub(
+                  r'(<application\b)',
+                  r'\1 android:name=\".SmeProApplication\"',
+                  content, count=1,
+              )
+
+          if 'SmeProForegroundService' not in content:
+              service_tag = (
+                  '    <service android:name=\".SmeProForegroundService\" '
+                  'android:enabled=\"true\" android:exported=\"false\" '
+                  'android:foregroundServiceType=\"dataSync\" />\n'
+                  '</application>'
+              )
+              content = content.replace('</application>', service_tag, 1)
+
+          with open(path, 'w') as f:
+              f.write(content)
+          "
+
+      - name: Add REQUEST_INSTALL_PACKAGES permission (needed for in-app updates)
+        # See the matching comment in mobile-android.sh — this permission
+        # is confirmed-correct Android API; whether tauri-plugin-opener's
+        # Android library needs an additional manually-declared
+        # FileProvider was NOT verified against a real device/emulator.
+        run: |
+          MANIFEST="src-tauri/gen/android/app/src/main/AndroidManifest.xml"
+          python3 -c "
+          import re
+          path = '$MANIFEST'
+          with open(path) as f:
+              content = f.read()
+          if 'REQUEST_INSTALL_PACKAGES' not in content:
+              content = re.sub(r'(<manifest\b[^>]*>)', r'\1\n    <uses-permission android:name=\"android.permission.REQUEST_INSTALL_PACKAGES\" />', content, count=1)
+              with open(path, 'w') as f:
+                  f.write(content)
+          "
+
+      # THE ACTUAL BUG THIS FIXES: Tauri's default Android Gradle
+      # template has NO signingConfig at all on the "release" build
+      # type (confirmed by reading tauri-cli's own template source) —
+      # Android's automatic debug-signing only applies to the "debug"
+      # build type, never "release". `tauri android build` (no --debug
+      # flag) builds the release variant. Previously, this workflow
+      # wrote a keystore.properties file when a real keystore secret
+      # was configured, but NOTHING actually read that file — meaning
+      # even the "real keystore" path never got wired into Gradle.
+      # Every release APK this pipeline ever produced was unsigned,
+      # which Android refuses to install, always, on every device,
+      # regardless of what was previously installed — not a signature
+      # MISMATCH, a complete absence of one.
+      #
+      # This step guarantees a keystore.properties + matching .keystore
+      # file exist by the time Gradle runs, either from your own real
+      # release keystore (repo secrets) or from a fallback keystore
+      # this workflow generates and persists (via actions/cache) so
+      # every build until you add a real one is signed with the SAME
+      # key — installable, and consistently upgradable, just not
+      # Play-Store-eligible (that still needs your own real keystore).
+      # secrets.X cannot be referenced directly inside a step-level
+      # `if:` — GitHub Actions' expression evaluator rejects it
+      # ("Unrecognized named-value: 'secrets'"), a real error already
+      # hit and fixed once this session. Route it through a step output
+      # instead, which `if:` conditions ARE allowed to reference.
+      - name: Check for a real release keystore secret
+        id: check-keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "has_real_keystore=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_real_keystore=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore or create a persistent fallback keystore
+        if: steps.check-keystore.outputs.has_real_keystore == 'false'
+        id: fallback-keystore
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/gen/android/fallback.keystore
+          key: android-fallback-keystore-v1
+
+      - name: Generate the fallback keystore (first run only)
+        if: steps.check-keystore.outputs.has_real_keystore == 'false' && steps.fallback-keystore.outputs.cache-hit != 'true'
+        run: |
+          keytool -genkeypair -v \
+            -keystore src-tauri/gen/android/fallback.keystore \
+            -alias smepro-fallback \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass smeprofallback -keypass smeprofallback \
+            -dname "CN=SME Pro, OU=Fallback, O=SME Pro, L=Unknown, ST=Unknown, C=US"
+
+      - name: Write keystore.properties (real keystore or fallback)
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "Using your real release keystore from repo secrets."
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > src-tauri/gen/android/release.keystore
+            cat > src-tauri/gen/android/keystore.properties <<EOF
+          password=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          storeFile=release.keystore
+          EOF
+          else
+            echo "No release keystore secret set — using the persistent fallback keystore."
+            cat > src-tauri/gen/android/keystore.properties <<EOF
+          password=smeprofallback
+          keyAlias=smepro-fallback
+          keyPassword=smeprofallback
+          storeFile=fallback.keystore
+          EOF
+          fi
+
+      # keystore.properties existing is necessary but not sufficient —
+      # this is the step that actually makes Gradle use it. Patches the
+      # generated build.gradle.kts to add a real signingConfigs block
+      # and apply it to the release build type. Idempotent (checks
+      # before patching) since `gen/android` is regenerated fresh each
+      # run anyway, but harmless either way.
+      - name: Wire the keystore into Gradle's release signing config
+        run: |
+          python3 - <<'PYEOF'
+          path = "src-tauri/gen/android/app/build.gradle.kts"
+          with open(path) as f:
+              content = f.read()
+
+          if "keystoreProperties" in content:
+              print("Already patched, skipping.")
+          else:
+              content = "import java.io.FileInputStream\n\n" + content
+
+              signing_config = (
+                  "\n    signingConfigs {\n"
+                  "        create(\"release\") {\n"
+                  "            val keystorePropertiesFile = rootProject.file(\"keystore.properties\")\n"
+                  "            if (keystorePropertiesFile.exists()) {\n"
+                  "                val keystoreProperties = Properties()\n"
+                  "                keystoreProperties.load(FileInputStream(keystorePropertiesFile))\n"
+                  "                storeFile = rootProject.file(keystoreProperties[\"storeFile\"] as String)\n"
+                  "                storePassword = keystoreProperties[\"password\"] as String\n"
+                  "                keyAlias = keystoreProperties[\"keyAlias\"] as String\n"
+                  "                keyPassword = keystoreProperties[\"keyPassword\"] as String\n"
+                  "            }\n"
+                  "        }\n"
+                  "    }\n"
+                  "    buildTypes {"
+              )
+              content = content.replace("    buildTypes {", signing_config, 1)
+
+              content = content.replace(
+                  "        getByName(\"release\") {\n            isMinifyEnabled = true",
+                  "        getByName(\"release\") {\n            signingConfig = signingConfigs.getByName(\"release\")\n            isMinifyEnabled = true",
+                  1,
+              )
+
+              with open(path, "w") as f:
+                  f.write(content)
+              print("Patched build.gradle.kts with a real signingConfig.")
+          PYEOF
+
+      - name: Build APK
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/26.1.10909125"
+          TOOLCHAIN="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export PATH="$TOOLCHAIN:$PATH"
+
+          # openssl-src's build (Perl Configure + make, not just Cargo's
+          # own `cc` crate machinery) needs AR/RANLIB on PATH or in env.
+          # NDK r23+ (this workflow uses 26) REMOVED the old per-triple
+          # GNU-binutils-style wrappers (e.g. aarch64-linux-android-ranlib)
+          # entirely — only the unified, architecture-agnostic llvm-ar /
+          # llvm-ranlib remain. ar/ranlib just package already-compiled
+          # object files, so they don't need a per-arch variant the way a
+          # compiler does — one llvm-ar correctly handles every target.
+          export AR="$TOOLCHAIN/llvm-ar"
+          export RANLIB="$TOOLCHAIN/llvm-ranlib"
+
+          # Compilers DO need to be target- and API-level-specific — the
+          # NDK provides one clang wrapper per (arch, minSdkVersion) pair.
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TOOLCHAIN/aarch64-linux-android21-clang"
+          export CC_aarch64_linux_android="$TOOLCHAIN/aarch64-linux-android21-clang"
+          export CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER="$TOOLCHAIN/armv7a-linux-androideabi21-clang"
+          export CC_armv7_linux_androideabi="$TOOLCHAIN/armv7a-linux-androideabi21-clang"
+          # THE ACTUAL FIX: without --target flags, `tauri android build`
+          # defaults to building ALL FOUR architectures (aarch64, armv7,
+          # i686, x86_64) regardless of what's installed via rustup —
+          # confirmed by reading tauri-cli's own source (cargo-mobile2's
+          # get_targets_or_all(): empty target list -> Target::all()).
+          # This is why removing x86_64 from the rustup targets step
+          # earlier did NOT stop Gradle from still attempting to build
+          # it — that was never the actual mechanism controlling this.
+          # Real phones are aarch64 (64-bit) and armv7 (32-bit) — this
+          # explicitly restricts the build to just those two.
+          npm run tauri android build -- --apk --target aarch64 --target armv7
+
+      - name: Locate built APK(s)
+        id: find-apk
+        run: |
+          APK_DIR="src-tauri/gen/android/app/build/outputs/apk"
+          echo "Found:"
+          find "$APK_DIR" -name "*.apk"
+          {
+            echo "apk_paths<<APK_LIST_EOF"
+            find "$APK_DIR" -name "*.apk"
+            echo "APK_LIST_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Attach APK to the release
+        # tag_name is still required here (this action has no separate
+        # "upload to this exact release id" input) — but by this point
+        # create-release has already made the release and `needs:`
+        # guarantees this step never runs before it exists, so this
+        # finds and updates that one release rather than racing
+        # anything to create a second one.
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.bump-version.outputs.new_tag }}
+          draft: true
+          files: ${{ steps.find-apk.outputs.apk_paths }}
+
+  # ------------------------------------------------------------------
+  # THE ACTUAL FIX Deric asked for: nothing in this workflow ever
+  # published the release it creates. create-release makes it as a
+  # draft on purpose (so neither the desktop nor the android job races
+  # to create a second one — see that job's own doc comment), and both
+  # of those jobs leave it as `draft: true` when they attach their own
+  # assets, also on purpose (so the updater can't see a half-finished
+  # release missing one platform's files while the other is still
+  # building). But nothing ever came along afterward to flip it back
+  # to published once BOTH were actually done — so every release this
+  # workflow has ever produced has stayed a draft forever. A draft
+  # release is invisible to `/releases/latest`, which is exactly the
+  # endpoint tauri.conf.json's updater endpoint (and every desktop
+  # app's "Check for updates") depends on — so the auto-updater has
+  # never once found anything to update to, for any version, for any
+  # user, not just in local testing.
+  #
+  # This job is the missing last step: once BOTH desktop and android
+  # have succeeded (the `needs:` below — if either fails, this never
+  # runs, and the release stays a draft exactly as today, which is the
+  # safe failure mode: an incomplete release should never go live),
+  # publish the one release create-release made, by id, using the
+  # GitHub CLI (`gh`, preinstalled on every GitHub-hosted runner) with
+  # the same repo-scoped GITHUB_TOKEN every other step here already
+  # uses — no new secret needed.
+  publish-release:
+    needs: [bump-version, create-release, desktop, android]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Publish the release (draft -> published)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
         run: |
-          gh release upload "${{ needs.release.outputs.tag }}" \
-            "dist/Pharmacy-ERP-${{ needs.release.outputs.tag }}.zip" \
-            "dist/Pharmacy-ERP-Setup-${{ needs.release.outputs.tag }}.exe" --clobber
+          gh release edit "${{ needs.bump-version.outputs.new_tag }}" \
+            --repo "${{ github.repository }}" \
+            --draft=false

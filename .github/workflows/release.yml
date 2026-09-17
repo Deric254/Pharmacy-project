@@ -271,6 +271,26 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          gh release upload "${{ needs.release.outputs.tag }}" \
+          # `gh release upload` occasionally gets back a plain HTTP 500
+          # from GitHub's own asset-storage backend -- a transient
+          # failure on GitHub's side (nothing to do with the assets
+          # themselves), not a duplicate-name conflict (--clobber
+          # already handles that) and not anything wrong with this
+          # workflow. Retrying a few times with backoff turns that kind
+          # of one-off blip into a non-issue instead of failing an
+          # otherwise-good release outright.
+          max_attempts=5
+          attempt=1
+          until gh release upload "${{ needs.release.outputs.tag }}" \
             "dist/Pharmacy-ERP-${{ needs.release.outputs.tag }}.zip" \
             "dist/Pharmacy-ERP-Setup-${{ needs.release.outputs.tag }}.exe" --clobber
+          do
+            if [ "$attempt" -ge "$max_attempts" ]; then
+              echo "::error::gh release upload failed after $attempt attempts."
+              exit 1
+            fi
+            wait_seconds=$((10 * attempt))
+            echo "Upload attempt $attempt failed (likely a transient GitHub-side error). Retrying in ${wait_seconds}s..."
+            sleep "$wait_seconds"
+            attempt=$((attempt + 1))
+          done

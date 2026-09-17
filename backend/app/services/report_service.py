@@ -17,12 +17,11 @@ from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import Float, and_, case, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.business_time import (
     business_today,
-    get_business_timezone,
     local_day_bounds_utc,
     local_offset_segments,
 )
@@ -32,7 +31,7 @@ from app.models.product import Product
 from app.models.purchase_order import PurchaseOrderItem
 from app.models.refund import Refund, RefundItem
 from app.models.sale import Sale, SaleItem
-from app.models.stock_take import StockTake, StockTakeStatus
+from app.models.stock_take import StockTake, StockTakeItem, StockTakeStatus
 from app.models.user import User
 from app.schemas.reports import (
     CashierSalesEntry,
@@ -74,50 +73,89 @@ class ReportService:
     async def sales_summary(
         self, start_date: date, end_date: date, group_by: str = "day"
     ) -> SalesSummaryOut:
-        sales = await self._sales_in_range(start_date, end_date)
-        # Refunds are fetched by their OWN created_at, not the created_at
-        # of the sale they're against -- a refund processed today against
-        # last week's sale is real money leaving the till TODAY, not a
-        # rewrite of last week's already-closed total. Bucketed and netted
-        # against revenue below so a refunded sale doesn't leave stale
-        # money sitting in whatever period it reports as "revenue".
-        refunds = await self._refunds_in_range(start_date, end_date)
-        tz = await get_business_timezone(self.db)
+        """
+        Real SQL-side aggregation, segmented by DST offset exactly like
+        revenue_trend() below -- see that method's docstring for why a
+        single offset can't correctly bucket a range spanning a DST
+        transition. This used to load every matching Sale and Refund
+        row into Python and bucket them one at a time via per-row
+        .astimezone() calls -- correct, but the one report in this file
+        that didn't follow the "SQL aggregation, never a full table
+        scan into Python" rule this module's own top-of-file docstring
+        promises, and the exact path an "all-time" style question (see
+        ai_assistant_service.py's _ALL_TIME_RE) can now route a
+        multi-year range through -- previously that meant loading a
+        business's entire sales history into memory just to add it up.
+        """
 
-        def bucket_key(dt: datetime) -> str:
-            # created_at is stored UTC; convert to the business's own
-            # local time via astimezone(), which resolves DST using
-            # THIS row's own date -- not a single offset computed once
-            # for the whole request -- or a row made early in the
-            # local day would still group under the UTC day before.
-            local_dt = dt.replace(tzinfo=UTC).astimezone(tz)
+        def bucket_expr_for(shifted_column: Any) -> Any:
             return (
-                local_dt.strftime("%Y-%m-%d") if group_by == "day" else local_dt.strftime("%Y-%m")
+                func.date(shifted_column)
+                if group_by == "day"
+                else func.strftime("%Y-%m", shifted_column)
             )
 
-        revenue_by_period: dict[str, float] = defaultdict(float)
-        discount_by_period: dict[str, float] = defaultdict(float)
-        count_by_period: dict[str, int] = defaultdict(int)
+        revenue_by_period: dict[str, float] = {}
+        discount_by_period: dict[str, float] = {}
+        count_by_period: dict[str, int] = {}
+        period_order: list[str] = []
 
-        for sale in sales:
-            key = bucket_key(sale.created_at)
-            revenue_by_period[key] += sale.total_amount
-            discount_by_period[key] += sale.discount_amount
-            count_by_period[key] += 1
+        def ensure_period(period: str) -> None:
+            if period not in revenue_by_period:
+                period_order.append(period)
+                revenue_by_period[period] = 0.0
+                discount_by_period[period] = 0.0
+                count_by_period[period] = 0
 
-        for refund in refunds:
-            # Netted into revenue only -- sale_count and discount stay
-            # tied to actual sales made, a refund isn't a sale.
-            revenue_by_period[bucket_key(refund.created_at)] -= refund.total_amount
+        segments = await local_offset_segments(self.db, start_date, end_date)
+        for segment_start, segment_end, offset_minutes in segments:
+            utc_start, utc_end = await local_day_bounds_utc(self.db, segment_start, segment_end)
+
+            sale_shifted = func.datetime(Sale.created_at, f"{offset_minutes:+d} minutes")
+            sale_result = await self.db.execute(
+                select(
+                    bucket_expr_for(sale_shifted).label("period"),
+                    func.coalesce(func.sum(Sale.total_amount), 0.0).label("revenue"),
+                    func.coalesce(func.sum(Sale.discount_amount), 0.0).label("discount"),
+                    func.count(Sale.id).label("sale_count"),
+                )
+                .where(Sale.created_at >= utc_start, Sale.created_at < utc_end)
+                .group_by("period")
+            )
+            for row in sale_result.all():
+                ensure_period(row.period)
+                revenue_by_period[row.period] += float(row.revenue)
+                discount_by_period[row.period] += float(row.discount)
+                count_by_period[row.period] += int(row.sale_count)
+
+            # Refunds bucketed by their OWN created_at, not the created_at
+            # of the sale they're against -- see this method's original
+            # docstring reasoning, preserved exactly: a refund processed
+            # today against last week's sale is real money leaving the
+            # till TODAY, not a rewrite of last week's already-closed
+            # total. Netted into revenue only -- sale_count and discount
+            # stay tied to actual sales made, a refund isn't a sale.
+            refund_shifted = func.datetime(Refund.created_at, f"{offset_minutes:+d} minutes")
+            refund_result = await self.db.execute(
+                select(
+                    bucket_expr_for(refund_shifted).label("period"),
+                    func.coalesce(func.sum(Refund.total_amount), 0.0).label("refund_total"),
+                )
+                .where(Refund.created_at >= utc_start, Refund.created_at < utc_end)
+                .group_by("period")
+            )
+            for row in refund_result.all():
+                ensure_period(row.period)
+                revenue_by_period[row.period] -= float(row.refund_total)
 
         entries = [
             SalesSummaryEntry(
                 period=period,
-                sale_count=count_by_period.get(period, 0),
+                sale_count=count_by_period[period],
                 total_revenue=revenue_by_period[period],
-                total_discount=discount_by_period.get(period, 0.0),
+                total_discount=discount_by_period[period],
             )
-            for period in sorted(revenue_by_period.keys())
+            for period in sorted(period_order)
         ]
 
         return SalesSummaryOut(
@@ -221,6 +259,19 @@ class ReportService:
         )
 
     async def fast_slow_movers(self, days: int = 30, limit: int = 10) -> FastSlowMoversOut:
+        """
+        Real product movement over the last `days` -- fast movers by
+        real quantity sold, slow movers by the same measure from the
+        bottom, never-sold products flagged separately.
+
+        Aggregated in SQL (GROUP BY product) rather than fetching
+        every SaleItem row in the window into Python and summing
+        there -- this used to do exactly that, and `days` has no
+        upper bound at the API layer (Query(..., ge=1) only), so a
+        large lookback on a busy pharmacy could pull a genuinely
+        large number of line items into memory for what ends up being
+        just a handful of numbers per product.
+        """
         # UTC, matching how Sale.created_at is stored -- datetime.now()
         # (naive local time) would silently widen or narrow this
         # rolling window by the business's UTC offset depending on the
@@ -229,16 +280,16 @@ class ReportService:
         cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=days)
 
         result = await self.db.execute(
-            select(SaleItem.product_id, Product.name, SaleItem.quantity)
+            select(SaleItem.product_id, Product.name, func.sum(SaleItem.quantity))
             .join(Sale, Sale.id == SaleItem.sale_id)
             .join(Product, Product.id == SaleItem.product_id)
             .where(Sale.created_at >= cutoff)
+            .group_by(SaleItem.product_id, Product.name)
         )
-
-        sold_qty: dict[int, int] = defaultdict(int)
+        sold_qty: dict[int, int] = {}
         names: dict[int, str] = {}
-        for product_id, name, quantity in result.all():
-            sold_qty[product_id] += quantity
+        for product_id, name, total_qty in result.all():
+            sold_qty[product_id] = int(total_qty)
             names[product_id] = name
 
         movement = [
@@ -400,10 +451,20 @@ class ReportService:
         )
 
     async def receiving_discrepancies(self) -> ReceivingDiscrepancyReportOut:
+        # Only mismatched lines, filtered in SQL -- this used to fetch
+        # every ever-received PO line (the overwhelming majority of
+        # which match exactly and get discarded) just to throw away
+        # everything but the mismatches in a Python list comprehension.
+        # A pharmacy years into receiving stock could have this scan
+        # its entire purchasing history on every single request for a
+        # report that only ever cares about the exceptions.
         result = await self.db.execute(
             select(PurchaseOrderItem, Product.name)
             .join(Product, Product.id == PurchaseOrderItem.product_id)
-            .where(PurchaseOrderItem.quantity_received.is_not(None))
+            .where(
+                PurchaseOrderItem.quantity_received.is_not(None),
+                PurchaseOrderItem.quantity_received != PurchaseOrderItem.quantity_ordered,
+            )
         )
 
         entries = [
@@ -417,7 +478,6 @@ class ReportService:
                 variance=item.quantity_received - item.quantity_ordered,
             )
             for item, product_name in result.all()
-            if item.quantity_received != item.quantity_ordered
         ]
 
         recommendation = (
@@ -432,43 +492,94 @@ class ReportService:
         return ReceivingDiscrepancyReportOut(entries=entries, recommendation=recommendation)
 
     async def stock_take_history(self) -> StockTakeHistoryOut:
+        """
+        Aggregated entirely in SQL, one row per closed stock take --
+        this used to load every closed StockTake ever plus every one
+        of its StockTakeItem rows (lazy="selectin", so not literally
+        N+1 queries, but still every row of a business's entire
+        stock-take history, always, on every single request to this
+        report) and sum shrinkage in a Python double loop. A pharmacy
+        running weekly counts for a few years could have thousands of
+        stock takes here; this report has no date filter or limit at
+        all today, so unlike the sales-based reports above, there was
+        no narrower request that would have avoided the full scan.
+
+        cost = unit_cost_at_close, falling back to the batch's current
+        cost_price only for a pre-migration row that predates that
+        column existing -- same rule and same reasoning as the
+        original Python loop (see unit_cost_at_close's own comment on
+        StockTakeItem: never re-derive a closed stock take's shrinkage
+        from today's cost). A LEFT OUTER JOIN throughout (StockTake to
+        StockTakeItem, and StockTakeItem to MedicineBatch) so a closed
+        stock take with zero items, or an item whose batch no longer
+        exists, still appears with correct (zero, where applicable)
+        values -- exactly as the original per-row Python loop handled
+        both cases.
+
+        Every multiplication and the final SUM run on an explicit
+        CAST(... AS FLOAT), computed in the raw-cents domain and
+        converted to dollars with one explicit /100 in Python at the
+        end -- the same reasoning as top_products_by_revenue() above:
+        MoneyCents' automatic decode is only verified reliable on a
+        plain summed column, not on an expression this heavily
+        multiplied, cast, and passed through a CASE.
+        """
+        cost_cents = func.coalesce(
+            cast(StockTakeItem.unit_cost_at_close, Float),
+            cast(MedicineBatch.cost_price, Float),
+            0.0,
+        )
+        expected_cents = cast(
+            func.coalesce(func.sum(StockTakeItem.expected_qty * cost_cents), 0.0), Float
+        )
+        shrinkage_cents = cast(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                StockTakeItem.physical_qty.is_not(None),
+                                StockTakeItem.expected_qty > StockTakeItem.physical_qty,
+                            ),
+                            (StockTakeItem.expected_qty - StockTakeItem.physical_qty) * cost_cents,
+                        ),
+                        else_=0.0,
+                    )
+                ),
+                0.0,
+            ),
+            Float,
+        )
+
         result = await self.db.execute(
-            select(StockTake)
+            select(
+                StockTake.id,
+                StockTake.started_at,
+                StockTake.closed_at,
+                expected_cents.label("expected_cents"),
+                shrinkage_cents.label("shrinkage_cents"),
+            )
+            .outerjoin(StockTakeItem, StockTakeItem.stock_take_id == StockTake.id)
+            .outerjoin(MedicineBatch, MedicineBatch.id == StockTakeItem.batch_id)
             .where(StockTake.status == StockTakeStatus.CLOSED)
+            .group_by(StockTake.id)
             .order_by(StockTake.closed_at.desc())
         )
-        stock_takes = result.scalars().all()
 
         entries = []
-        for stock_take in stock_takes:
-            shrinkage_value = 0.0
-            expected_value = 0.0
-            for item in stock_take.items:
-                # unit_cost_at_close is frozen at the moment this stock
-                # take closed (see that column's own comment) -- never
-                # a live read of batch.cost_price, which would let a
-                # cost correction made afterward silently change what
-                # an already-closed stock take's shrinkage shows the
-                # next time this report is viewed. Falls back to the
-                # batch's current cost only for a pre-migration row
-                # that predates this column existing.
-                cost = item.unit_cost_at_close
-                if cost is None:
-                    cost = item.batch.cost_price if item.batch else 0.0
-                expected_value += item.expected_qty * cost
-                if item.physical_qty is not None:
-                    variance = item.physical_qty - item.expected_qty
-                    if variance < 0:
-                        shrinkage_value += abs(variance) * cost
-
+        for stock_take_id, started_at, closed_at, expected_cents_value, shrinkage_cents_value in (
+            result.all()
+        ):
+            expected_value = float(expected_cents_value) / 100.0
+            shrinkage_value = float(shrinkage_cents_value) / 100.0
             shrinkage_percent = (
                 (shrinkage_value / expected_value * 100) if expected_value > 0 else 0.0
             )
             entries.append(
                 StockTakeHistoryEntry(
-                    stock_take_id=stock_take.id,
-                    started_at=stock_take.started_at,
-                    closed_at=stock_take.closed_at,
+                    stock_take_id=stock_take_id,
+                    started_at=started_at,
+                    closed_at=closed_at,
                     shrinkage_value=round(shrinkage_value, 2),
                     shrinkage_percent=round(shrinkage_percent, 2),
                 )
@@ -551,66 +662,95 @@ class ReportService:
     async def top_products_by_revenue(
         self, start_date: date, end_date: date, limit: int
     ) -> list[TopProductEntry]:
-        # SaleItem.unit_price is always the FULL, undiscounted price --
-        # a sale's discount lives only once, on the Sale header
-        # (Sale.discount_amount), and is never split across its line
-        # items at write time (see sale_service.py). Ranking directly
-        # by SUM(quantity * unit_price), as this used to, therefore
-        # overstated every discounted sale's contribution -- product
-        # revenue here didn't add up to the real money the business
-        # actually took in, while top_customers() and the KPI/PDF
-        # revenue totals (both keyed off Sale.total_amount) did. This
-        # prorates each sale's discount across its own line items in
-        # proportion to their share of that sale's subtotal, so a
-        # product's revenue here is its real, after-discount share --
-        # consistent with every other report reading from this file.
-        #
-        # That proration is inherently a per-line computation (the
-        # ratio differs sale by sale), so it can't be pushed into a
-        # single SQL GROUP BY the way a plain SUM() can. Sale.subtotal
-        # and Sale.total_amount are read here as plain typed columns
-        # (not divided in SQL), which is what keeps MoneyCents'
-        # cents<->dollars conversion exact -- dividing two MoneyCents
-        # columns directly in SQLite would divide their raw stored
-        # integer cents, not their dollar values, and (being integer
-        # division) would silently truncate every ratio below 1 to 0.
+        """
+        SaleItem.unit_price is always the FULL, undiscounted price --
+        a sale's discount lives only once, on the Sale header
+        (Sale.discount_amount), and is never split across its line
+        items at write time (see sale_service.py). Ranking directly
+        by SUM(quantity * unit_price), as this used to, therefore
+        overstated every discounted sale's contribution -- product
+        revenue here didn't add up to the real money the business
+        actually took in, while top_customers() and the KPI/PDF
+        revenue totals (both keyed off Sale.total_amount) did. This
+        prorates each sale's discount across its own line items in
+        proportion to their share of that sale's subtotal, so a
+        product's revenue here is its real, after-discount share --
+        consistent with every other report reading from this file.
+
+        The ratio and the final SUM are now computed entirely in SQL
+        (GROUP BY Product.id) -- this used to fetch every
+        SaleItem/Sale join row in range into Python and prorate row
+        by row, an unbounded full-history scan for a multi-year
+        "all time" question. Sale.subtotal, Sale.total_amount, and
+        SaleItem.unit_price are all MoneyCents columns stored as
+        integer cents. Checked directly rather than assumed: dividing
+        two of them with SQLAlchemy's `/` operator does NOT truncate
+        the way raw SQL integer division would -- SQLAlchemy already
+        compiles that as `total_amount / CAST(subtotal AS NUMERIC)`
+        to give true (non-truncating) division, confirmed against
+        this exact query with a >50% discount before this was
+        trusted. The explicit CAST(... AS FLOAT) calls below are kept
+        anyway, for two reasons that have nothing to do with that
+        truncation risk: they pin the whole expression to a plain
+        float end type, and the aggregate is deliberately computed in
+        the raw-cents domain and converted to dollars with one
+        explicit /100 in Python at the end, rather than trusted to
+        MoneyCents' automatic decode on an expression this heavily
+        multiplied and cast -- that decode is only verified reliable
+        on a plain summed column (see the refund netting just below).
+        Pinned by test_top_products_revenue_is_net_of_discount (a 250
+        sale discounted by 50 -> exactly 200) and
+        test_top_products_revenue_survives_a_discount_over_half_price
+        (a 60% discount, the case that would expose true SQL-level
+        integer truncation if it were happening).
+        """
         utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
         sale_totals = (
             select(Sale.id, Sale.subtotal, Sale.total_amount)
             .where(Sale.created_at >= utc_start, Sale.created_at < utc_end)
             .subquery()
         )
+        # A sale with a zero subtotal (every line free) has nothing to
+        # prorate a discount against -- keep that line at face value
+        # (ratio 1.0) rather than dividing by zero.
+        discount_ratio = case(
+            (cast(sale_totals.c.subtotal, Float) == 0, 1.0),
+            else_=cast(sale_totals.c.total_amount, Float) / cast(sale_totals.c.subtotal, Float),
+        )
+        revenue_cents_expr = cast(
+            func.sum(SaleItem.quantity * cast(SaleItem.unit_price, Float) * discount_ratio),
+            Float,
+        )
         result = await self.db.execute(
             select(
                 Product.id,
                 Product.name,
-                SaleItem.quantity,
-                SaleItem.unit_price,
-                sale_totals.c.subtotal,
-                sale_totals.c.total_amount,
+                func.sum(SaleItem.quantity).label("quantity_sold"),
+                revenue_cents_expr.label("revenue_cents"),
             )
             .join(SaleItem, SaleItem.product_id == Product.id)
             .join(sale_totals, sale_totals.c.id == SaleItem.sale_id)
+            .group_by(Product.id, Product.name)
         )
 
         name_by_product: dict[int, str] = {}
-        qty_by_product: dict[int, int] = defaultdict(int)
+        qty_by_product: dict[int, int] = {}
         revenue_by_product: dict[int, float] = defaultdict(float)
-        for product_id, name, quantity, unit_price, subtotal, total_amount in result.all():
+        for product_id, name, quantity_sold, revenue_cents in result.all():
             name_by_product[product_id] = name
-            qty_by_product[product_id] += quantity
-            # A sale with a zero subtotal (every line free) has
-            # nothing to prorate a discount against -- keep that
-            # line at face value rather than dividing by zero.
-            discount_ratio = (total_amount / subtotal) if subtotal else 1.0
-            revenue_by_product[product_id] += quantity * unit_price * discount_ratio
+            qty_by_product[product_id] = int(quantity_sold)
+            revenue_by_product[product_id] = float(revenue_cents) / 100.0
 
         # RefundItem.line_total is already the real, discount-prorated
         # money handed back on that line (see refund_service.py) -- no
         # re-derivation needed here, just netted against this same
         # product's revenue for the period the refund happened in, same
         # "refund counts against its own date" rule as every other
-        # report in this file.
+        # report in this file. This is a plain SUM of a single
+        # MoneyCents column with no multiplication or cast involved,
+        # so its automatic dollar decode is exact -- the same pattern
+        # used safely elsewhere in this file (e.g.
+        # _revenue_and_count_in_range).
         refund_result = await self.db.execute(
             select(
                 RefundItem.product_id,
@@ -631,7 +771,7 @@ class ReportService:
             TopProductEntry(
                 product_id=product_id,
                 name=name_by_product[product_id],
-                quantity_sold=qty_by_product[product_id],
+                quantity_sold=qty_by_product.get(product_id, 0),
                 revenue=round(revenue, 2),
             )
             for product_id, revenue in ranked[:limit]
@@ -648,12 +788,21 @@ class ReportService:
         Customer-less (walk-in, no name recorded) sales are
         deliberately excluded -- there's no real customer identity to
         rank there.
+
+        Filters straight on the date range rather than pre-fetching
+        every Sale row to build a `Sale.id IN (...)` list, which is
+        what this used to do: that list has a real ceiling (SQLite's
+        default ~32,766 bound-parameter limit), so a business with
+        more sales than that in one range -- a plausible multi-year
+        "all time" question -- would raise a hard OperationalError
+        building that WHERE clause. A date-range filter has no such
+        ceiling and needs no full-row fetch into Python at all.
         """
-        sales = await self._sales_in_range(start_date, end_date)
-        sale_ids = [s.id for s in sales]
-        if not sale_ids:
+        total_revenue, sale_count = await self._revenue_and_count_in_range(start_date, end_date)
+        if sale_count == 0:
             return TopCustomersOut(entries=[], total_revenue=0.0)
 
+        utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
         result = await self.db.execute(
             select(
                 Customer.id,
@@ -662,7 +811,7 @@ class ReportService:
                 func.sum(Sale.total_amount).label("revenue"),
             )
             .join(Sale, Sale.customer_id == Customer.id)
-            .where(Sale.id.in_(sale_ids))
+            .where(Sale.created_at >= utc_start, Sale.created_at < utc_end)
             .group_by(Customer.id)
         )
         rows = result.all()
@@ -670,10 +819,10 @@ class ReportService:
         # Refunds against this customer's sales, counted against the
         # period the refund itself happened in (it may be a different
         # period than the sale it's against) -- same rule every other
-        # revenue figure in this file follows. Not restricted to
-        # sale_ids: a refund processed in this window against an OLDER
-        # sale is still real money leaving in this window.
-        utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
+        # revenue figure in this file follows. Not restricted to any
+        # particular set of sale ids: a refund processed in this window
+        # against an OLDER sale is still real money leaving in this
+        # window.
         refund_result = await self.db.execute(
             select(Sale.customer_id, func.coalesce(func.sum(Refund.total_amount), 0.0))
             .join(Refund, Refund.sale_id == Sale.id)
@@ -688,7 +837,6 @@ class ReportService:
             customer_id: float(total) for customer_id, total in refund_result.all()
         }
 
-        total_revenue = sum(s.total_amount for s in sales) - sum(refund_by_customer.values())
         net_rows = sorted(
             (
                 (customer_id, name, sale_count, revenue - refund_by_customer.get(customer_id, 0.0))
@@ -722,10 +870,18 @@ class ReportService:
         cashier whose ORIGINAL sale it's against (not whoever happened
         to process the refund), and counted in the period the refund
         itself happened in, not the period of the sale it's against.
+
+        Filters straight on the date range rather than pre-fetching
+        every Sale row to build a `Sale.id IN (...)` list -- see
+        top_customers' docstring for why that approach had a real
+        ceiling (SQLite's bound-parameter limit) this doesn't.
         """
-        sales = await self._sales_in_range(start_date, end_date)
-        sale_ids = [s.id for s in sales]
-        if not sale_ids:
+        utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
+        date_filter = (Sale.created_at >= utc_start, Sale.created_at < utc_end)
+        sale_count = (
+            await self.db.execute(select(func.count(Sale.id)).where(*date_filter))
+        ).scalar_one()
+        if sale_count == 0:
             return CashierSalesOut(start_date=start_date, end_date=end_date, entries=[])
 
         result = await self.db.execute(
@@ -736,7 +892,7 @@ class ReportService:
                 func.sum(Sale.total_amount).label("revenue"),
             )
             .join(User, User.id == Sale.cashier_user_id)
-            .where(Sale.id.in_(sale_ids))
+            .where(*date_filter)
             .group_by(Sale.cashier_user_id)
         )
         rows = result.all()
@@ -745,7 +901,6 @@ class ReportService:
         # the same join top_customers uses for customer_id -- see that
         # method's comment for why refund.created_at (not the sale's)
         # is the right bucket for "real money leaving in this window".
-        utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
         refund_result = await self.db.execute(
             select(Sale.cashier_user_id, func.coalesce(func.sum(Refund.total_amount), 0.0))
             .join(Refund, Refund.sale_id == Sale.id)
@@ -1086,25 +1241,3 @@ class ReportService:
                 "supplier issues) that this simple average does not account for."
             ),
         )
-
-    async def _sales_in_range(self, start_date: date, end_date: date) -> list[Sale]:
-        utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
-        result = await self.db.execute(
-            select(Sale).where(
-                Sale.created_at >= utc_start,
-                Sale.created_at < utc_end,
-            )
-        )
-        return list(result.scalars().all())
-
-    async def _refunds_in_range(self, start_date: date, end_date: date) -> list[Refund]:
-        # Filtered by the refund's OWN created_at, not the created_at of
-        # the sale it's against -- see sales_summary's comment for why.
-        utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
-        result = await self.db.execute(
-            select(Refund).where(
-                Refund.created_at >= utc_start,
-                Refund.created_at < utc_end,
-            )
-        )
-        return list(result.scalars().all())

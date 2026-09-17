@@ -655,6 +655,74 @@ class TestStockTakeHistory:
         assert entry["shrinkage_value"] == 4.0  # 2 units * 2.0 cost
         assert entry["closed_at"] is not None
 
+    async def test_stock_take_with_no_items_still_appears_with_zero_shrinkage(
+        self, client, owner_user
+    ):
+        """
+        Regression pin for the outer-join rewrite: the real
+        initiate() flow always rejects a scope with zero eligible
+        batches (see stock_take_service.py), so a stock take with no
+        items can't happen through the API today -- inserted directly
+        here to pin the query's own defensive behavior regardless.
+        Must still show up in history with zero values, not silently
+        disappear because an inner join to StockTakeItem would
+        exclude it.
+        """
+        from datetime import UTC, datetime
+
+        from app.models.stock_take import StockTake, StockTakeStatus
+
+        async with AsyncSessionLocal() as db:
+            stock_take = StockTake(
+                initiated_by_user_id=owner_user.id,
+                status=StockTakeStatus.CLOSED,
+                closed_at=datetime.now(UTC).replace(tzinfo=None),
+            )
+            db.add(stock_take)
+            await db.commit()
+            stock_take_id = stock_take.id
+
+        token = await _login(client, "lucy", "S3curePass!")
+        r = await client.get(
+            "/api/v1/reports/stock-take-history",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200
+        entry = next(e for e in r.json()["entries"] if e["stock_take_id"] == stock_take_id)
+        assert entry["shrinkage_value"] == 0.0
+        assert entry["shrinkage_percent"] == 0.0
+
+    async def test_stock_take_overage_is_not_counted_as_shrinkage(self, client, owner_user):
+        """
+        Regression pin for the CASE direction in the SQL rewrite:
+        counting MORE than expected (physical_qty > expected_qty) is
+        an overage, not shrinkage -- it must not add to
+        shrinkage_value, only a genuine shortfall (physical < expected)
+        should. Kept within the self-approve threshold so the count
+        actually resolves and the stock take can close.
+        """
+        product_id, _ = await _make_product_with_batch(qty=50, cost=2.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        create_resp = await client.post(
+            "/api/v1/stock-takes", json={"product_ids": [product_id]}, headers=headers
+        )
+        stock_take_id = create_resp.json()["id"]
+        item_id = create_resp.json()["items"][0]["id"]
+        await client.post(
+            f"/api/v1/stock-takes/{stock_take_id}/items/{item_id}/count",
+            json={"physical_qty": 52, "reason": "MISCOUNT"},  # variance +2, self-approve
+            headers=headers,
+        )
+        await client.post(f"/api/v1/stock-takes/{stock_take_id}/close", headers=headers)
+
+        r = await client.get("/api/v1/reports/stock-take-history", headers=headers)
+        assert r.status_code == 200
+        entry = next(e for e in r.json()["entries"] if e["stock_take_id"] == stock_take_id)
+        assert entry["shrinkage_value"] == 0.0
+        assert entry["shrinkage_percent"] == 0.0
+
 
 class TestKpiDashboard:
     async def test_revenue_transaction_count_and_average_basket_are_accurate(
@@ -919,6 +987,44 @@ class TestKpiDashboard:
         top_products = r.json()["top_products"]
         assert top_products[0]["product_id"] == product_id
         assert top_products[0]["revenue"] == 200.0
+
+    async def test_top_products_revenue_survives_a_discount_over_half_price(
+        self, client, owner_user
+    ):
+        """
+        Regression pin for a specific SQL trap: the discount ratio
+        (total_amount / subtotal) is computed by dividing two
+        MoneyCents columns, which are stored as raw integer cents.
+        SQLite's integer/integer division truncates -- so any ratio
+        below 1.0 that isn't explicitly computed on floats would
+        silently come back as exactly 0, not an approximation. A
+        60% discount (ratio 0.4, well under the halfway point where
+        this would first go visibly wrong) is exactly the case that
+        would have zeroed this product's revenue instead of reporting
+        the real 40.0 collected.
+        """
+        product_id, _ = await _make_product_with_batch(price=100.0, cost=10.0, qty=5)
+        token = await _login(client, "lucy", "S3curePass!")
+
+        await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 40.0}],
+                "discount_amount": 60.0,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        today = (await _business_today()).isoformat()
+        r = await client.get(
+            "/api/v1/reports/kpi-dashboard",
+            params={"start_date": today, "end_date": today},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        top_products = r.json()["top_products"]
+        assert top_products[0]["product_id"] == product_id
+        assert top_products[0]["revenue"] == 40.0
 
     async def test_top_products_revenue_nets_out_refunds(self, client, owner_user):
         """

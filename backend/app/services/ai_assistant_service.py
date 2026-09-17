@@ -35,13 +35,14 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.business_time import business_today
+from app.core.business_time import business_today, get_business_timezone
 from app.core.security import decrypt_secret
 from app.models.ai_conversation import AIConversation, AIConversationMessage
 from app.models.ai_provider_key import AIProviderKey, AIProviderName
+from app.models.sale import Sale
 from app.models.user import User
 from app.schemas.ai import AIAskRequest, AIAskResponse
 from app.services.ai.adapters import (
@@ -91,6 +92,27 @@ _MONTH_NAME_TO_NUM = {name.lower(): index + 1 for index, name in enumerate(_MONT
 _ISO_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 _LAST_N_DAYS_RE = re.compile(r"\blast\s+(\d{1,3})\s+days?\b")
 _MONTH_YEAR_RE = {name: re.compile(rf"\b{name}\s+(\d{{4}})\b") for name in _MONTH_NAME_TO_NUM}
+
+# Deliberately narrow and literal, matching _parse_period_from_prompt's own
+# philosophy: every phrase here unambiguously asks for the WHOLE business
+# history, never a vague "how are things" that could just as easily mean
+# today. Before this existed, a question like "what's our all-time revenue"
+# or "how have we done since we started" silently fell through to whatever
+# the Dashboard's slicer happened to still be sitting on (or today, if
+# nothing was open) -- the assistant would answer a narrow-range question
+# with a narrow-range number and never say so, which is a correctness bug,
+# not just a missing feature: the number shown was real, but it was the
+# answer to a different question than the one actually asked.
+_ALL_TIME_RE = re.compile(
+    r"\ball[\s-]time\b"
+    r"|\bsince (?:we started|inception|day one|the beginning)\b"
+    r"|\b(?:entire|whole|full) history\b"
+    r"|\boverall(?:,)? (?:how have we|how has the business|performance)\b"
+    r"|\bcumulative(?:ly)?\b"
+    r"|\blifetime\b"
+    r"|\bgrand total\b"
+    r"|\bacross (?:all time|everything|every year)\b"
+)
 
 
 def _parse_period_from_prompt(prompt: str, today: date) -> tuple[date, date] | None:
@@ -239,7 +261,8 @@ class AIAssistantService:
         user: User,
         viewed_start: date | None = None,
         viewed_end: date | None = None,
-        period_source: Literal["today", "viewed_period", "requested_period"] | None = None,
+        period_source: Literal["today", "viewed_period", "requested_period", "all_time"]
+        | None = None,
     ) -> dict[str, object]:
         """
         Real, current business numbers, computed server-side right
@@ -380,6 +403,22 @@ class AIAssistantService:
 
         return context
 
+    async def _earliest_sale_date(self) -> date | None:
+        """
+        The local calendar date of the very first sale ever recorded, or
+        None for a business with no sales yet. A single MIN() aggregate --
+        not a row fetch -- so this stays cheap regardless of how many
+        years of sales have accumulated; it never loads a Sale row into
+        Python, just the one timestamp SQLite already indexes on
+        Sale.created_at.
+        """
+        result = await self.db.execute(select(func.min(Sale.created_at)))
+        earliest = result.scalar_one_or_none()
+        if earliest is None:
+            return None
+        tz = await get_business_timezone(self.db)
+        return earliest.replace(tzinfo=UTC).astimezone(tz).date()
+
     async def ask(self, user: User, payload: AIAskRequest) -> AIAskResponse:
         conversation_service = AIConversationService(self.db)
         conversation: AIConversation | None
@@ -429,10 +468,24 @@ class AIAssistantService:
             viewed_start = _parse_context_date(payload.context, "viewing_start_date")
             viewed_end = _parse_context_date(payload.context, "viewing_end_date")
             requested_period = _parse_period_from_prompt(payload.prompt, today)
-            period_source: Literal["today", "viewed_period", "requested_period"]
+            period_source: Literal["today", "viewed_period", "requested_period", "all_time"]
             if requested_period is not None:
                 viewed_start, viewed_end = requested_period
                 period_source = "requested_period"
+            elif _ALL_TIME_RE.search(payload.prompt.lower()):
+                # An explicit "all time" / "since we started" question must
+                # never be silently narrowed to whatever the Dashboard's
+                # slicer is still open to -- that's the exact gap this
+                # branch closes. earliest_sale_date is None only for a
+                # brand-new business with no sales yet, in which case
+                # there is no history to widen to and today is still the
+                # correct, honest answer.
+                earliest_sale_date = await self._earliest_sale_date()
+                if earliest_sale_date is not None:
+                    viewed_start, viewed_end = earliest_sale_date, today
+                    period_source = "all_time"
+                else:
+                    period_source = "today"
             elif viewed_start is not None or viewed_end is not None:
                 period_source = "viewed_period"
             else:

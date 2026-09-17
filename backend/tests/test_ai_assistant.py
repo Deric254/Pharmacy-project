@@ -1524,6 +1524,132 @@ class TestBusinessContext:
 
         assert "requested_period_revenue" in captured_context
 
+    async def test_all_time_phrase_widens_beyond_dashboards_viewed_range(self, client, owner_user):
+        """
+        The real gap this closes: "what's our all-time revenue" must
+        see the business's ENTIRE history, not whatever narrow range
+        the Dashboard's slicer happens to still be open to. A sale
+        from two years ago -- far outside the still-open "today"
+        slicer sent in payload.context -- must still show up once the
+        question is explicitly about all time.
+        """
+        from datetime import datetime, timedelta
+
+        from app.models.medicine_batch import MedicineBatch
+        from app.models.product import Product
+        from app.models.sale import Sale, SaleItem
+
+        async with AsyncSessionLocal() as db:
+            db.add(
+                AIProviderKey(
+                    user_id=owner_user.id,
+                    provider=AIProviderName.OPENAI,
+                    encrypted_key=encrypt_secret("key"),
+                    key_hint="key1",
+                    priority=1,
+                )
+            )
+            product = Product(name="All Time Test Product")
+            db.add(product)
+            await db.flush()
+            batch = MedicineBatch(
+                product_id=product.id,
+                batch_number="AT1",
+                expiry_date=datetime(2027, 1, 1).date(),
+                qty_received=10,
+                qty_remaining=10,
+                cost_price=30.0,
+                selling_price=99.0,
+            )
+            db.add(batch)
+            await db.flush()
+            sale = Sale(
+                cashier_user_id=owner_user.id,
+                subtotal=99.0,
+                discount_amount=0.0,
+                total_amount=99.0,
+            )
+            db.add(sale)
+            await db.flush()
+            sale.created_at = datetime.now(UTC) - timedelta(days=730)
+            db.add(
+                SaleItem(
+                    sale_id=sale.id,
+                    product_id=product.id,
+                    batch_id=batch.id,
+                    quantity=1,
+                    unit_price=99.0,
+                    unit_cost=batch.cost_price,
+                    line_total=99.0,
+                )
+            )
+            await db.commit()
+
+        captured_context: dict[str, object] = {}
+
+        class ContextCapturingAdapter:
+            async def ask(self, prompt, context):
+                captured_context.update(context)
+                return AIResponse(text="ok")
+
+        def factory(provider, api_key):
+            return ContextCapturingAdapter()
+
+        async with AsyncSessionLocal() as db:
+            today_str = (await business_today(db)).isoformat()
+            service = AIAssistantService(db, adapter_factory=factory)
+            await service.ask(
+                owner_user,
+                AIAskRequest(
+                    prompt="what's our all-time revenue?",
+                    # Dashboard's filter is still on "today" -- a
+                    # two-year-old sale must not be excluded just
+                    # because this slicer never got reset.
+                    context={"viewing_start_date": today_str, "viewing_end_date": today_str},
+                ),
+            )
+
+        assert captured_context.get("all_time_revenue") == "KES 99.00"
+        assert "today_revenue" not in captured_context
+        assert "viewed_period_revenue" not in captured_context
+
+    async def test_all_time_phrase_with_no_sales_falls_back_to_today(self, client, owner_user):
+        """
+        A brand-new business has no history to widen to -- "all time"
+        must fall back to today's (empty) numbers rather than crashing
+        on a MIN() over zero rows.
+        """
+        async with AsyncSessionLocal() as db:
+            db.add(
+                AIProviderKey(
+                    user_id=owner_user.id,
+                    provider=AIProviderName.OPENAI,
+                    encrypted_key=encrypt_secret("key"),
+                    key_hint="key1",
+                    priority=1,
+                )
+            )
+            await db.commit()
+
+        captured_context: dict[str, object] = {}
+
+        class ContextCapturingAdapter:
+            async def ask(self, prompt, context):
+                captured_context.update(context)
+                return AIResponse(text="ok")
+
+        def factory(provider, api_key):
+            return ContextCapturingAdapter()
+
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=factory)
+            response = await service.ask(
+                owner_user, AIAskRequest(prompt="give me our lifetime revenue")
+            )
+
+        assert response.answer == "ok"
+        assert "today_revenue" in captured_context
+
 
 class TestNoKeyGuidance:
     """

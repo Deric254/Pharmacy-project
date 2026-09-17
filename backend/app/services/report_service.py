@@ -567,9 +567,13 @@ class ReportService:
         )
 
         entries = []
-        for stock_take_id, started_at, closed_at, expected_cents_value, shrinkage_cents_value in (
-            result.all()
-        ):
+        for (
+            stock_take_id,
+            started_at,
+            closed_at,
+            expected_cents_value,
+            shrinkage_cents_value,
+        ) in result.all():
             expected_value = float(expected_cents_value) / 100.0
             shrinkage_value = float(shrinkage_cents_value) / 100.0
             shrinkage_percent = (

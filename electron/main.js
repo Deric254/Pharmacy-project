@@ -89,9 +89,6 @@ app.setName('PharmacyERP')
 app.setPath('userData', path.join(app.getPath('appData'), 'PharmacyERP'))
 
 let backendProcess = null
-// True from the moment any quit path calls stopBackend(). From then on the
-// backend exiting is the result of our own kill, never a startup failure.
-let isShuttingDown = false
 let mainWindow = null
 // The one installer URL the updater IPC has approved. A download counts as the
 // update installer only if it began from exactly this URL (see will-download).
@@ -770,10 +767,6 @@ async function startApp() {
     // design had to wait for a just-killed process's port to clear.
     backendPort = await getFreePort()
     backendUrl = `http://127.0.0.1:${backendPort}`
-    // A quit that began during the awaits above already ran stopBackend()
-    // with nothing to stop. Spawning now would start a backend that no
-    // quit path will ever stop.
-    if (isShuttingDown) return
     const spawnedBackend = await startBackend()
     // These three are independent of each other -- clearing session
     // storage never depends on the backend being up, it only needs
@@ -826,14 +819,6 @@ async function startApp() {
     mainWindow?.loadURL(backendUrl)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    if (isShuttingDown) {
-      // Closed while still starting: stopBackend() killing the backend is
-      // what made startup "fail". There is nothing to report, and
-      // showErrorBox() is modal, so it would stall the very quit that is
-      // already in progress.
-      logDesktopDiagnostic(`startup-aborted-by-quit ${message}`)
-      return
-    }
     const stack = err instanceof Error ? err.stack : undefined
     logDesktopDiagnostic(`startup-error ${stack ?? message}`)
     dialog.showErrorBox(
@@ -872,7 +857,6 @@ ipcMain.handle('download-update-installer', (event, url) => {
 })
 
 function stopBackend() {
-  isShuttingDown = true
   if (!backendProcess || backendProcess.killed) {
     // The backend was already gone by the time this ran (it crashed,
     // or its own 'exit' handler already nulled backendProcess out

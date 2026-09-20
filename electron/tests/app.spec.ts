@@ -55,20 +55,9 @@ test('the real app window appears and is never left blank', async () => {
     // The real backend must have actually come up behind it -- not
     // just "some HTML rendered", but the genuine setup/login flow
     // this app boots into on a first real launch.
-    //
-    // 45s, not the original 15s: firstWindow() now resolves the
-    // instant the splash screen appears -- BEFORE the backend has
-    // even been spawned (see createWindow()/startApp() in main.js) --
-    // rather than only after the backend was already confirmed
-    // healthy, as it did previously. This assertion's clock now has
-    // to cover the real backend's full startup (migrations + uvicorn)
-    // on top of rendering, not just rendering alone; 45s leaves real
-    // margin over every observed migrations-complete gap in this
-    // project's own backend.log samples while still comfortably inside
-    // this test's 90s overall timeout.
     await expect(
       window.getByText(/set up|create.*account|username|password/i).first(),
-    ).toBeVisible({ timeout: 45_000 })
+    ).toBeVisible({ timeout: 15_000 })
 
     const title = await window.title()
     expect(title.length).toBeGreaterThan(0)

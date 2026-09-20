@@ -90,6 +90,11 @@ app.setPath('userData', path.join(app.getPath('appData'), 'PharmacyERP'))
 
 let backendProcess = null
 let mainWindow = null
+// Shown the instant startApp() begins, closed once the real window
+// actually has something to show -- see createSplashWindow() and
+// closeSplashWindow() below. Purely presentational: it never talks to
+// the backend and nothing else in this file depends on it existing.
+let splashWindow = null
 // The one installer URL the updater IPC has approved. A download counts as the
 // update installer only if it began from exactly this URL (see will-download).
 let approvedInstallerUrl = null
@@ -514,14 +519,7 @@ function createWindow() {
     }
   })
 
-  // Loads the static splash screen first, NOT backendUrl -- this
-  // function now runs before the backend has even been spawned (see
-  // startApp()), so backendUrl is still null at this point. Once the
-  // backend is confirmed healthy, startApp() navigates this same,
-  // already-visible window to the real app via mainWindow.loadURL --
-  // see the comment there for why it's the same window and not a
-  // second one.
-  mainWindow.loadFile(path.join(__dirname, 'splash.html'))
+  mainWindow.loadURL(backendUrl)
 
   mainWindow.on('closed', () => {
     mainWindow = null
@@ -656,18 +654,59 @@ function killPreviousBackendIfAny() {
   })
 }
 
+/**
+ * A small, undecorated window shown immediately on launch, before the
+ * backend has even been spawned -- replacing what used to be a blank
+ * window (or no window at all) for however long startup takes. It is
+ * intentionally dumb: no preload, no node integration, no network
+ * access, nothing that could itself fail or add a delay. It knows
+ * nothing about the backend, the health check, or any real app state;
+ * it is closed from the outside (see closeSplashWindow) once the real
+ * window has something to show, or once startup fails outright.
+ */
+function createSplashWindow() {
+  splashWindow = new BrowserWindow({
+    width: 360,
+    height: 320,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    frame: false,
+    backgroundColor: '#f7f3ec',
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  })
+  splashWindow.once('ready-to-show', () => {
+    splashWindow?.show()
+  })
+  splashWindow.loadFile(path.join(__dirname, 'splash.html'))
+  splashWindow.on('closed', () => {
+    splashWindow = null
+  })
+}
+
+/**
+ * Safe to call any number of times, from any path (success or
+ * failure) -- guards against the window already being closed or never
+ * having been created at all, so this can never itself throw and
+ * interrupt startup or shutdown.
+ */
+function closeSplashWindow() {
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    splashWindow.close()
+  }
+  splashWindow = null
+}
+
 async function startApp() {
+  createSplashWindow()
   try {
-    // Opens the real window immediately, showing the splash screen --
-    // before the backend has even been spawned -- instead of the
-    // previous behavior of only creating a window once the backend
-    // was already confirmed healthy (a real gap: however long startup
-    // took, nothing appeared on screen at all until it finished). This
-    // is the SAME window used for the real app later, not a separate
-    // one -- see createWindow()'s own comment on what it loads, and
-    // the mainWindow.loadURL(backendUrl) call further down for the
-    // handoff once the backend is ready.
-    createWindow()
     // Without this, Electron's default behavior for the blob-URL
     // downloads every export and template button uses is to save the
     // file somewhere silently, with no dialog and no confirmation at
@@ -806,18 +845,15 @@ async function startApp() {
       }),
       session.defaultSession.clearCache(),
     ])
-    // The window itself was already created and shown at the top of
-    // this function, showing splash.html -- see createWindow(). This
-    // navigates that SAME window to the real app now that the backend
-    // is confirmed healthy, rather than opening a second window. A
-    // second window would break the "first window this app opens IS
-    // the real app, never blank" contract every e2e test in this
-    // project (and Playwright's own electronApp.firstWindow()) relies
-    // on -- and did, the first time this was tried. The existing
-    // did-fail-load handler below already covers this exact
-    // navigation failing after a healthy check, unchanged from before.
-    mainWindow?.loadURL(backendUrl)
+    createWindow()
+    // 'show' fires whichever path actually reveals the real window --
+    // the normal ready-to-show handoff inside createWindow(), or its
+    // own 10s defensive fallback if ready-to-show never fires -- so
+    // the splash is guaranteed to close exactly when something real
+    // replaces it, never before and never left behind after.
+    mainWindow?.once('show', closeSplashWindow)
   } catch (err) {
+    closeSplashWindow()
     const message = err instanceof Error ? err.message : String(err)
     const stack = err instanceof Error ? err.stack : undefined
     logDesktopDiagnostic(`startup-error ${stack ?? message}`)

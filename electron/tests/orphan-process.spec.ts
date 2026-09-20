@@ -1,27 +1,21 @@
 /**
- * Bug-hunting tests for the orphaned-backend-process fix.
+ * Tests for the orphaned-backend-process protections.
  *
- * Honest scope: the Windows-specific cleanup mechanism in main.js
- * (clearAnyLeftoverBackendProcess -- one PowerShell invocation that
- * checks both by port and by exact process name) no-ops immediately
- * on any non-Windows platform -- there is no way to exercise the
- * actual PowerShell/Stop-Process commands from this environment, full
- * stop. Nothing here proves those specific Windows commands work;
- * only a real Windows machine can prove that.
- *
- * What CAN be genuinely tested here, and is: the platform-independent
- * parts of the same fix -- does the app correctly avoid running two
- * backends at once (single-instance-lock), does a normal close
- * actually terminate the spawned backend process rather than leaving
- * it running (the exact race condition that was fixed, using the
- * Linux .kill() fallback path instead of taskkill), and does the app
- * survive and recover cleanly after an orphan is left behind by a
- * hard crash (simulating what an imperfect Windows shutdown would
- * leave, even though the specific Windows recovery commands
- * themselves aren't running here).
+ * Honest scope: the Windows-specific cleanup in main.js
+ * (killPreviousBackendIfAny -- taskkill / PowerShell) no-ops on any other
+ * platform, so nothing here proves those commands work; only a real Windows
+ * machine can. What IS verified here is the platform-independent behavior
+ * around it:
+ *   - a normal close, and a close while the backend is still starting, both
+ *     leave no backend process behind (the second must also never block on an
+ *     error dialog);
+ *   - a second launch is refused by the single-instance lock instead of
+ *     spawning a second backend;
+ *   - the app still starts after a previous session was killed without
+ *     running any cleanup, which leaves an orphaned backend behind.
  */
-import { test, expect, _electron as electron } from '@playwright/test'
-import { execFileSync, execSync } from 'node:child_process'
+import { test, expect, _electron as electron, type Page } from '@playwright/test'
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -40,6 +34,31 @@ test.afterEach(() => {
   rmSync(appDataDir, { recursive: true, force: true })
 })
 
+// PIDs of real running `python desktop_main.py` processes, matched on the
+// full command line -- not the Electron shell, not this test runner. Run
+// without a shell on purpose: a `sh -c 'pgrep -f ...'` wrapper carries the
+// pattern in its own command line, gets counted, and makes the result
+// never zero -- which turns every "a backend exists" assertion into one
+// that cannot fail. pgrep exits 1 when nothing matches.
+function posixBackendPids(): number[] {
+  try {
+    return execFileSync('pgrep', ['-f', 'desktop_main\\.py'], { encoding: 'utf8' })
+      .split('\n')
+      .filter(Boolean)
+      .map(Number)
+  } catch {
+    return []
+  }
+}
+
+// firstWindow() resolves at the splash screen, before the backend has even
+// been spawned (see startApp() in main.js). The same window navigates to the
+// real app only once the backend is healthy, so that navigation is the
+// honest signal that the backend is up.
+async function waitForBackendReady(page: Page): Promise<void> {
+  await page.waitForURL(/^http:\/\/127\.0\.0\.1:\d+\//, { timeout: 60_000 })
+}
+
 function countBackendProcesses(): number {
   try {
     if (process.platform === 'win32') {
@@ -53,24 +72,13 @@ function countBackendProcesses(): number {
       return output ? parseInt(output, 10) : 0
     }
 
-    // pgrep -f matches against the full command line, so this counts
-    // real running `python desktop_main.py` processes specifically --
-    // not the Electron shell, not this test runner itself.
-    const output = execSync('pgrep -fc "desktop_main.py" || true').toString().trim()
-    return output ? parseInt(output, 10) : 0
+    return posixBackendPids().length
   } catch {
     return 0
   }
 }
 
 test('closing the app normally leaves zero backend processes behind', async () => {
-  // This is the exact race condition that was fixed: stopBackend()
-  // used to fire a kill command without waiting for it, and app.quit()
-  // could complete before the kill actually finished. On Linux this
-  // exercises the .kill() fallback path rather than taskkill, but the
-  // ASYNC ORDERING being tested -- does quit genuinely wait for the
-  // kill to resolve -- is the platform-independent part of the fix,
-  // and is fully verifiable here.
   const before = countBackendProcesses()
 
   const electronApp = await electron.launch({
@@ -78,20 +86,39 @@ test('closing the app normally leaves zero backend processes behind', async () =
     env: testEnvironment(),
     timeout: 60_000,
   })
-  await electronApp.firstWindow({ timeout: 30_000 })
-
-  const duringRun = countBackendProcesses()
-  expect(duringRun).toBeGreaterThan(before) // the backend genuinely started
+  await waitForBackendReady(await electronApp.firstWindow({ timeout: 30_000 }))
+  expect(countBackendProcesses()).toBeGreaterThan(before) // the backend genuinely started
 
   await electronApp.close()
 
-  // Give the OS a moment to actually reap the process after close()
-  // returns -- close() resolving doesn't guarantee the OS process
-  // table has updated in the same instant.
-  await new Promise((resolve) => setTimeout(resolve, 1500))
+  // Polled rather than a fixed sleep: close() resolving doesn't guarantee the
+  // OS process table has caught up, and this fails only if it never does.
+  await expect.poll(countBackendProcesses, { timeout: 5_000 }).toBe(before)
+})
 
-  const after = countBackendProcesses()
-  expect(after).toBe(before)
+test('closing the app while it is still starting quits promptly and leaves zero backend processes behind', async () => {
+  // Regression: closing the app kills the backend on purpose, and that used to
+  // be reported as a startup failure -- whose modal error dialog then blocked
+  // the quit forever. Nobody can dismiss it under Xvfb, so the failure shows up
+  // here as a timeout on close().
+  test.setTimeout(30_000)
+  const before = countBackendProcesses()
+
+  const electronApp = await electron.launch({
+    args: [path.join(__dirname, '..', 'main.js')],
+    env: testEnvironment(),
+    timeout: 60_000,
+  })
+  const page = await electronApp.firstWindow({ timeout: 30_000 })
+
+  // Precondition, asserted rather than assumed: the backend has been spawned
+  // but the window has not yet moved on from the splash screen. Otherwise this
+  // test would silently be exercising an ordinary close.
+  await expect.poll(countBackendProcesses).toBeGreaterThan(before)
+  expect(page.url()).toMatch(/splash\.html$/)
+
+  await electronApp.close()
+  await expect.poll(countBackendProcesses, { timeout: 5_000 }).toBe(before)
 })
 
 function killAllBackendProcesses(): void {
@@ -113,16 +140,11 @@ function killAllBackendProcesses(): void {
       return
     }
 
-    const output = execSync('pgrep -f "desktop_main.py" || true').toString().trim()
-    if (!output) return
-    for (const line of output.split('\n')) {
-      const pid = parseInt(line.trim(), 10)
-      if (!Number.isNaN(pid)) {
-        try {
-          process.kill(pid, 'SIGKILL')
-        } catch {
-          // Already gone -- fine.
-        }
+    for (const pid of posixBackendPids()) {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // Already gone -- fine.
       }
     }
   } catch {
@@ -135,15 +157,16 @@ test('a second launch while the first is still running does not spawn a second b
   // Electron API behavior, not a Windows-specific mechanism, so this
   // genuinely proves the real thing, not a platform-limited stand-in
   // for it.
+  const before = countBackendProcesses()
   const firstApp = await electron.launch({
     args: [path.join(__dirname, '..', 'main.js')],
     env: testEnvironment(),
     timeout: 60_000,
   })
-  await firstApp.firstWindow({ timeout: 30_000 })
+  await waitForBackendReady(await firstApp.firstWindow({ timeout: 30_000 }))
 
   const countWithOneRunning = countBackendProcesses()
-  expect(countWithOneRunning).toBeGreaterThan(0)
+  expect(countWithOneRunning).toBeGreaterThan(before)
 
   // A second launch attempt, same appDataDir (same "installation"),
   // while the first is still fully alive. The CORRECT behavior is for
@@ -166,11 +189,12 @@ test('a second launch while the first is still running does not spawn a second b
     // -- not a failure on its own, see comment above.
   }
 
-  const countAfterSecondAttempt = countBackendProcesses()
-  expect(countAfterSecondAttempt).toBe(countWithOneRunning)
+  // A lock loser that wrongly started up would spawn its backend within moments
+  // of launching. Absence can't be polled for, so allow that time first.
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+  expect(countBackendProcesses()).toBe(countWithOneRunning)
 
   await firstApp.close()
-  await new Promise((resolve) => setTimeout(resolve, 1500))
 })
 
 test('the app recovers cleanly after a previous session was killed ungracefully', async () => {
@@ -180,13 +204,14 @@ test('the app recovers cleanly after a previous session was killed ungracefully'
   // the OS) before it could run its own cleanup code at all -- this
   // bypasses stopBackend() entirely on purpose, the same way a real
   // crash would.
+  const before = countBackendProcesses()
   const firstApp = await electron.launch({
     args: [path.join(__dirname, '..', 'main.js')],
     env: testEnvironment(),
     timeout: 60_000,
   })
-  await firstApp.firstWindow({ timeout: 30_000 })
-  expect(countBackendProcesses()).toBeGreaterThan(0)
+  await waitForBackendReady(await firstApp.firstWindow({ timeout: 30_000 }))
+  expect(countBackendProcesses()).toBeGreaterThan(before)
 
   // SIGKILL the Electron process directly -- not app.close(), which
   // goes through the app's own graceful-shutdown code (the very thing
@@ -202,8 +227,7 @@ test('the app recovers cleanly after a previous session was killed ungracefully'
   // order to prove anything. If this assertion ever fails, it means
   // the orphan wasn't created and the test below isn't actually
   // testing recovery from anything.
-  const orphanCount = countBackendProcesses()
-  expect(orphanCount).toBeGreaterThan(0)
+  expect(countBackendProcesses()).toBeGreaterThan(before)
 
   // Now launch again, same appDataDir, with a genuine orphan already
   // holding whatever port the old backend was on. The app must still
@@ -216,9 +240,11 @@ test('the app recovers cleanly after a previous session was killed ungracefully'
   })
   try {
     const window = await secondApp.firstWindow({ timeout: 45_000 })
-    await expect(window.locator('body')).not.toBeEmpty({ timeout: 10_000 })
-    const bodyText = await window.locator('body').innerText()
-    expect(bodyText.trim().length).toBeGreaterThan(0)
+    await waitForBackendReady(window)
+    // The genuine first-run setup/login screen -- not just "some page".
+    await expect(
+      window.getByText(/set up|create.*account|username|password/i).first(),
+    ).toBeVisible({ timeout: 30_000 })
   } finally {
     await secondApp.close()
     // Best-effort cleanup of the orphan this test deliberately

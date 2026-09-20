@@ -22,6 +22,8 @@
       "main.js",
       "preload.js",
       "urlPolicy.js",
+      "splash.html",
+      "build/**/*",
       "package.json"
     ],
     "extraResources": [

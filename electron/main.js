@@ -90,11 +90,6 @@ app.setPath('userData', path.join(app.getPath('appData'), 'PharmacyERP'))
 
 let backendProcess = null
 let mainWindow = null
-// Shown the instant startApp() begins, closed once the real window
-// actually has something to show -- see createSplashWindow() and
-// closeSplashWindow() below. Purely presentational: it never talks to
-// the backend and nothing else in this file depends on it existing.
-let splashWindow = null
 // The one installer URL the updater IPC has approved. A download counts as the
 // update installer only if it began from exactly this URL (see will-download).
 let approvedInstallerUrl = null
@@ -654,58 +649,7 @@ function killPreviousBackendIfAny() {
   })
 }
 
-/**
- * A small, undecorated window shown immediately on launch, before the
- * backend has even been spawned -- replacing what used to be a blank
- * window (or no window at all) for however long startup takes. It is
- * intentionally dumb: no preload, no node integration, no network
- * access, nothing that could itself fail or add a delay. It knows
- * nothing about the backend, the health check, or any real app state;
- * it is closed from the outside (see closeSplashWindow) once the real
- * window has something to show, or once startup fails outright.
- */
-function createSplashWindow() {
-  splashWindow = new BrowserWindow({
-    width: 360,
-    height: 320,
-    resizable: false,
-    movable: false,
-    minimizable: false,
-    maximizable: false,
-    fullscreenable: false,
-    frame: false,
-    backgroundColor: '#f7f3ec',
-    show: false,
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  })
-  splashWindow.once('ready-to-show', () => {
-    splashWindow?.show()
-  })
-  splashWindow.loadFile(path.join(__dirname, 'splash.html'))
-  splashWindow.on('closed', () => {
-    splashWindow = null
-  })
-}
-
-/**
- * Safe to call any number of times, from any path (success or
- * failure) -- guards against the window already being closed or never
- * having been created at all, so this can never itself throw and
- * interrupt startup or shutdown.
- */
-function closeSplashWindow() {
-  if (splashWindow && !splashWindow.isDestroyed()) {
-    splashWindow.close()
-  }
-  splashWindow = null
-}
-
 async function startApp() {
-  createSplashWindow()
   try {
     // Without this, Electron's default behavior for the blob-URL
     // downloads every export and template button uses is to save the
@@ -846,14 +790,7 @@ async function startApp() {
       session.defaultSession.clearCache(),
     ])
     createWindow()
-    // 'show' fires whichever path actually reveals the real window --
-    // the normal ready-to-show handoff inside createWindow(), or its
-    // own 10s defensive fallback if ready-to-show never fires -- so
-    // the splash is guaranteed to close exactly when something real
-    // replaces it, never before and never left behind after.
-    mainWindow?.once('show', closeSplashWindow)
   } catch (err) {
-    closeSplashWindow()
     const message = err instanceof Error ? err.message : String(err)
     const stack = err instanceof Error ? err.stack : undefined
     logDesktopDiagnostic(`startup-error ${stack ?? message}`)

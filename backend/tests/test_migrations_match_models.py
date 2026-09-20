@@ -62,7 +62,7 @@ UNREFLECTABLE_INDEXES = frozenset({"ix_products_name_active_unique"})
 
 def _run_alembic(db_path: Path, *arguments: str) -> None:
     env = {**os.environ, "DATABASE_URL": f"sqlite+aiosqlite:///{db_path}"}
-    subprocess.run(  # noqa: S603 - fixed argv, no untrusted input
+    subprocess.run(
         [sys.executable, "-m", "alembic", *arguments],
         cwd=BACKEND_DIR,
         env=env,

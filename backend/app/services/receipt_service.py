@@ -51,7 +51,7 @@ def _decode_logo(logo_url: str | None) -> Image | None:
         img.drawHeight = 2 * cm
         img.drawWidth = img.drawHeight * (img.imageWidth / img.imageHeight)
         return img
-    except Exception:  # noqa: BLE001 - a bad logo must never break the receipt itself
+    except Exception:  # a bad logo must never break the receipt itself
         return None
 
 
@@ -152,7 +152,7 @@ def generate_receipt_pdf(
     elements.append(Paragraph(f"Receipt #{sale.id}", item_name_style))
     try:
         tz = ZoneInfo(timezone)
-    except Exception:  # noqa: BLE001 - a bad timezone name must never break the receipt
+    except Exception:  # a bad timezone name must never break the receipt
         tz = ZoneInfo("UTC")
     local_time = sale.created_at.replace(tzinfo=UTC).astimezone(tz)
     elements.append(Paragraph(f"{local_time.strftime('%d %b %Y, %H:%M')} ({timezone})", meta_style))

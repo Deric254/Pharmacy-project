@@ -18,13 +18,12 @@ from datetime import date as date_type
 from typing import Any
 
 from fastapi import HTTPException
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.concurrency import run_in_threadpool
 
 from app.models.product import Product
 from app.models.supplier import Supplier
@@ -36,6 +35,7 @@ from app.schemas.purchase_order import (
     QuickPurchaseRequest,
 )
 from app.services.purchasing_service import PurchasingService
+from app.services.spreadsheet_reader import read_data_rows
 
 _HEADERS = ["Product name", "Quantity", "Batch number", "Expiry date", "Unit cost", "Selling price"]
 _EXAMPLE_ROW: list[str | int | float] = [
@@ -157,32 +157,15 @@ def _parse_date(value: Any) -> date_type | None:
 async def _parse_and_validate(
     db: AsyncSession, file_bytes: bytes
 ) -> tuple[list[QuickPurchaseLine], list[ImportRowError]]:
-    try:
-        wb = await run_in_threadpool(load_workbook, io.BytesIO(file_bytes), data_only=True)
-        ws = wb.active
-        if ws is None:
-            raise HTTPException(status_code=400, detail="This file has no worksheet to read.")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail="Could not read this file as an Excel spreadsheet."
-        ) from exc
+    rows = await read_data_rows(file_bytes, columns=len(_HEADERS), max_rows=_MAX_ROWS)
 
     errors: list[ImportRowError] = []
     parsed_rows: list[tuple[int, str, int, str, date_type, float, float | None]] = []
     seen_batch_numbers: dict[str, int] = {}
 
-    rows = list(ws.iter_rows(min_row=2, values_only=True))
-    if len(rows) > _MAX_ROWS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"This file has more than {_MAX_ROWS} rows. Split it into smaller batches.",
-        )
-
     for offset, row in enumerate(rows):
         row_num = offset + 2
-        row_values: list[Any] = (list(row) + [None] * 6)[:6]
+        row_values: list[Any] = list(row)
         name_raw, qty_raw, batch_raw, expiry_raw, cost_raw, selling_raw = row_values
         name = _clean_str(name_raw)
 

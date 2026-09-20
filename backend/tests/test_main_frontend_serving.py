@@ -210,7 +210,7 @@ class TestApiDocsAreProductionGated:
     @staticmethod
     def _docs_urls_for(environment: str) -> list[str]:
         code = "from app.main import app; " "print(app.docs_url, app.redoc_url, app.openapi_url)"
-        result = subprocess.run(  # noqa: S603 - fixed argv, no untrusted input
+        result = subprocess.run(
             [sys.executable, "-c", code],
             env={**os.environ, "ENVIRONMENT": environment},
             capture_output=True,

@@ -311,7 +311,7 @@ class AIAssistantService:
         try:
             report_service = ReportService(self.db)
             kpi = await report_service.kpi_dashboard(range_start, range_end, include_profit)
-        except Exception:  # noqa: BLE001 - business context is enrichment, never load-bearing
+        except Exception:  # business context is enrichment, never load-bearing
             return {"person_asking_name": user.full_name}
 
         # The business's own configured currency, not an assumption --
@@ -328,7 +328,7 @@ class AIAssistantService:
         try:
             business_config = await BusinessConfigService(self.db).get()
             currency = business_config.currency
-        except Exception:  # noqa: BLE001 - same enrichment-only principle as above
+        except Exception:  # same enrichment-only principle as above
             currency = ""
 
         def money(value: float) -> str:
@@ -374,7 +374,7 @@ class AIAssistantService:
                     f"{c.name} ({c.cumulative_percent:.0f}% cumulative)"
                     for c in top_customers.entries
                 )
-        except Exception:  # noqa: BLE001 - enrichment only, never load-bearing
+        except Exception:  # enrichment only, never load-bearing
             pass
 
         try:
@@ -386,7 +386,7 @@ class AIAssistantService:
                     f"({top_pair.percent_of_a_sales:.0f}% of {top_pair.product_a_name} "
                     "sales also include the other)"
                 )
-        except Exception:  # noqa: BLE001 - enrichment only, never load-bearing
+        except Exception:  # enrichment only, never load-bearing
             pass
 
         try:
@@ -399,7 +399,7 @@ class AIAssistantService:
                     f"({top_seasonal.total_quantity_sold} units, summed across every "
                     "year on record)"
                 )
-        except Exception:  # noqa: BLE001 - enrichment only, never load-bearing
+        except Exception:  # enrichment only, never load-bearing
             pass
 
         return context
@@ -512,7 +512,7 @@ class AIAssistantService:
                         "AI provider %s failed, trying next: %s", key_row.provider.value, exc
                     )
                     continue  # try the next provider in priority order
-                except Exception:  # noqa: BLE001 - adapter failure must fall through, never crash the panel
+                except Exception:  # adapter failure must fall through, never crash the panel
                     # logger.exception() reads the current exception
                     # from sys.exc_info() automatically -- no need to
                     # bind `as exc` just to reference it explicitly.

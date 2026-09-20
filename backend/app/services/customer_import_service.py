@@ -9,19 +9,19 @@ import io
 from typing import Any
 
 from fastapi import HTTPException
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.concurrency import run_in_threadpool
 
 from app.models.audit_log import AuditLog
 from app.models.customer import Customer
 from app.models.user import User
 from app.schemas.customer import CustomerCreate
 from app.schemas.product import BulkImportResult, ImportRowError
+from app.services.spreadsheet_reader import read_data_rows
 
 _HEADERS = ["Name", "Phone", "Email"]
 _EXAMPLE_ROW = ["EXAMPLE - Jane Mwangi", "0712345678", "jane@example.com"]
@@ -66,39 +66,16 @@ def _clean_str(value: Any) -> str:
 async def _parse_and_validate(
     db: AsyncSession, file_bytes: bytes
 ) -> tuple[list[CustomerCreate], list[ImportRowError]]:
-    try:
-        # load_workbook is synchronous, CPU-bound XML parsing --
-        # calling it directly here would block this process's single
-        # event loop for the whole parse, freezing every other
-        # request the app is handling (any cashier's sale, any other
-        # page load) until a large import file finishes reading.
-        # run_in_threadpool moves that work to a separate OS thread.
-        wb = await run_in_threadpool(load_workbook, io.BytesIO(file_bytes), data_only=True)
-        ws = wb.active
-        if ws is None:
-            raise HTTPException(status_code=400, detail="This file has no worksheet to read.")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail="Could not read this file as an Excel spreadsheet."
-        ) from exc
+    rows = await read_data_rows(file_bytes, columns=len(_HEADERS), max_rows=_MAX_ROWS)
 
     errors: list[ImportRowError] = []
     candidates: list[CustomerCreate] = []
     seen_names: dict[str, int] = {}
     seen_phones: dict[str, int] = {}
 
-    rows = list(ws.iter_rows(min_row=2, values_only=True))
-    if len(rows) > _MAX_ROWS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"This file has more than {_MAX_ROWS} rows. Split it into smaller batches.",
-        )
-
     for offset, row in enumerate(rows):
         row_num = offset + 2
-        row_values: list[Any] = (list(row) + [None] * 3)[:3]
+        row_values: list[Any] = list(row)
         name_raw, phone_raw, email_raw = row_values
         name = _clean_str(name_raw)
 

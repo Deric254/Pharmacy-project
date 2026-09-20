@@ -422,7 +422,7 @@ if __name__ == "__main__":
         raise
     except KeyboardInterrupt:
         print("\nStopped.")
-    except Exception as exc:  # noqa: BLE001 -- last-resort handler, see comment below
+    except Exception as exc:  # last-resort handler, see comment below
         # Deliberately broad: this is the outermost boundary of the
         # whole program. Anything that reaches here would otherwise
         # print a raw traceback and immediately close the console

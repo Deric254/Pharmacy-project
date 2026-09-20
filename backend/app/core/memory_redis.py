@@ -22,6 +22,8 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
+_SWEEP_INTERVAL_SECONDS = 60
+
 
 @dataclass
 class _Entry:
@@ -90,7 +92,25 @@ class InMemoryPubSub:
 @dataclass
 class InMemoryRedisClient:
     _store: dict[str, _Entry] = field(default_factory=dict)
+    _next_sweep_at: float = 0.0
     _subscribers: dict[str, list[asyncio.Queue[dict[str, object]]]] = field(default_factory=dict)
+
+    def _sweep_expired_occasionally(self) -> None:
+        """
+        Expired keys are otherwise only dropped when read again, so a key
+        that is written once and never read (a rate-limit counter for a
+        username nobody tries twice) would sit in memory for the life of
+        the process. Sweeping on writes, at most once a minute, bounds the
+        store without a background task.
+        """
+        now = time.time()
+        if now < self._next_sweep_at:
+            return
+        self._next_sweep_at = now + _SWEEP_INTERVAL_SECONDS
+        for key in [
+            k for k, e in self._store.items() if e.expires_at is not None and e.expires_at <= now
+        ]:
+            del self._store[key]
 
     def _evict_if_expired(self, key: str) -> None:
         entry = self._store.get(key)
@@ -103,6 +123,7 @@ class InMemoryRedisClient:
         return entry.value if entry is not None else None
 
     async def set(self, key: str, value: str, ex: int | None = None) -> None:
+        self._sweep_expired_occasionally()
         expires_at = time.time() + ex if ex is not None else None
         self._store[key] = _Entry(value=str(value), expires_at=expires_at)
 
@@ -110,6 +131,7 @@ class InMemoryRedisClient:
         self._store.pop(key, None)
 
     async def incr(self, key: str) -> int:
+        self._sweep_expired_occasionally()
         self._evict_if_expired(key)
         entry = self._store.get(key)
         current = int(entry.value) if entry is not None else 0

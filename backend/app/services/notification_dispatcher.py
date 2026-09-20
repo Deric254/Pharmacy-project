@@ -34,7 +34,6 @@ logger = logging.getLogger(__name__)
 EVENT_PERMISSION_MAP: dict[str, str | None] = {
     "sale.completed": "reports.view",
     "stock.low": "inventory.view",
-    "batch.expiring": "inventory.view",
     "backup.failed": "backups.manage",
     "stocktake.closed": "reports.view",
     "config.updated": None,

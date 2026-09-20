@@ -90,7 +90,7 @@ class SetupService:
                 await BusinessConfigService(self.db).update(
                     new_owner, BusinessConfigUpdate(timezone=payload.timezone)
                 )
-            except Exception:  # noqa: BLE001 - see comment above; setup must not fail on this
+            except Exception:  # see comment above; setup must not fail on this
                 await self.db.rollback()
 
     async def _any_user_exists(self) -> bool:
@@ -119,7 +119,7 @@ class SetupService:
 
         try:
             plaintext = decrypt_bytes_with_passphrase(encrypted_bytes, passphrase)
-        except Exception as exc:  # noqa: BLE001 - any decrypt failure means one thing to the user
+        except Exception as exc:  # any decrypt failure means one thing to the user
             raise HTTPException(
                 status_code=400,
                 detail="Could not open this backup -- wrong passphrase, or the file is corrupted.",
@@ -127,7 +127,7 @@ class SetupService:
 
         try:
             dump = deserialize_dump(plaintext)
-        except Exception as exc:  # noqa: BLE001 - malformed content after a successful decrypt
+        except Exception as exc:  # malformed content after a successful decrypt
             raise HTTPException(
                 status_code=400,
                 detail="The backup file's contents are not valid -- it may be corrupted.",

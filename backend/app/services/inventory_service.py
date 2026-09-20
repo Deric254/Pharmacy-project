@@ -27,7 +27,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.business_time import business_today, local_day_bounds_utc
-from app.core.events import BatchExpiringEvent, StockLowEvent, publish
+from app.core.events import StockLowEvent, publish
 from app.models.audit_log import AuditLog
 from app.models.business_config import BusinessConfig
 from app.models.medicine_batch import MedicineBatch
@@ -669,17 +669,3 @@ async def check_and_publish_low_stock(db: AsyncSession, product_ids: list[int]) 
                     reorder_point=row.reorder_point,
                 )
             )
-
-
-async def check_and_publish_expiring(db: AsyncSession, within_days: int = 30) -> None:
-    """Intended to be called by a scheduled job once one exists (Backup/Notifications module)."""
-    service = InventoryService(db)
-    for batch in await service.get_expiring_batches(within_days=within_days):
-        await publish(
-            BatchExpiringEvent(
-                batch_id=batch.batch_id,
-                product_id=batch.product_id,
-                expiry_date=batch.expiry_date.isoformat(),
-                days_remaining=batch.days_remaining,
-            )
-        )

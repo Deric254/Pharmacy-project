@@ -45,14 +45,6 @@ class StockLowEvent(DomainEvent):
     reorder_point: int
 
 
-class BatchExpiringEvent(DomainEvent):
-    event_type: ClassVar[str] = "batch.expiring"
-    batch_id: int
-    product_id: int
-    expiry_date: str
-    days_remaining: int
-
-
 class BackupFailedEvent(DomainEvent):
     event_type: ClassVar[str] = "backup.failed"
     reason: str

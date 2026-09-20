@@ -49,7 +49,7 @@ async def get_business_timezone(db: AsyncSession) -> ZoneInfo:
     config = await BusinessConfigService(db).get()
     try:
         return ZoneInfo(config.timezone)
-    except Exception:  # noqa: BLE001 - a bad saved timezone name must never break a report
+    except Exception:  # a bad saved timezone name must never break a report
         return ZoneInfo("UTC")
 
 

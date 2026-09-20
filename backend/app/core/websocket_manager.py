@@ -78,7 +78,7 @@ class ConnectionManager:
                     continue
                 try:
                     await connection.send_json(message)
-                except Exception:  # noqa: BLE001 - a dead/broken connection must never crash the dispatcher
+                except Exception:  # a dead/broken connection must never crash the dispatcher
                     dead.append((user_id, connection))
 
         for user_id, connection in dead:

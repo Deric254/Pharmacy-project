@@ -26,7 +26,8 @@ from pydantic import AfterValidator
 def _must_be_a_real_timezone(value: str) -> str:
     try:
         ZoneInfo(value)
-    except Exception as exc:  # noqa: BLE001 - any bad name (unknown key, wrong type reaching here, etc.) is the same user-facing error
+    # any bad name (unknown key, wrong type reaching here, etc.) is the same user-facing error
+    except Exception as exc:
         raise ValueError(
             f"'{value}' is not a recognized timezone name (e.g. 'Africa/Nairobi')."
         ) from exc

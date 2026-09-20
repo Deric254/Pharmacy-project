@@ -6,9 +6,11 @@ the app uses, not just that it has matching method names.
 """
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
+from app.core import memory_redis as memory_redis_module
 from app.core.memory_redis import InMemoryRedisClient
 
 
@@ -180,3 +182,34 @@ class TestGetMessagePolling:
 
         assert message is not None
         assert message["data"] == "hello"
+
+
+class TestExpiredKeysAreSweptEvenWhenNeverRead:
+    """
+    Expired keys used to be dropped only when read again, so a counter for a
+    key nobody asks about twice (a rate-limit entry per attempted username)
+    stayed in memory for the life of the process.
+    """
+
+    async def test_later_writes_drop_expired_keys_that_were_never_read(self, client, monkeypatch):
+        now = [1000.0]
+        monkeypatch.setattr(memory_redis_module, "time", SimpleNamespace(time=lambda: now[0]))
+        for i in range(50):
+            await client.set(f"attempts:user{i}", "1", ex=10)
+
+        now[0] += 61  # past the TTL and past the once-a-minute sweep interval
+        await client.set("fresh", "1", ex=10)
+
+        assert set(client._store) == {"fresh"}
+
+    async def test_keys_that_have_not_expired_survive_a_sweep(self, client, monkeypatch):
+        now = [1000.0]
+        monkeypatch.setattr(memory_redis_module, "time", SimpleNamespace(time=lambda: now[0]))
+        await client.set("short", "1", ex=10)
+        await client.set("long", "1", ex=3600)
+        await client.set("forever", "1")
+
+        now[0] += 61
+        await client.incr("counter")
+
+        assert set(client._store) == {"long", "forever", "counter"}

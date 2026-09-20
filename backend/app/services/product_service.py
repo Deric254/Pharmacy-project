@@ -75,7 +75,7 @@ class ProductService:
         product = await self._get_or_404(product_id)
 
         update_data = payload.model_dump(exclude_unset=True)
-        if "barcode" in update_data and update_data["barcode"]:
+        if update_data.get("barcode"):
             existing = await self.db.execute(
                 select(Product).where(
                     Product.barcode == update_data["barcode"],
@@ -85,7 +85,7 @@ class ProductService:
             )
             if existing.scalar_one_or_none() is not None:
                 raise HTTPException(status_code=409, detail="Barcode already in use")
-        if "name" in update_data and update_data["name"]:
+        if update_data.get("name"):
             existing_name = await self.db.execute(
                 select(Product).where(
                     func.lower(Product.name) == update_data["name"].lower(),

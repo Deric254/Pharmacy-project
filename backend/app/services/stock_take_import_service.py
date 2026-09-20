@@ -2,21 +2,22 @@ import io
 from typing import Any
 
 from fastapi import HTTPException
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.concurrency import run_in_threadpool
 
 from app.models.stock_take import StockTake, StockTakeItem, StockTakeStatus
 from app.models.user import User
 from app.schemas.inventory import AdjustmentReason
 from app.schemas.stock_take import CountSubmit, StockTakeOut
+from app.services.spreadsheet_reader import read_data_rows
 from app.services.stock_take_service import StockTakeService
 
 _HEADERS = ["Product name", "Batch number", "Expiry date", "System quantity", "Physical quantity"]
 _ID_COLUMN = 6  # hidden -- carries the real item id for exact matching, never shown or typed
+_MAX_ROWS = 20000  # far beyond any real count sheet; refuses a file padded to a huge height
 
 
 async def _load_open_stock_take(db: AsyncSession, stock_take_id: int) -> StockTake:
@@ -94,17 +95,7 @@ async def import_counts(
 ) -> StockTakeOut:
     await _load_open_stock_take(db, stock_take_id)
 
-    try:
-        wb = await run_in_threadpool(load_workbook, io.BytesIO(file_bytes), data_only=True)
-        ws = wb.active
-        if ws is None:
-            raise HTTPException(status_code=400, detail="This file has no worksheet to read.")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail="Could not read this file as an Excel spreadsheet."
-        ) from exc
+    rows = await read_data_rows(file_bytes, columns=_ID_COLUMN, max_rows=_MAX_ROWS)
 
     # Every real item for this stock take, keyed by id -- used both to
     # validate every row up front (all-or-nothing, same as every other
@@ -114,13 +105,12 @@ async def import_counts(
     )
     items_by_id = {item.id: item for item in items_result.scalars().all()}
 
-    rows = list(ws.iter_rows(min_row=2, values_only=True))
     counts_to_apply: list[tuple[int, int]] = []  # (item_id, physical_qty)
     seen_item_ids: set[int] = set()
 
     for offset, row in enumerate(rows):
         row_num = offset + 2
-        row_values: list[Any] = (list(row) + [None] * 6)[:6]
+        row_values: list[Any] = list(row)
         _, _, _, _, physical_raw, item_id_raw = row_values
 
         if item_id_raw is None:

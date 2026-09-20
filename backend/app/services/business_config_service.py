@@ -81,7 +81,7 @@ def _shrink_logo(logo_url: str | None) -> str | None:
         img.save(out_buffer, format="PNG", optimize=True)
         resized_b64 = base64.b64encode(out_buffer.getvalue()).decode("ascii")
         return f"data:image/png;base64,{resized_b64}"
-    except Exception:  # noqa: BLE001 - a bad/unreadable image must never block saving config
+    except Exception:  # a bad/unreadable image must never block saving config
         return logo_url
 
 

@@ -28,7 +28,7 @@ from app.models.medicine_batch import MedicineBatch  # noqa: F401
 from app.models.product import Product  # noqa: F401
 from app.models.purchase_order import PurchaseOrder, PurchaseOrderItem  # noqa: F401
 from app.models.refund import Refund, RefundItem  # noqa: F401
-from app.models.role import Permission, Role  # noqa: F401
+from app.models.role import Permission, Role
 from app.models.sale import Payment, Sale, SaleItem  # noqa: F401
 from app.models.setup_lock import SetupLock  # noqa: F401
 from app.models.stock_movement import StockMovement  # noqa: F401

@@ -19,19 +19,19 @@ import io
 from typing import Any
 
 from fastapi import HTTPException
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.concurrency import run_in_threadpool
 
 from app.models.audit_log import AuditLog
 from app.models.product import Product
 from app.models.user import User
 from app.schemas.product import BulkImportResult, ImportRowError, ProductCreate
+from app.services.spreadsheet_reader import read_data_rows
 
 _COMMON_UNITS = [
     "unit",
@@ -118,33 +118,16 @@ def _clean_str(value: Any) -> str:
 async def _parse_and_validate(
     db: AsyncSession, file_bytes: bytes
 ) -> tuple[list[ProductCreate], list[ImportRowError]]:
-    try:
-        wb = await run_in_threadpool(load_workbook, io.BytesIO(file_bytes), data_only=True)
-        ws = wb.active
-        if ws is None:
-            raise HTTPException(status_code=400, detail="This file has no worksheet to read.")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail="Could not read this file as an Excel spreadsheet."
-        ) from exc
+    rows = await read_data_rows(file_bytes, columns=len(_HEADERS), max_rows=_MAX_ROWS)
 
     errors: list[ImportRowError] = []
     candidates: list[ProductCreate] = []
     seen_names: dict[str, int] = {}  # lowercased name -> first row it appeared on
     seen_barcodes: dict[str, int] = {}
 
-    rows = list(ws.iter_rows(min_row=2, values_only=True))
-    if len(rows) > _MAX_ROWS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"This file has more than {_MAX_ROWS} rows. Split it into smaller batches.",
-        )
-
     for offset, row in enumerate(rows):
         row_num = offset + 2  # 1-indexed, header is row 1
-        row_values: list[Any] = (list(row) + [None] * 4)[:4]
+        row_values: list[Any] = list(row)
         name_raw, barcode_raw, unit_raw, reorder_raw = row_values
         name = _clean_str(name_raw)
 

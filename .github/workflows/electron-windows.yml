@@ -1,0 +1,62 @@
+name: Electron Windows check
+
+# Manual only, and deliberately a separate workflow from "CI": release.yml
+# gates every release on CI succeeding, so a Windows-only problem found here
+# can never block a release. Run it from the Actions tab whenever the
+# Electron shell (electron/main.js) changes.
+#
+# It runs the same real-window tests as CI's Linux job, on a real Windows
+# machine, which is the only place the Windows-specific parts of main.js
+# (taskkill on stop, the PowerShell cleanup on start) can actually run.
+on:
+  workflow_dispatch:
+
+jobs:
+  electron-gui-windows:
+    name: Electron GUI test (real window, real backend, Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements*.txt
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build the frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install electron test dependencies
+        working-directory: electron
+        run: npm install
+
+      - name: Run the real Electron GUI tests
+        working-directory: electron
+        run: npm run test:e2e
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-gui-windows-failure-diagnostics
+          path: electron/test-results/
+          retention-days: 7

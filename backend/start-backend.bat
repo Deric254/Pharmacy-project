@@ -35,6 +35,12 @@ for /f "usebackq tokens=1,* delims==" %%A in (".env") do (
     if not "%%A"=="" set "%%A=%%B"
 )
 
+rem The cache and live-update channel live in this process unless .env
+rem says otherwise (REDIS_MODE=redis plus REDIS_URL, for a real Redis).
+rem An older .env that still has REDIS_URL but no REDIS_MODE must not
+rem suddenly need a Redis server this script no longer starts.
+if not defined REDIS_MODE set "REDIS_MODE=memory"
+
 rem --- Check for an already-healthy instance before trying to bind ---
 rem A leftover backend from an earlier run/test session sitting on this
 rem port is the single most common reason this crashes -- confirmed by
@@ -53,7 +59,7 @@ if "!ALREADY_HEALTHY!"=="yes" (
 echo Starting the backend on http://localhost:8000 ...
 echo ^(Ctrl+C to stop, or just close this window^)
 echo.
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+uvicorn app.main:app --host 127.0.0.1 --port 8000
 if errorlevel 1 (
     echo.
     echo [ERROR] The backend exited with an error -- see the output above.

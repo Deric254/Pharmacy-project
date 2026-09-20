@@ -11,6 +11,7 @@ Sales tests. The two properties that actually matter for a POS:
 import asyncio
 from datetime import date, timedelta
 
+import pytest
 from sqlalchemy import func, select
 
 from app.core.business_time import business_today
@@ -21,8 +22,15 @@ from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
 from app.models.role import Role
 from app.models.sale import Sale
-from app.models.stock_movement import StockMovement
+from app.models.stock_movement import MovementType, StockMovement
 from app.models.user import User
+from app.schemas.stock_take import StockTakeCreate
+from app.services.stock_selection_service import (
+    InsufficientStockError,
+    apply_allocations,
+    select_batches_fefo,
+)
+from app.services.stock_take_service import StockTakeService
 
 
 async def _login(client, username: str, password: str) -> str:
@@ -1074,3 +1082,189 @@ class TestReceiptPdf:
         expected_local_hour = (stored_utc.hour + 3) % 24
         assert f"{expected_local_hour:02d}:" in text
         assert "(Africa/Nairobi)" in text
+
+
+async def _post_sale(
+    client, token: str, product_id: int, quantity: int, amount: float, discount: float = 0.0
+):
+    return await client.post(
+        "/api/v1/sales",
+        json={
+            "items": [{"product_id": product_id, "quantity": quantity}],
+            "discount_amount": discount,
+            "payments": [{"method": "CASH", "amount": amount}],
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+
+class TestPaymentsMustMatchTheTotalExactly:
+    """
+    Money is stored as whole cents, so the payment check compares whole
+    cents too. A "small epsilon" used to let a sale through that was a
+    cent short or a cent over, leaving payments and totals permanently
+    out of step in the books.
+    """
+
+    async def test_a_payment_one_cent_short_is_refused(self, client, employee_user):
+        product_id = await _make_product_with_batch(price=10.0, qty=100, cost=1.0)
+        token = await _login(client, "joe", "pass1234")
+
+        r = await _post_sale(client, token, product_id, 1, 9.99)
+
+        assert r.status_code == 400
+        assert "does not match" in r.json()["detail"]
+
+    async def test_a_payment_one_cent_over_is_refused(self, client, employee_user):
+        product_id = await _make_product_with_batch(price=10.0, qty=100, cost=1.0)
+        token = await _login(client, "joe", "pass1234")
+
+        r = await _post_sale(client, token, product_id, 1, 10.01)
+
+        assert r.status_code == 400
+        async with AsyncSessionLocal() as db:
+            assert (await db.execute(select(func.count()).select_from(Sale))).scalar_one() == 0
+
+    async def test_the_exact_total_is_accepted(self, client, employee_user):
+        product_id = await _make_product_with_batch(price=10.0, qty=100, cost=1.0)
+        token = await _login(client, "joe", "pass1234")
+
+        r = await _post_sale(client, token, product_id, 1, 10.0)
+
+        assert r.status_code == 201
+
+
+class TestSaleAmountsAreExactCents:
+    async def test_the_creation_response_carries_no_float_noise(self, client, employee_user):
+        # 0.10 * 3 is 0.30000000000000004 in binary floating point.
+        product_id = await _make_product_with_batch(price=0.10, qty=100, cost=0.01)
+        token = await _login(client, "joe", "pass1234")
+
+        r = await _post_sale(client, token, product_id, 3, 0.30)
+
+        assert r.status_code == 201
+        body = r.json()
+        assert body["subtotal"] == 0.3
+        assert body["total_amount"] == 0.3
+        fetched = await client.get(
+            f"/api/v1/sales/{body['id']}", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert fetched.json()["total_amount"] == body["total_amount"]
+
+
+class TestQuoteAgreesWithCheckout:
+    async def test_a_below_cost_line_is_refused_by_the_quote_exactly_as_by_checkout(
+        self, client, employee_user
+    ):
+        product_id = await _make_product_with_batch(price=5.0, qty=10, cost=8.0)
+        token = await _login(client, "joe", "pass1234")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        quote = await client.post(
+            "/api/v1/sales/quote",
+            json={"items": [{"product_id": product_id, "quantity": 1}]},
+            headers=headers,
+        )
+        checkout = await _post_sale(client, token, product_id, 1, 5.0)
+
+        assert quote.status_code == checkout.status_code == 400
+        assert quote.json()["detail"] == checkout.json()["detail"]
+        assert "would sell at a loss" in quote.json()["detail"]
+
+    async def test_paying_the_quoted_total_always_succeeds(self, client, employee_user):
+        product_id = await _make_product_with_batch(price=12.35, qty=100, cost=1.0)
+        token = await _login(client, "joe", "pass1234")
+
+        quote = await client.post(
+            "/api/v1/sales/quote",
+            json={"items": [{"product_id": product_id, "quantity": 3}], "discount_amount": 0.05},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert quote.status_code == 200
+        assert quote.json()["total_amount"] == 37.0  # 3 x 12.35 - 0.05
+
+        r = await _post_sale(client, token, product_id, 3, quote.json()["total_amount"], 0.05)
+
+        assert r.status_code == 201
+
+    async def test_a_quote_for_more_than_is_in_stock_is_a_clean_conflict(
+        self, client, employee_user
+    ):
+        product_id = await _make_product_with_batch(price=10.0, qty=3, cost=1.0)
+        token = await _login(client, "joe", "pass1234")
+
+        quote = await client.post(
+            "/api/v1/sales/quote",
+            json={"items": [{"product_id": product_id, "quantity": 10}]},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert quote.status_code == 409
+        assert '"Amoxicillin 500mg"' in quote.json()["detail"]
+        assert "only 3 available" in quote.json()["detail"]
+
+
+class TestStockHeldByAStockTakeIsExplained:
+    async def _start_stock_take(self, employee_user, product_id: int) -> None:
+        async with AsyncSessionLocal() as db:
+            employee = await db.get(User, employee_user.id)
+            await StockTakeService(db).initiate(StockTakeCreate(product_ids=[product_id]), employee)
+
+    async def test_a_sale_of_counted_stock_says_it_is_being_counted(self, client, employee_user):
+        product_id = await _make_product_with_batch(price=10.0, qty=100, cost=1.0)
+        await self._start_stock_take(employee_user, product_id)
+        token = await _login(client, "joe", "pass1234")
+
+        r = await _post_sale(client, token, product_id, 1, 10.0)
+
+        assert r.status_code == 409
+        assert "100 more held by a stock take in progress" in r.json()["detail"]
+
+    async def test_a_batch_locked_after_selection_is_not_decremented(self, employee_user):
+        product_id = await _make_product_with_batch(price=10.0, qty=10, cost=1.0)
+        async with AsyncSessionLocal() as db:
+            allocations = await select_batches_fefo(db, product_id, 3, lock=False)
+            # A stock take starts after the sale planned its allocation but
+            # before it decremented anything.
+            await self._start_stock_take(employee_user, product_id)
+
+            with pytest.raises(InsufficientStockError) as refused:
+                await apply_allocations(db, allocations, MovementType.SALE, employee_user.id)
+
+        assert refused.value.held_by_stock_take == 10
+        async with AsyncSessionLocal() as db:
+            batch = (
+                await db.execute(
+                    select(MedicineBatch).where(MedicineBatch.product_id == product_id)
+                )
+            ).scalar_one()
+        assert batch.qty_remaining == 10
+
+
+class TestListSalesPageSizeIsBounded:
+    @pytest.mark.parametrize("query", ["limit=-1", "limit=0", "limit=201", "offset=-1"])
+    async def test_out_of_range_paging_is_rejected(self, client, owner_user, query):
+        token = await _login(client, "lucy", "S3curePass!")
+
+        r = await client.get(f"/api/v1/sales?{query}", headers={"Authorization": f"Bearer {token}"})
+
+        assert r.status_code == 422
+
+    async def test_the_largest_allowed_page_is_accepted(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+
+        r = await client.get(
+            "/api/v1/sales?limit=200", headers={"Authorization": f"Bearer {token}"}
+        )
+
+        assert r.status_code == 200
+
+    async def test_top_customers_limit_is_bounded_too(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+
+        r = await client.get(
+            "/api/v1/reports/top-customers?start_date=2026-01-01&end_date=2026-12-31&limit=0",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert r.status_code == 422

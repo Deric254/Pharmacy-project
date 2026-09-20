@@ -26,17 +26,18 @@ implementation would miss:
 from typing import Any, cast
 
 from fastapi import HTTPException
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.money_types import from_cents, prorate_cents, to_cents
 from app.models.audit_log import AuditLog
 from app.models.medicine_batch import MedicineBatch
 from app.models.refund import Refund, RefundItem
 from app.models.sale import Sale, SaleItem
 from app.models.stock_movement import MovementType, StockMovement
 from app.models.user import User
-from app.schemas.refund import RefundOut, RefundRequest
+from app.schemas.refund import RefundItemRequest, RefundOut, RefundRequest
 
 
 class RefundService:
@@ -49,32 +50,7 @@ class RefundService:
         sale = await self._get_sale_or_404(sale_id)
         sale_items_by_id = {item.id: item for item in sale.items}
 
-        # sale_item.unit_price is always the FULL, undiscounted price
-        # sold at (a sale's discount lives only once, on Sale.discount_
-        # amount, never split across its line items -- see
-        # sale_service.py and report_service.py's top_products_by_
-        # revenue for the same fact). Refunding straight off unit_price
-        # would hand back MORE money than the customer actually paid on
-        # any discounted sale -- a real loss to the till, not just a
-        # reporting quirk. This ratio prorates the sale's discount the
-        # same way top_products_by_revenue does, so a refund's total_
-        # amount matches real money collected. A zero-subtotal sale (
-        # every line free) has nothing to prorate a discount against --
-        # ratio of 1.0 is a safe no-op there.
-        discount_ratio = (sale.total_amount / sale.subtotal) if sale.subtotal else 1.0
-
-        refund = Refund(
-            sale_id=sale.id,
-            processed_by_user_id=processed_by.id,
-            reason=payload.reason,
-            method=payload.method,
-            notes=payload.notes,
-            total_amount=0.0,  # filled in after validating every line
-        )
-        self.db.add(refund)
-        await self.db.flush()
-
-        total_amount = 0.0
+        priced_lines: list[tuple[RefundItemRequest, SaleItem]] = []
         for line in payload.items:
             sale_item = sale_items_by_id.get(line.sale_item_id)
             if sale_item is None:
@@ -82,16 +58,29 @@ class RefundService:
                     status_code=400,
                     detail=f"Sale item {line.sale_item_id} does not belong to sale {sale_id}",
                 )
+            priced_lines.append((line, sale_item))
 
-            # unit_price stays the original, undiscounted sale price --
-            # same historical-traceability rule as SaleItem itself (see
-            # Refund's own docstring). line_total is what actually goes
-            # back to the customer, so it -- not a plain unit_price *
-            # quantity -- is what real money (refund.total_amount) is
-            # summed from.
-            line_total = sale_item.unit_price * line.quantity * discount_ratio
-            total_amount += line_total
+        line_cents = self._cap_at_refundable(
+            [
+                self._line_refund_cents(sale, sale_item, line.quantity)
+                for line, sale_item in priced_lines
+            ],
+            await self._refundable_cents(sale),
+        )
+        total_amount = from_cents(sum(line_cents))
 
+        refund = Refund(
+            sale_id=sale.id,
+            processed_by_user_id=processed_by.id,
+            reason=payload.reason,
+            method=payload.method,
+            notes=payload.notes,
+            total_amount=total_amount,
+        )
+        self.db.add(refund)
+        await self.db.flush()
+
+        for (line, sale_item), cents in zip(priced_lines, line_cents, strict=True):
             # Atomic reserve-then-fail, not read-then-check-then-write:
             # see _reserve_refund_quantity's own docstring for why the
             # previous version of this check (a plain SELECT/sum, same
@@ -106,6 +95,10 @@ class RefundService:
                     sale_item.batch_id, line.quantity, refund.id, processed_by.id
                 )
 
+            # unit_price stays the original, undiscounted sale price --
+            # same historical-traceability rule as SaleItem itself (see
+            # Refund's own docstring); line_total is what actually goes
+            # back to the customer.
             self.db.add(
                 RefundItem(
                     refund_id=refund.id,
@@ -114,12 +107,11 @@ class RefundService:
                     batch_id=sale_item.batch_id,
                     quantity=line.quantity,
                     unit_price=sale_item.unit_price,
-                    line_total=line_total,
+                    line_total=from_cents(cents),
                     restocked=line.restock,
                 )
             )
 
-        refund.total_amount = total_amount
         self.db.add(
             AuditLog(
                 user_id=processed_by.id,
@@ -140,6 +132,54 @@ class RefundService:
             select(Refund).where(Refund.sale_id == sale_id).order_by(Refund.created_at)
         )
         return [RefundOut.model_validate(r) for r in result.scalars().all()]
+
+    @staticmethod
+    def _line_refund_cents(sale: Sale, sale_item: SaleItem, quantity: int) -> int:
+        """
+        What handing back `quantity` units of this line returns to the
+        customer, in whole cents. sale_item.unit_price is always the
+        FULL, undiscounted price sold at (a sale's discount lives only
+        once, on Sale.discount_amount, never split across its line items
+        -- see sale_service.py and report_service.py's top_products_by_
+        revenue for the same fact), so refunding straight off it would
+        hand back MORE money than the customer paid on a discounted
+        sale. The line's price is therefore scaled by the sale's
+        total/subtotal ratio, the same way top_products_by_revenue
+        prorates it. A zero-subtotal sale (every line free) has nothing
+        to prorate a discount against.
+        """
+        gross_cents = to_cents(sale_item.unit_price) * quantity
+        subtotal_cents = to_cents(sale.subtotal)
+        if not subtotal_cents:
+            return gross_cents
+        return prorate_cents(gross_cents, to_cents(sale.total_amount), subtotal_cents)
+
+    async def _refundable_cents(self, sale: Sale) -> int:
+        """What the customer paid for the sale, less everything already refunded."""
+        result = await self.db.execute(
+            select(func.sum(Refund.total_amount)).where(Refund.sale_id == sale.id)
+        )
+        already_refunded = result.scalar_one() or 0.0
+        return max(to_cents(sale.total_amount) - to_cents(already_refunded), 0)
+
+    @staticmethod
+    def _cap_at_refundable(line_cents: list[int], refundable_cents: int) -> list[int]:
+        """
+        Each line is rounded to a whole cent on its own, so several
+        partial refunds of a discounted sale can together add up to a
+        cent or two more than the customer paid. Trimming the excess off
+        the last lines keeps the sum of all refunds at or below the
+        sale's total.
+        """
+        capped = list(line_cents)
+        excess = sum(capped) - refundable_cents
+        for index in reversed(range(len(capped))):
+            if excess <= 0:
+                break
+            trim = min(capped[index], excess)
+            capped[index] -= trim
+            excess -= trim
+        return capped
 
     async def _get_sale_or_404(self, sale_id: int) -> Sale:
         result = await self.db.execute(select(Sale).where(Sale.id == sale_id))

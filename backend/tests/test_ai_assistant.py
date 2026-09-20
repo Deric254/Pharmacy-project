@@ -16,12 +16,16 @@ from datetime import UTC, datetime, time, timedelta
 
 import httpx
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.core.business_time import business_today, get_business_timezone, local_day_bounds_utc
 from app.core.database import AsyncSessionLocal
 from app.core.security import decrypt_secret, encrypt_secret
 from app.models.ai_conversation import AIConversation, AIConversationMessage
 from app.models.ai_provider_key import AIProviderKey, AIProviderName
+from app.models.customer import Customer
+from app.models.role import Role
+from app.models.sale import Sale
 from app.models.user import User
 from app.schemas.ai import AIAskRequest
 from app.services.ai.adapters import (
@@ -1949,3 +1953,74 @@ class TestEventLoopNotBlockedDuringSlowResponse:
         # concurrently, it should be close to max(ai_duration, 0.75s)
         # =~ 1.0s -- well under the serialized figure either way.
         assert total < ai_duration + 0.5
+
+
+class TestAssistantRespectsReportPermissions:
+    """
+    ai.use lets someone ask the assistant questions; it does not let them
+    read revenue, transaction counts, top products or named top customers,
+    which the Dashboard and Reports pages guard behind reports.view. The
+    assistant used to hand all of that to a cashier (and to the AI
+    provider on their behalf) -- a wider door than the pages themselves.
+    """
+
+    async def _ask_and_capture_context(self, asker_id: int, owner_id: int) -> dict[str, object]:
+        async with AsyncSessionLocal() as db:
+            customer = Customer(name="Secret Customer", phone="0700111222")
+            db.add(customer)
+            db.add(
+                AIProviderKey(
+                    user_id=owner_id,
+                    provider=AIProviderName.OPENAI,
+                    encrypted_key=encrypt_secret("key"),
+                    key_hint="key1",
+                    priority=1,
+                )
+            )
+            await db.flush()
+            db.add(
+                Sale(
+                    cashier_user_id=owner_id,
+                    customer_id=customer.id,
+                    subtotal=50.0,
+                    discount_amount=0.0,
+                    total_amount=50.0,
+                )
+            )
+            await db.commit()
+
+        captured: dict[str, object] = {}
+
+        class ContextSpy:
+            async def ask(self, prompt, context):
+                captured.update(context)
+                return AIResponse(text="ok")
+
+        async with AsyncSessionLocal() as db:
+            asker = (
+                await db.execute(
+                    select(User)
+                    .options(selectinload(User.role).selectinload(Role.permissions))
+                    .where(User.id == asker_id)
+                )
+            ).scalar_one()
+            service = AIAssistantService(db, adapter_factory=lambda provider, api_key: ContextSpy())
+            await service.ask(
+                asker,
+                AIAskRequest(prompt="what is our all-time revenue and who are the top customers?"),
+            )
+        return captured
+
+    async def test_a_cashier_without_reports_view_gets_no_business_figures(
+        self, client, owner_user, employee_user
+    ):
+        context = await self._ask_and_capture_context(employee_user.id, owner_user.id)
+
+        assert context == {"person_asking_name": "Cashier Joe"}
+        assert "Secret Customer" not in str(context)
+
+    async def test_an_owner_with_reports_view_still_gets_them(self, client, owner_user):
+        context = await self._ask_and_capture_context(owner_user.id, owner_user.id)
+
+        assert "Secret Customer" in str(context["top_customers_by_revenue"])
+        assert any(key.endswith("_revenue") for key in context)

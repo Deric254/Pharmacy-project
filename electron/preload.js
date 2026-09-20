@@ -8,8 +8,8 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  // url: a GitHub release asset URL from useUpdateCheck(), never
-  // arbitrary input. Starts a real Electron-managed download; the
+  // url: a GitHub release asset URL from useUpdateCheck(). The main
+  // process refuses anything else (see isTrustedInstallerUrl). Starts a real Electron-managed download; the
   // save dialog, "install now?" confirmation, and launching the
   // installer all happen in main.js once it completes -- this call
   // itself resolves as soon as the download starts, not when it

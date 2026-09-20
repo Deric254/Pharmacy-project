@@ -174,7 +174,7 @@ async def top_customers(
     db: Annotated[AsyncSession, Depends(get_db)],
     start_date: date,
     end_date: date,
-    limit: int = 20,
+    limit: int = Query(default=20, ge=1, le=100),
 ) -> TopCustomersOut:
     return await ReportService(db).top_customers(start_date, end_date, limit)
 

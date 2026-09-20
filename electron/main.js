@@ -30,6 +30,12 @@ const fs = require('node:fs')
 const http = require('node:http')
 const net = require('node:net')
 const { spawn } = require('node:child_process')
+const {
+  INSTALLER_FILENAME,
+  isTrustedInstallerUrl,
+  isSafeExternalUrl,
+  isSameOrigin,
+} = require('./urlPolicy')
 
 // No longer a fixed constant -- see getFreePort(). Set once at the
 // start of startApp(), before the backend is spawned, and read by
@@ -84,6 +90,9 @@ app.setPath('userData', path.join(app.getPath('appData'), 'PharmacyERP'))
 
 let backendProcess = null
 let mainWindow = null
+// The one installer URL the updater IPC has approved. A download counts as the
+// update installer only if it began from exactly this URL (see will-download).
+let approvedInstallerUrl = null
 
 function logDesktopDiagnostic(message) {
   try {
@@ -410,8 +419,18 @@ function createWindow() {
         },
       }
     }
-    shell.openExternal(url)
+    // Only web and mail links go to the operating system: handing it any
+    // other scheme (file:, ms-msdt:, search-ms: ...) can launch programs.
+    if (isSafeExternalUrl(url)) shell.openExternal(url)
     return { action: 'deny' }
+  })
+  // Never let this window -- the one the preload's IPC bridge is exposed
+  // to -- navigate away from the app's own origin. Something that tries to
+  // is opened in the user's browser instead, where it has no bridge.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (isSameOrigin(url, backendUrl)) return
+    event.preventDefault()
+    if (isSafeExternalUrl(url)) shell.openExternal(url)
   })
   // Defensive fallback: if ready-to-show never fires for any reason,
   // showing a blank window late is still far better than the app
@@ -640,14 +659,21 @@ async function startApp() {
     // message, the same as any normal desktop app.
     //
     // The one exception is the update installer, detected below by
-    // its exact filename pattern -- every other download in this app
+    // its exact filename pattern AND the URL the updater approved --
+    // every other download in this app
     // (receipts, report exports) comes from a blob: URL created in
     // the page itself; only the update installer is ever a real
     // http(s) download routed through webContents.downloadURL(), so
     // this can never misfire on an unrelated file a person happens to
     // save with a similar name.
     session.defaultSession.on('will-download', (event, item) => {
-      const isUpdateInstaller = /^Pharmacy-ERP-Setup-.*\.exe$/i.test(item.getFilename())
+      // A filename is something any page can give a file, so the name alone
+      // is not enough: the download must also have begun from the exact URL
+      // the update IPC approved.
+      const isUpdateInstaller =
+        approvedInstallerUrl !== null &&
+        item.getURLChain()[0] === approvedInstallerUrl &&
+        INSTALLER_FILENAME.test(item.getFilename())
 
       const savePath = dialog.showSaveDialogSync(mainWindow, {
         title: 'Save file',
@@ -787,7 +813,19 @@ async function startApp() {
 // "install now?" confirmation, and launching the installer all happen
 // in the will-download handler above once this download completes --
 // this handler's only job is to start it.
-ipcMain.handle('download-update-installer', (_event, url) => {
+ipcMain.handle('download-update-installer', (event, url) => {
+  // Whatever runs in the renderer can call this, so the URL is checked here
+  // rather than trusted: only this project's own GitHub release installer
+  // (or, in an unpackaged dev/e2e run, a fake update server on loopback),
+  // and only when asked by the main window itself.
+  if (
+    event.sender !== mainWindow?.webContents ||
+    !isTrustedInstallerUrl(url, { allowLoopback: !app.isPackaged })
+  ) {
+    logDesktopDiagnostic(`update-download-refused ${String(url)}`)
+    throw new Error('Refusing to download an installer from an untrusted address.')
+  }
+  approvedInstallerUrl = url
   mainWindow.webContents.downloadURL(url)
 })
 

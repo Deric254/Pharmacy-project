@@ -13,7 +13,7 @@ reused unchanged by Sales, Adjustments, and Transfers later.
 
 from typing import Any, cast
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,10 +25,15 @@ Allocation = tuple[MedicineBatch, int]
 
 
 class InsufficientStockError(Exception):
-    def __init__(self, product_id: int, requested: int, available: int) -> None:
+    def __init__(
+        self, product_id: int, requested: int, available: int, held_by_stock_take: int = 0
+    ) -> None:
         self.product_id = product_id
         self.requested = requested
         self.available = available
+        # Units that exist but are locked by an open stock take -- surfaced
+        # so a cashier isn't told "0 available" about stock on the shelf.
+        self.held_by_stock_take = held_by_stock_take
         super().__init__(f"Product {product_id}: requested {requested}, only {available} available")
 
 
@@ -86,8 +91,19 @@ async def select_batches_fefo(
         remaining -= take
 
     if remaining > 0:
-        available = qty_needed - remaining
-        raise InsufficientStockError(product_id, qty_needed, available)
+        held = await db.execute(
+            select(func.coalesce(func.sum(MedicineBatch.qty_remaining), 0)).where(
+                MedicineBatch.product_id == product_id,
+                MedicineBatch.locked_by_stock_take_id.is_not(None),
+                MedicineBatch.expiry_date >= today,
+            )
+        )
+        raise InsufficientStockError(
+            product_id,
+            qty_needed,
+            qty_needed - remaining,
+            held_by_stock_take=int(held.scalar_one()),
+        )
 
     return allocations
 
@@ -123,14 +139,30 @@ async def apply_allocations(
             "CursorResult[Any]",
             await db.execute(
                 update(MedicineBatch)
-                .where(MedicineBatch.id == batch.id, MedicineBatch.qty_remaining >= qty)
+                .where(
+                    MedicineBatch.id == batch.id,
+                    MedicineBatch.qty_remaining >= qty,
+                    # A stock take may have locked the batch after it was
+                    # selected; a locked batch must not move mid-count.
+                    MedicineBatch.locked_by_stock_take_id.is_(None),
+                )
                 .values(qty_remaining=MedicineBatch.qty_remaining - qty)
             ),
         )
         if result.rowcount == 0:
-            refreshed = await db.get(MedicineBatch, batch.id)
-            available_now = refreshed.qty_remaining if refreshed is not None else 0
-            raise InsufficientStockError(batch.product_id, requested=qty, available=available_now)
+            # populate_existing: the plain identity-map lookup would hand
+            # back the copy read earlier in this request, not the row as
+            # the concurrent transaction left it.
+            refreshed = await db.get(MedicineBatch, batch.id, populate_existing=True)
+            if refreshed is None:
+                available_now, held = 0, 0
+            elif refreshed.locked_by_stock_take_id is not None:
+                available_now, held = 0, refreshed.qty_remaining
+            else:
+                available_now, held = refreshed.qty_remaining, 0
+            raise InsufficientStockError(
+                batch.product_id, requested=qty, available=available_now, held_by_stock_take=held
+            )
         db.add(
             StockMovement(
                 batch_id=batch.id,

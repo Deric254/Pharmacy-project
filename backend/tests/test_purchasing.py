@@ -17,12 +17,16 @@ import asyncio
 from datetime import date
 
 import pytest
+from sqlalchemy import select, text
 
 from app.core.database import AsyncSessionLocal
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
 from app.models.stock_take import StockTake
 from app.models.supplier import Supplier
+from app.models.user import User
+from app.schemas.purchase_order import QuickPurchaseRequest
+from app.services.purchasing_service import PurchasingService
 
 
 async def _login(client, username: str, password: str) -> str:
@@ -942,3 +946,76 @@ class TestQuickPurchaseRespectsStockTakeLock:
             # batch is locked for must still see exactly what it
             # snapshotted, not 20 + 5.
             assert batch.qty_remaining == 20
+
+
+class TestBlendedCostStaysInWholeCents:
+    """
+    Merging a receipt into an existing batch averages the two costs inside
+    one SQL statement. The average of whole-cent costs is usually a
+    fractional cent, and SQLite would store that REAL in the integer-cents
+    column unrounded (10.0761538... where 10.08 belongs), so the average
+    is rounded, half up, before it is written.
+    """
+
+    @staticmethod
+    async def _receive(supplier_id: int, product_id: int, user, quantity: int, unit_cost: float):
+        request = QuickPurchaseRequest(
+            supplier_id=supplier_id,
+            lines=[
+                {
+                    "product_id": product_id,
+                    "batch_number": "WAC1",
+                    "expiry_date": date(2030, 1, 1),
+                    "quantity": quantity,
+                    "unit_cost": unit_cost,
+                    "selling_price": 50.0,
+                }
+            ],
+        )
+        async with AsyncSessionLocal() as db:
+            await PurchasingService(db).quick_purchase(request, user)
+
+    @staticmethod
+    async def _stored_cost() -> tuple[str, float]:
+        async with AsyncSessionLocal() as db:
+            storage_type = (
+                await db.execute(text("SELECT typeof(cost_price) FROM medicine_batches"))
+            ).scalar_one()
+            batch = (await db.execute(select(MedicineBatch))).scalar_one()
+        return str(storage_type), batch.cost_price
+
+    async def _setup(self, owner_user) -> tuple[int, int, User]:
+        async with AsyncSessionLocal() as db:
+            supplier = Supplier(name="ACME")
+            product = Product(name="Blend Probe")
+            db.add_all([supplier, product])
+            await db.commit()
+            user = await db.get(User, owner_user.id)
+            return supplier.id, product.id, user
+
+    async def test_a_fractional_cent_average_is_rounded_half_up(self, client, owner_user):
+        supplier_id, product_id, user = await self._setup(owner_user)
+
+        await self._receive(supplier_id, product_id, user, 10, 10.00)
+        await self._receive(supplier_id, product_id, user, 3, 10.33)  # exactly 10.0761538...
+
+        assert await self._stored_cost() == ("integer", 10.08)
+
+    async def test_an_average_of_exactly_half_a_cent_rounds_up_not_down(self, client, owner_user):
+        supplier_id, product_id, user = await self._setup(owner_user)
+
+        await self._receive(supplier_id, product_id, user, 1, 0.01)
+        await self._receive(supplier_id, product_id, user, 1, 0.02)  # exactly 1.5 cents
+
+        assert await self._stored_cost() == ("integer", 0.02)
+
+    async def test_many_merges_never_leave_a_fractional_cent_behind(self, client, owner_user):
+        supplier_id, product_id, user = await self._setup(owner_user)
+
+        await self._receive(supplier_id, product_id, user, 10, 10.00)
+        for _ in range(20):
+            await self._receive(supplier_id, product_id, user, 1, 10.99)
+
+        storage_type, cost = await self._stored_cost()
+        assert storage_type == "integer"
+        assert cost == round(cost, 2)

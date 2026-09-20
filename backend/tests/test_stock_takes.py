@@ -1046,3 +1046,98 @@ class TestShrinkageValueIsFrozenAtClose:
         history = await client.get("/api/v1/reports/stock-take-history", headers=headers)
         entry = next(e for e in history.json()["entries"] if e["stock_take_id"] == stock_take_id)
         assert entry["shrinkage_value"] == 20.0  # 2 units * the corrected 10.0 cost
+
+
+class TestRecount:
+    """
+    A recount used to keep the approval an earlier matching count had been
+    given automatically. A new, large variance therefore skipped the manager
+    entirely, was never applied to stock, and still showed up as shrinkage
+    when the stock take closed.
+    """
+
+    async def _start(self, client, headers, product_id):
+        created = await client.post(
+            "/api/v1/stock-takes", json={"product_ids": [product_id]}, headers=headers
+        )
+        return created.json()["id"], created.json()["items"][0]["id"]
+
+    async def _count(self, client, headers, stock_take_id, item_id, **body):
+        return await client.post(
+            f"/api/v1/stock-takes/{stock_take_id}/items/{item_id}/count",
+            json=body,
+            headers=headers,
+        )
+
+    async def test_a_new_variance_on_a_previously_matching_item_needs_approval_again(
+        self, client, owner_user
+    ):
+        product_id, batch_id = await _make_product_with_batch(qty=30)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        stock_take_id, item_id = await self._start(client, headers, product_id)
+        await self._count(client, headers, stock_take_id, item_id, physical_qty=30)
+
+        recount = await self._count(
+            client, headers, stock_take_id, item_id, physical_qty=10, reason="THEFT_OR_LOSS"
+        )
+
+        assert recount.status_code == 200
+        assert recount.json()["approved_at"] is None
+        assert recount.json()["variance"] == -20
+        # Nothing may reach stock, or the close, until a manager approves.
+        async with AsyncSessionLocal() as db:
+            batch = (
+                await db.execute(select(MedicineBatch).where(MedicineBatch.id == batch_id))
+            ).scalar_one()
+        assert batch.qty_remaining == 30
+        closing = await client.post(f"/api/v1/stock-takes/{stock_take_id}/close", headers=headers)
+        assert closing.status_code == 400
+
+        approved = await client.post(
+            f"/api/v1/stock-takes/{stock_take_id}/items/{item_id}/approve", headers=headers
+        )
+        assert approved.status_code == 200
+        async with AsyncSessionLocal() as db:
+            batch = (
+                await db.execute(select(MedicineBatch).where(MedicineBatch.id == batch_id))
+            ).scalar_one()
+        assert batch.qty_remaining == 10
+
+    async def test_a_matching_item_recounted_to_the_same_value_stays_approved(
+        self, client, owner_user
+    ):
+        product_id, _ = await _make_product_with_batch(qty=30)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        stock_take_id, item_id = await self._start(client, headers, product_id)
+        await self._count(client, headers, stock_take_id, item_id, physical_qty=30)
+
+        recount = await self._count(client, headers, stock_take_id, item_id, physical_qty=30)
+
+        assert recount.status_code == 200
+        assert recount.json()["approved_at"] is not None
+
+    async def test_an_item_whose_variance_was_already_applied_cannot_be_recounted(
+        self, client, owner_user
+    ):
+        product_id, batch_id = await _make_product_with_batch(qty=30)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        stock_take_id, item_id = await self._start(client, headers, product_id)
+        first = await self._count(
+            client, headers, stock_take_id, item_id, physical_qty=29, reason="MISCOUNT"
+        )
+        assert first.json()["approved_at"] is not None  # small variance: self-approved, applied
+
+        recount = await self._count(
+            client, headers, stock_take_id, item_id, physical_qty=20, reason="THEFT_OR_LOSS"
+        )
+
+        assert recount.status_code == 400
+        assert "cannot be recounted" in recount.json()["detail"]
+        async with AsyncSessionLocal() as db:
+            batch = (
+                await db.execute(select(MedicineBatch).where(MedicineBatch.id == batch_id))
+            ).scalar_one()
+        assert batch.qty_remaining == 29

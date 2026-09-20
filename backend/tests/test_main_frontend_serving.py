@@ -9,6 +9,12 @@ the whole app per test case to exercise different filesystem states
 would be disproportionate to what this function actually does.
 """
 
+import os
+import subprocess
+import sys
+
+import pytest
+
 from app.main import _frontend_dist_dir, _frontend_shell_response
 
 
@@ -126,3 +132,95 @@ class TestFrontendShellNeverHeuristicallyCached:
 
         assert response.path == tmp_path / "manifest.webmanifest"
         assert response.headers["cache-control"] == "no-cache"
+
+
+class TestFrontendShellNeverServesFilesOutsideTheBuild:
+    """
+    The catch-all route joins an attacker-controlled URL path onto the
+    build directory. A percent-encoded "..%2f" is decoded before routing,
+    so without a containment check an unauthenticated request could read
+    any file the process can (the SQLite database, secrets.json).
+    """
+
+    def _dist_with_a_secret_beside_it(self, tmp_path):
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        (dist / "index.html").write_text("<html>shell</html>")
+        (tmp_path / "secret.txt").write_text("outside the build")
+        return dist
+
+    def test_a_parent_directory_path_falls_back_to_the_shell(self, tmp_path):
+        dist = self._dist_with_a_secret_beside_it(tmp_path)
+
+        response = _frontend_shell_response("../secret.txt", dist)
+
+        assert response.path == dist / "index.html"
+
+    def test_a_deeper_traversal_path_falls_back_to_the_shell(self, tmp_path):
+        dist = self._dist_with_a_secret_beside_it(tmp_path)
+
+        response = _frontend_shell_response("assets/../../secret.txt", dist)
+
+        assert response.path == dist / "index.html"
+
+    def test_an_absolute_path_falls_back_to_the_shell(self, tmp_path):
+        dist = self._dist_with_a_secret_beside_it(tmp_path)
+
+        # "//etc/x" reaches the route as "/etc/x"; joining an absolute
+        # path onto a Path silently discards the base directory.
+        response = _frontend_shell_response(str(tmp_path / "secret.txt"), dist)
+
+        assert response.path == dist / "index.html"
+
+    def test_a_symlink_pointing_outside_the_build_is_not_followed(self, tmp_path):
+        dist = self._dist_with_a_secret_beside_it(tmp_path)
+        try:
+            (dist / "link.txt").symlink_to(tmp_path / "secret.txt")
+        except OSError:
+            pytest.skip("symlinks are not available on this platform")
+
+        response = _frontend_shell_response("link.txt", dist)
+
+        assert response.path == dist / "index.html"
+
+    def test_a_nul_byte_in_the_path_falls_back_to_the_shell(self, tmp_path):
+        dist = self._dist_with_a_secret_beside_it(tmp_path)
+
+        response = _frontend_shell_response("a\x00b", dist)
+
+        assert response.path == dist / "index.html"
+
+    def test_a_real_nested_file_inside_the_build_is_still_served(self, tmp_path):
+        dist = self._dist_with_a_secret_beside_it(tmp_path)
+        (dist / "icons").mkdir()
+        (dist / "icons" / "logo.svg").write_text("<svg/>")
+
+        response = _frontend_shell_response("icons/logo.svg", dist)
+
+        assert response.path == dist / "icons" / "logo.svg"
+
+
+class TestApiDocsAreProductionGated:
+    """
+    /docs, /redoc and /openapi.json describe every route to anyone who can
+    reach the server, so ENVIRONMENT=production must switch them off. The
+    app object is built at import time from settings, hence a subprocess.
+    """
+
+    @staticmethod
+    def _docs_urls_for(environment: str) -> list[str]:
+        code = "from app.main import app; " "print(app.docs_url, app.redoc_url, app.openapi_url)"
+        result = subprocess.run(  # noqa: S603 - fixed argv, no untrusted input
+            [sys.executable, "-c", code],
+            env={**os.environ, "ENVIRONMENT": environment},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.split()
+
+    def test_docs_and_schema_are_off_in_production(self):
+        assert self._docs_urls_for("production") == ["None", "None", "None"]
+
+    def test_docs_and_schema_stay_available_in_development(self):
+        assert self._docs_urls_for("development") == ["/docs", "/redoc", "/openapi.json"]

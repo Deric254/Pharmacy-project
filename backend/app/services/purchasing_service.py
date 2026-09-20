@@ -17,10 +17,12 @@ from datetime import UTC, datetime
 from typing import Any, cast
 
 from fastapi import HTTPException
-from sqlalchemy import select, update
+from sqlalchemy import Integer, func, literal, select, update
+from sqlalchemy import cast as sql_cast
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.money_types import MoneyCents
 from app.models.audit_log import AuditLog
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
@@ -177,10 +179,19 @@ class PurchasingService:
                 # qty_remaining, or selling_price between this
                 # statement deciding and this statement writing,
                 # because there's only one statement.
-                blended_cost = (
-                    MedicineBatch.qty_remaining * MedicineBatch.cost_price
-                    + line.quantity * line.unit_cost
-                ) / (MedicineBatch.qty_remaining + line.quantity)
+                #
+                # The average of whole-cent costs is generally a fractional
+                # cent, and SQLite would store that REAL in the integer-cents
+                # column as-is (10.0761538... instead of 10.08) -- so it is
+                # rounded to a whole cent inside the statement, half up.
+                incoming_cost = literal(line.quantity * line.unit_cost, type_=MoneyCents)
+                blended_cost = sql_cast(
+                    func.round(
+                        (MedicineBatch.qty_remaining * MedicineBatch.cost_price + incoming_cost)
+                        / (MedicineBatch.qty_remaining + line.quantity)
+                    ),
+                    Integer,
+                )
                 merge_result = cast(
                     "CursorResult[Any]",
                     await self.db.execute(

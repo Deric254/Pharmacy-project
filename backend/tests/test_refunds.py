@@ -19,9 +19,11 @@ from app.core.database import AsyncSessionLocal
 from app.core.security import hash_password
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
+from app.models.refund import Refund
 from app.models.role import Role
 from app.models.stock_movement import MovementType, StockMovement
 from app.models.user import User
+from app.services.refund_service import RefundService
 
 
 async def _login(client, username: str, password: str) -> str:
@@ -371,3 +373,69 @@ class TestListRefunds:
         assert r.status_code == 200
         assert len(r.json()) == 1
         assert r.json()[0]["total_amount"] == 20.0
+
+
+class TestRefundsNeverExceedWhatWasPaid:
+    """
+    A discounted sale's refund per unit is not a whole number of cents, and
+    each stored refund is rounded on its own. Three one-unit refunds of a
+    3 x 10.00 sale paid at 29.99 used to be stored as 10.00 each -- 30.00
+    handed back for 29.99 collected -- while the API responses (unrounded
+    9.9966...) disagreed with what was stored.
+    """
+
+    async def test_partial_refunds_of_a_discounted_sale_add_up_to_exactly_what_was_paid(
+        self, client, owner_user
+    ):
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id = await _make_product_with_batch(price=10.0, qty=100)
+        sale = (
+            await client.post(
+                "/api/v1/sales",
+                json={
+                    "items": [{"product_id": product_id, "quantity": 3}],
+                    "discount_amount": 0.01,
+                    "payments": [{"method": "CASH", "amount": 29.99}],
+                },
+                headers=headers,
+            )
+        ).json()
+
+        responses = []
+        for _ in range(3):
+            r = await client.post(
+                f"/api/v1/sales/{sale['id']}/refunds",
+                json={
+                    "reason": "CUSTOMER_RETURN",
+                    "method": "CASH",
+                    "items": [{"sale_item_id": sale["items"][0]["id"], "quantity": 1}],
+                },
+                headers=headers,
+            )
+            assert r.status_code == 201, r.text
+            responses.append(r.json())
+
+        assert [r["total_amount"] for r in responses] == [10.0, 10.0, 9.99]
+        for refund in responses:
+            assert refund["items"][0]["line_total"] == refund["total_amount"]
+        async with AsyncSessionLocal() as db:
+            stored = (
+                (await db.execute(select(Refund.total_amount).order_by(Refund.id))).scalars().all()
+            )
+        assert list(stored) == [r["total_amount"] for r in responses]
+        assert round(sum(stored), 2) == 29.99  # exactly what the customer paid
+
+
+class TestCapAtRefundable:
+    def test_a_sale_with_nothing_left_to_refund_refunds_nothing(self):
+        assert RefundService._cap_at_refundable([1000, 1000], 0) == [0, 0]
+
+    def test_lines_within_the_refundable_amount_are_untouched(self):
+        assert RefundService._cap_at_refundable([300, 200], 500) == [300, 200]
+
+    def test_a_one_cent_excess_is_trimmed_from_the_last_line(self):
+        assert RefundService._cap_at_refundable([1000, 1000, 1000], 2999) == [1000, 1000, 999]
+
+    def test_an_excess_larger_than_the_last_line_carries_back_to_earlier_lines(self):
+        assert RefundService._cap_at_refundable([300, 300], 400) == [300, 100]

@@ -78,35 +78,6 @@ if errorlevel 1 (
 )
 echo [OK] Node found.
 
-rem --- Check Redis --------------------------------------------------------
-where redis-server >nul 2>nul
-if errorlevel 1 (
-    where memurai >nul 2>nul
-    if errorlevel 1 (
-        if exist "%~dp0redis-portable\redis-server.exe" (
-            echo [OK] Portable Redis found from a previous run.
-        ) else (
-            echo Redis not found on PATH -- downloading a portable copy
-            echo automatically ^(no install, no admin rights needed^)...
-            powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0windows\download-redis.ps1"
-            if errorlevel 1 (
-                echo.
-                echo [ERROR] Automatic Redis setup failed ^(likely no internet
-                echo access, or GitHub is unreachable from this network^).
-                echo Install Memurai manually instead:
-                echo   1. Download from https://www.memurai.com/get-memurai
-                echo   2. Its installer registers a background service automatically
-                echo   3. Re-run this script once it's installed
-                echo OR install Docker Desktop and use run-docker.bat instead,
-                echo which does not need Redis on Windows at all.
-                exit /b 1
-            )
-        )
-    )
-)
-echo [OK] Redis/Memurai found.
-echo.
-
 rem --- Backend: virtual environment + dependencies -----------------------
 echo Setting up backend...
 cd backend
@@ -140,10 +111,10 @@ if not exist ".env" (
     (
         echo ENVIRONMENT=development
         echo DATABASE_URL=sqlite+aiosqlite:///./dev.db
-        echo REDIS_URL=redis://localhost:6379/0
+        echo REDIS_MODE=memory
         echo JWT_SECRET_KEY=!JWTKEY!
         echo ENCRYPTION_KEY=!ENCKEY!
-        echo CORS_ORIGINS=["http://localhost:5173","http://localhost:8080"]
+        echo CORS_ORIGINS=["http://localhost:5173"]
     ) > .env
     echo [OK] backend\.env created. Keep this file private -- it has real secrets in it.
 ) else (
@@ -168,15 +139,13 @@ if errorlevel 1 (
     echo SQLite:
     echo   !DATABASE_URL!
     echo.
-    echo This script only ever sets up the SQLite path -- it never installs
-    echo a MySQL driver, so migrations will fail no matter what. This is
-    echo almost always a leftover .env from an earlier attempt, not a
-    echo deliberate choice.
+    echo This app supports SQLite only, so migrations would fail no matter
+    echo what. This is almost always a leftover .env from an earlier
+    echo attempt (or a copy of an outdated example), not a deliberate
+    echo choice.
     echo.
     echo Fix: delete backend\.env and run this script again -- it will
-    echo generate a correct one automatically. If you specifically WANT
-    echo MySQL, use run-docker.bat instead, which installs the MySQL
-    echo driver too.
+    echo generate a correct one automatically.
     echo.
     cd ..
     exit /b 1
@@ -226,31 +195,6 @@ exit /b 0
 :LAUNCH
 echo Starting Pharmacy ERP...
 echo.
-
-where redis-server >nul 2>nul
-if not errorlevel 1 (
-    netstat -an | findstr "6379" | findstr "LISTENING" >nul 2>nul
-    if errorlevel 1 (
-        echo Starting Redis...
-        start "Pharmacy ERP - Redis" /min redis-server
-        timeout /t 2 /nobreak >nul
-    ) else (
-        echo [OK] Redis is already running.
-    )
-) else if exist "%~dp0redis-portable\redis-server.exe" (
-    netstat -an | findstr "6379" | findstr "LISTENING" >nul 2>nul
-    if errorlevel 1 (
-        echo Starting the portable Redis downloaded during setup...
-        start "Pharmacy ERP - Redis" /min "%~dp0redis-portable\redis-server.exe"
-        timeout /t 2 /nobreak >nul
-    ) else (
-        echo [OK] Redis is already running.
-    )
-) else (
-    echo [INFO] redis-server not on PATH -- assuming Memurai is running as a
-    echo Windows service in the background. If the backend window below
-    echo shows connection errors, that assumption was wrong.
-)
 
 echo Starting backend ^(new window^)...
 start "Pharmacy ERP - Backend" cmd /k "%~dp0backend\start-backend.bat"

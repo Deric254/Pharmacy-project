@@ -68,15 +68,19 @@ class InMemoryPubSub:
         """
         Matches real redis-py's PubSub.get_message(): waits up to
         `timeout` seconds for the next message, returning None on
-        timeout rather than blocking forever. Needed alongside listen()
-        because some call sites poll for one message at a time (e.g.
-        tests asserting a specific event fired) instead of iterating
-        an unbounded stream.
+        timeout rather than blocking forever -- and a timeout of 0
+        (the default) is a poll that returns at once, message or not.
+        Needed alongside listen() because some call sites poll for one
+        message at a time (e.g. tests asserting a specific event
+        fired) instead of iterating an unbounded stream.
         """
         while True:
             try:
-                message = await asyncio.wait_for(self._queue.get(), timeout=timeout or None)
-            except TimeoutError:
+                if timeout > 0:
+                    message = await asyncio.wait_for(self._queue.get(), timeout=timeout)
+                else:
+                    message = self._queue.get_nowait()
+            except (TimeoutError, asyncio.QueueEmpty):
                 return None
             if ignore_subscribe_messages and message.get("type") == "subscribe":
                 continue

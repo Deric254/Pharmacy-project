@@ -15,7 +15,10 @@ import json
 from datetime import date
 
 import httpx
+import pytest
 from fastapi import HTTPException
+from sqlalchemy import func, select, text
+from sqlalchemy.exc import IntegrityError
 
 from app.core.database import AsyncSessionLocal
 from app.core.events import CHANNEL
@@ -24,7 +27,9 @@ from app.core.security import decrypt_bytes, encrypt_bytes
 from app.models.backup import BackupOAuthToken
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
+from app.models.user import User
 from app.services.backup.base import BackupProvider, BackupProviderError
+from app.services.backup.dump_restore import dump_all_tables, restore_all_tables
 from app.services.backup.google_drive import GoogleDriveBackupProvider
 from app.services.backup_service import BackupService
 
@@ -415,6 +420,124 @@ class TestRestoreBackup:
             # column at all.
             assert row[0] == 0
             assert row[1] is None
+
+
+class TestRestoreKeepsForeignKeysEnforced:
+    """
+    restore_all_tables switches FK enforcement off while it wipes and
+    reinserts every table. A Session does not keep one connection across
+    its commit, so switching it back on afterwards from inside the
+    restore lands on a *different* pooled connection and leaves the one
+    that was switched off in service without enforcement -- silently,
+    once the pool holds more than one connection. The check therefore
+    has to look at several connections at once.
+    """
+
+    @staticmethod
+    async def _pragma_on_three_distinct_connections() -> list[int]:
+        # Three sessions open at the same time necessarily hold three
+        # different connections from the pool.
+        sessions = [AsyncSessionLocal() for _ in range(3)]
+        try:
+            return [
+                int((await session.execute(text("PRAGMA foreign_keys"))).scalar_one())
+                for session in sessions
+            ]
+        finally:
+            for session in sessions:
+                await session.close()
+
+    async def test_no_pooled_connection_is_left_without_enforcement_after_a_restore(
+        self, owner_user
+    ):
+        assert await self._pragma_on_three_distinct_connections() == [1, 1, 1]
+        async with AsyncSessionLocal() as db:
+            dump = await dump_all_tables(db)
+        async with AsyncSessionLocal() as db:
+            await restore_all_tables(db, dump)
+
+        assert await self._pragma_on_three_distinct_connections() == [1, 1, 1]
+
+    async def test_enforcement_stays_on_and_data_is_kept_after_a_failed_restore(self, owner_user):
+        assert await self._pragma_on_three_distinct_connections() == [1, 1, 1]
+        async with AsyncSessionLocal() as db:
+            dump = await dump_all_tables(db)
+        # A user row missing every NOT NULL column makes the reinsert fail
+        # after the tables were already emptied.
+        dump["users"] = [{"id": 999}]
+
+        async with AsyncSessionLocal() as db:
+            with pytest.raises(IntegrityError):
+                await restore_all_tables(db, dump)
+
+        assert await self._pragma_on_three_distinct_connections() == [1, 1, 1]
+        async with AsyncSessionLocal() as db:
+            surviving = (await db.execute(select(func.count()).select_from(User))).scalar_one()
+        assert surviving == 1  # the failed restore rolled back; nothing was lost
+
+
+class TestRestoringAnOlderBackupKeepsNewerPermissions:
+    """
+    Permissions are seeded by migrations, and alembic will not re-run one
+    on a database it already considers up to date. A restore that wiped
+    the permission table and reinserted an older backup's copy would lock
+    every role -- the owner included -- out of any feature added since,
+    with no way back short of editing the database by hand.
+    """
+
+    NEWER_PERMISSION = "batches.correct_expiry"
+
+    @staticmethod
+    async def _grants_and_catalog(code: str) -> tuple[set[int], int]:
+        async with AsyncSessionLocal() as db:
+            granted_to = {
+                row.role_id
+                for row in (
+                    await db.execute(
+                        text(
+                            "SELECT rp.role_id FROM role_permissions rp "
+                            "JOIN permissions p ON p.id = rp.permission_id WHERE p.code = :code"
+                        ),
+                        {"code": code},
+                    )
+                ).all()
+            }
+            in_catalog = (
+                await db.execute(
+                    text("SELECT count(*) FROM permissions WHERE code = :code"), {"code": code}
+                )
+            ).scalar_one()
+        return granted_to, int(in_catalog)
+
+    async def test_a_permission_added_after_the_backup_survives_with_its_grants(self, owner_user):
+        async with AsyncSessionLocal() as db:
+            current = await dump_all_tables(db)
+        permission_ids = {row["code"]: row["id"] for row in current["permissions"]}
+        role_ids = {row["name"]: row["id"] for row in current["roles"]}
+        newer_id = permission_ids[self.NEWER_PERMISSION]
+        granted_before, _ = await self._grants_and_catalog(self.NEWER_PERMISSION)
+        assert granted_before  # the fixture roles do hold it
+
+        # An older backup: it predates the permission, and in it the shop
+        # had already taken sales.create away from the Employee role.
+        employee_sales_grant = (role_ids["Employee"], permission_ids["sales.create"])
+        older = dict(current)
+        older["permissions"] = [r for r in current["permissions"] if r["id"] != newer_id]
+        older["role_permissions"] = [
+            g
+            for g in current["role_permissions"]
+            if g["permission_id"] != newer_id
+            and (g["role_id"], g["permission_id"]) != employee_sales_grant
+        ]
+
+        async with AsyncSessionLocal() as db:
+            await restore_all_tables(db, older)
+
+        granted_after, in_catalog = await self._grants_and_catalog(self.NEWER_PERMISSION)
+        assert in_catalog == 1  # the catalog row was not wiped
+        assert granted_after == granted_before  # and its grants came back
+        employee_still_has_sales, _ = await self._grants_and_catalog("sales.create")
+        assert role_ids["Employee"] not in employee_still_has_sales  # the backup's own choice wins
 
 
 class TestListBackups:

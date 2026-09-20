@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.database import get_db
-from app.core.rbac import get_current_user, require_permission
+from app.core.rbac import get_authenticated_user, get_current_user, require_permission
 from app.core.redis_client import redis_client
 from app.core.security import decode_token
 from app.models.user import User
@@ -149,7 +149,7 @@ async def admin_reset_password(
 @router.post("/change-password", status_code=204)
 async def change_password(
     payload: ChangePasswordRequest,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(get_authenticated_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> None:
     await AuthService(db).change_own_password(
@@ -158,7 +158,9 @@ async def change_password(
 
 
 @router.get("/me", response_model=UserOut)
-async def read_current_user(current_user: Annotated[User, Depends(get_current_user)]) -> UserOut:
+async def read_current_user(
+    current_user: Annotated[User, Depends(get_authenticated_user)],
+) -> UserOut:
     return UserOut(
         id=current_user.id,
         full_name=current_user.full_name,

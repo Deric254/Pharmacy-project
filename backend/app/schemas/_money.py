@@ -46,9 +46,8 @@ PositiveMoney = Annotated[float, AfterValidator(_must_be_finite), Field(gt=0, le
 # float: SQLite's INTEGER column is a signed 64-bit value, and a large
 # enough int (confirmed with a 21-digit qty_received) raises
 # `OverflowError: Python int too large to convert to SQLite INTEGER`
-# at the database layer -- a 500, not a clean validation error, and
-# on MySQL/production the failure mode would differ again rather than
-# be a predictable 422 either way. No real pharmacy transaction is
+# at the database layer -- a 500, not a clean validation error. No
+# real pharmacy transaction is
 # anywhere near a billion units; this ceiling exists purely to keep
 # "clearly absurd input" from ever reaching the database at all.
 MAX_QUANTITY = 1_000_000_000

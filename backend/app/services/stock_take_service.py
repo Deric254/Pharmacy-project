@@ -113,6 +113,22 @@ class StockTakeService:
     ) -> StockTakeItemOut:
         _, item = await self._load_open_item(stock_take_id, item_id)
 
+        if item.approved_at is not None:
+            if item.physical_qty != item.expected_qty:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Item is already approved and its variance applied to stock; "
+                        "it cannot be recounted. Use a stock adjustment instead."
+                    ),
+                )
+            # A matching count applied nothing to stock, so a recount can
+            # safely start over -- and its new variance, if any, must go
+            # through the normal approval rules instead of inheriting the
+            # earlier matching count's approval.
+            item.approved_by_user_id = None
+            item.approved_at = None
+
         variance = payload.physical_qty - item.expected_qty
         if variance != 0 and payload.reason is None:
             raise HTTPException(

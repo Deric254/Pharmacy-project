@@ -180,12 +180,25 @@ class InventoryService:
                 .where(
                     MedicineBatch.id == payload.batch_id,
                     MedicineBatch.qty_remaining + payload.quantity_delta >= 0,
+                    # A batch under an open stock take must not move mid-count:
+                    # the count later overwrites qty_remaining with what was
+                    # physically counted, so an adjustment made in between
+                    # would be ledgered twice (here, and as that variance).
+                    MedicineBatch.locked_by_stock_take_id.is_(None),
                 )
                 .values(qty_remaining=MedicineBatch.qty_remaining + payload.quantity_delta)
             ),
         )
         if result.rowcount == 0:
-            refreshed = await self.db.get(MedicineBatch, payload.batch_id)
+            refreshed = await self.db.get(MedicineBatch, payload.batch_id, populate_existing=True)
+            if refreshed is not None and refreshed.locked_by_stock_take_id is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Batch {batch.batch_number} is locked by an open stock take "
+                        "and cannot be adjusted right now."
+                    ),
+                )
             current_qty = refreshed.qty_remaining if refreshed is not None else 0
             raise HTTPException(
                 status_code=400,

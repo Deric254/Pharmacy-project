@@ -36,7 +36,9 @@ class User(Base):
 
     # Null means never accepted. Every account -- including the very
     # first owner created during setup -- must accept before reaching
-    # the rest of the app, gated the same way must_change_password is.
+    # the rest of the app. This gate lives in the UI (see RequireAuth in
+    # the frontend); unlike must_change_password it is not enforced on
+    # the API.
     terms_accepted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     @property

@@ -59,6 +59,18 @@ async def verify_password(plain_password: str, hashed_password: str) -> bool:
     return await asyncio.to_thread(_verify)
 
 
+# Hash of a throwaway secret nobody knows. A login or password reset that
+# names an account which doesn't exist (or has nothing to verify against)
+# verifies against this instead, so the request costs the same ~200ms as
+# a real check and its response time can't reveal which usernames exist.
+_UNKNOWN_ACCOUNT_HASH = _hasher.hash(base64.b64encode(os.urandom(16)).decode())
+
+
+async def verify_password_for_missing_account(plain_password: str) -> None:
+    """Spends the time of a real verification; the outcome is irrelevant."""
+    await verify_password(plain_password, _UNKNOWN_ACCOUNT_HASH)
+
+
 # ---- JWT tokens -----------------------------------------------------------
 
 TokenType = Literal["access", "refresh"]

@@ -1,9 +1,11 @@
 """
 RBAC enforcement.
 
-`get_current_user` decodes the JWT and loads the user (with role +
-permissions eager-loaded). `require_permission(...)` is a dependency
-factory used on every protected route:
+`get_authenticated_user` decodes the JWT and loads the user (with role +
+permissions eager-loaded). `get_current_user` builds on it and also
+refuses anyone still on a temporary password, so that credential can
+only ever be used to set a real one. `require_permission(...)` is a
+dependency factory used on every protected route:
 
     @router.post("/sales", dependencies=[Depends(require_permission("sales.create"))])
 
@@ -29,10 +31,16 @@ from app.models.user import User
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 
-async def get_current_user(
+async def get_authenticated_user(
     token: Annotated[str, Depends(oauth2_scheme)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> User:
+    """
+    Authenticates the bearer token and nothing more. Only the two routes
+    the forced password-change screen needs (`/auth/me`,
+    `/auth/change-password`) use this directly; everything else goes
+    through get_current_user below.
+    """
     credentials_error = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -56,6 +64,17 @@ async def get_current_user(
     user = result.scalar_one_or_none()
     if user is None:
         raise credentials_error
+    return user
+
+
+async def get_current_user(
+    user: Annotated[User, Depends(get_authenticated_user)],
+) -> User:
+    if user.must_change_password:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You must change your temporary password before you can continue.",
+        )
     return user
 
 

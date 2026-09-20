@@ -36,7 +36,7 @@ Thumbs.db
 *.db-wal
 backups/
 logs/
-mysql_data/
 
-# Downloaded automatically by windows/download-redis.ps1 -- never committed
-redis-portable/
+# Playwright output
+electron/test-results/
+electron/playwright-report/

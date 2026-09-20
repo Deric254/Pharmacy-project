@@ -270,11 +270,12 @@ class AIAssistantService:
         send as "context", which could be stale or spoofed. Reuses
         the exact same KPI computation the dashboard uses (same
         source of truth, same accuracy guarantees, nothing
-        duplicated), including the same profit-visibility rule: a
-        user without reports.view_profit gets no profit numbers
-        here either, matching the dashboard exactly rather than
-        accidentally leaking profit into an AI answer through a
-        wider door than the dashboard itself allows.
+        duplicated), including the same visibility rules: a user
+        without reports.view gets nothing here but their own name,
+        and one without reports.view_profit gets no profit numbers,
+        matching the dashboard exactly rather than accidentally
+        leaking figures into an AI answer through a wider door than
+        the dashboard itself allows.
 
         viewed_start/viewed_end let the assistant discuss whatever
         range the person is actually looking at on the Dashboard
@@ -298,6 +299,13 @@ class AIAssistantService:
         range_start = viewed_start or today
         range_end = viewed_end or today
         user_permission_codes = {p.code for p in user.role.permissions}
+        if "reports.view" not in user_permission_codes:
+            # Revenue, transaction counts, top products and named top
+            # customers are what the Dashboard and Reports pages show, and
+            # those need reports.view -- ai.use alone (a cashier) must not
+            # read them back through the assistant, a wider door than the
+            # pages themselves.
+            return {"person_asking_name": user.full_name}
         include_profit = "reports.view_profit" in user_permission_codes
 
         try:
@@ -369,37 +377,30 @@ class AIAssistantService:
         except Exception:  # noqa: BLE001 - enrichment only, never load-bearing
             pass
 
-        # Gated on reports.view specifically, not just ai.use -- a
-        # cashier who can ask the assistant questions at all but
-        # cannot open the Reports page's Fast/Slow Movers or Stock
-        # Runway tabs must not get their contents through this side
-        # channel either. Matches exactly how those two REST endpoints
-        # are gated (see app/api/v1/reports.py).
-        if "reports.view" in user_permission_codes:
-            try:
-                co_occurrence = await report_service.product_co_occurrence(days=90, limit=1)
-                if co_occurrence.pairs:
-                    top_pair = co_occurrence.pairs[0]
-                    context["most_frequently_bought_together"] = (
-                        f"{top_pair.product_a_name} + {top_pair.product_b_name} "
-                        f"({top_pair.percent_of_a_sales:.0f}% of {top_pair.product_a_name} "
-                        "sales also include the other)"
-                    )
-            except Exception:  # noqa: BLE001 - enrichment only, never load-bearing
-                pass
+        try:
+            co_occurrence = await report_service.product_co_occurrence(days=90, limit=1)
+            if co_occurrence.pairs:
+                top_pair = co_occurrence.pairs[0]
+                context["most_frequently_bought_together"] = (
+                    f"{top_pair.product_a_name} + {top_pair.product_b_name} "
+                    f"({top_pair.percent_of_a_sales:.0f}% of {top_pair.product_a_name} "
+                    "sales also include the other)"
+                )
+        except Exception:  # noqa: BLE001 - enrichment only, never load-bearing
+            pass
 
-            try:
-                seasonal = await report_service.seasonal_trends(days=730)
-                if seasonal.has_sufficient_history and seasonal.entries:
-                    top_seasonal = seasonal.entries[0]
-                    context["top_seasonal_pattern"] = (
-                        f"{top_seasonal.name} sells most in "
-                        f"{_MONTH_NAMES[top_seasonal.month - 1]} "
-                        f"({top_seasonal.total_quantity_sold} units, summed across every "
-                        "year on record)"
-                    )
-            except Exception:  # noqa: BLE001 - enrichment only, never load-bearing
-                pass
+        try:
+            seasonal = await report_service.seasonal_trends(days=730)
+            if seasonal.has_sufficient_history and seasonal.entries:
+                top_seasonal = seasonal.entries[0]
+                context["top_seasonal_pattern"] = (
+                    f"{top_seasonal.name} sells most in "
+                    f"{_MONTH_NAMES[top_seasonal.month - 1]} "
+                    f"({top_seasonal.total_quantity_sold} units, summed across every "
+                    "year on record)"
+                )
+        except Exception:  # noqa: BLE001 - enrichment only, never load-bearing
+            pass
 
         return context
 

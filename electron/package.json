@@ -7,7 +7,8 @@
   "scripts": {
     "start": "electron .",
     "build:win": "electron-builder --win",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:unit": "node --test \"tests/unit/*.unit.js\""
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
@@ -20,6 +21,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "urlPolicy.js",
       "package.json"
     ],
     "extraResources": [

@@ -150,3 +150,33 @@ class TestPubSub:
         )
         assert result_a["data"] == "broadcast"
         assert result_b["data"] == "broadcast"
+
+
+class TestGetMessagePolling:
+    """
+    Real redis-py treats get_message(timeout=0) as a poll that returns at
+    once, message or not. The fake once turned a zero timeout into "wait
+    forever", so a bare get_message() hung instead of returning None.
+    """
+
+    async def test_the_default_poll_returns_none_at_once_when_nothing_is_waiting(self, client):
+        pubsub = client.pubsub()
+        await pubsub.subscribe("channel")
+
+        message = await asyncio.wait_for(
+            pubsub.get_message(ignore_subscribe_messages=True), timeout=1
+        )
+
+        assert message is None
+
+    async def test_the_default_poll_returns_a_message_that_is_already_queued(self, client):
+        pubsub = client.pubsub()
+        await pubsub.subscribe("channel")
+        await client.publish("channel", "hello")
+
+        message = await asyncio.wait_for(
+            pubsub.get_message(ignore_subscribe_messages=True), timeout=1
+        )
+
+        assert message is not None
+        assert message["data"] == "hello"

@@ -23,8 +23,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.business_time import local_day_bounds_utc
 from app.core.events import SaleCompletedEvent, publish
+from app.core.money_types import from_cents, to_cents
 from app.models.audit_log import AuditLog
 from app.models.customer import Customer
+from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
 from app.models.sale import Payment, Sale, SaleItem
 from app.models.stock_movement import MovementType
@@ -73,50 +75,22 @@ class SaleService:
             if payload.customer_id is not None:
                 await self._validate_customer_exists(payload.customer_id)
 
-            subtotal = 0.0
-            all_allocations: list[tuple[int, Allocation]] = []  # (product_id, allocation)
-
-            for item in payload.items:
-                product = products_by_id[item.product_id]
-                allocations = await select_batches_fefo(
-                    self.db, item.product_id, item.quantity, lock=True
-                )
-                for batch, qty in allocations:
-                    # selling_price is required on every batch (migration
-                    # 0036) -- no product-level fallback to read any more.
-                    unit_price = batch.selling_price
-                    subtotal += unit_price * qty
-                    if unit_price < batch.cost_price:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=(
-                                f'"{product.name}" (batch {batch.batch_number}, '
-                                f"exp {batch.expiry_date.isoformat()}) would sell at a loss: "
-                                f"selling price {unit_price:.2f} is below this batch's cost "
-                                f"{batch.cost_price:.2f}. This is the batch FEFO would sell "
-                                "next for this product -- raise its selling price in "
-                                "Inventory, or adjust its cost, before selling this line."
-                            ),
-                        )
-                for allocation in allocations:
-                    all_allocations.append((item.product_id, allocation))
-
-            total_amount = subtotal - payload.discount_amount
-            if payload.discount_amount > subtotal:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"Discount ({payload.discount_amount:.2f}) cannot exceed "
-                        f"the subtotal ({subtotal:.2f})."
-                    ),
-                )
-            self._validate_payment_total(payload, total_amount)
+            subtotal_cents, all_allocations = await self._allocate_cart(
+                [(item.product_id, item.quantity) for item in payload.items],
+                products_by_id,
+                lock=True,
+            )
+            discount_cents = to_cents(payload.discount_amount)
+            self._reject_oversized_discount(discount_cents, subtotal_cents)
+            total_cents = subtotal_cents - discount_cents
+            self._validate_payment_total(payload, total_cents)
+            total_amount = from_cents(total_cents)
 
             sale = Sale(
                 cashier_user_id=cashier.id,
                 customer_id=payload.customer_id,
-                subtotal=subtotal,
-                discount_amount=payload.discount_amount,
+                subtotal=from_cents(subtotal_cents),
+                discount_amount=from_cents(discount_cents),
                 total_amount=total_amount,
                 idempotency_key=payload.idempotency_key,
             )
@@ -135,7 +109,7 @@ class SaleService:
                         quantity=qty,
                         unit_price=unit_price,
                         unit_cost=batch.cost_price,
-                        line_total=unit_price * qty,
+                        line_total=from_cents(to_cents(unit_price) * qty),
                     )
                 )
 
@@ -177,14 +151,11 @@ class SaleService:
 
             await self.db.commit()
         except InsufficientStockError as exc:
+            # Built before the rollback: rolling back expires every loaded
+            # object, and reading product.name afterwards would lazy-load.
+            error = self._insufficient_stock_http_error(exc, products_by_id)
             await self.db.rollback()
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"Insufficient stock for product {exc.product_id}: "
-                    f"requested {exc.requested}, only {exc.available} available"
-                ),
-            ) from exc
+            raise error from exc
         except IntegrityError:
             # The UNIQUE constraint on idempotency_key caught a genuine
             # race the check at the top of this method missed -- two
@@ -231,32 +202,89 @@ class SaleService:
         return SaleOut.model_validate(sale)
 
     async def quote_sale(self, payload: SaleQuoteRequest) -> SaleQuoteOut:
-        # Return value unused here -- called only to 404 on any
-        # missing/inactive product before quoting proceeds.
-        await self._load_active_products([item.product_id for item in payload.items])
-        subtotal = 0.0
-        for item in payload.items:
-            allocations = await select_batches_fefo(
-                self.db, item.product_id, item.quantity, lock=False
+        products_by_id = await self._load_active_products(
+            [item.product_id for item in payload.items]
+        )
+        try:
+            subtotal_cents, _ = await self._allocate_cart(
+                [(item.product_id, item.quantity) for item in payload.items],
+                products_by_id,
+                lock=False,
             )
-            for batch, quantity in allocations:
+        except InsufficientStockError as exc:
+            raise self._insufficient_stock_http_error(exc, products_by_id) from exc
+        discount_cents = to_cents(payload.discount_amount)
+        self._reject_oversized_discount(discount_cents, subtotal_cents)
+        return SaleQuoteOut(
+            subtotal=from_cents(subtotal_cents),
+            discount_amount=from_cents(discount_cents),
+            total_amount=from_cents(subtotal_cents - discount_cents),
+        )
+
+    async def _allocate_cart(
+        self,
+        lines: list[tuple[int, int]],
+        products_by_id: dict[int, Product],
+        *,
+        lock: bool,
+    ) -> tuple[int, list[tuple[int, Allocation]]]:
+        """
+        Prices a cart exactly as checkout will sell it: FEFO batch by
+        batch, each at its own selling price, in integer cents. Both
+        checkout and the quote go through here, so the two can never
+        disagree about a total or about which lines may be sold.
+        Returns (subtotal_cents, [(product_id, allocation), ...]).
+        """
+        subtotal_cents = 0
+        all_allocations: list[tuple[int, Allocation]] = []
+        for product_id, quantity in lines:
+            for batch, qty in await select_batches_fefo(self.db, product_id, quantity, lock=lock):
+                self._reject_sale_below_cost(products_by_id[product_id], batch)
                 # selling_price is required on every batch (migration
                 # 0036) -- no product-level fallback to read any more.
-                unit_price = batch.selling_price
-                subtotal += unit_price * quantity
-        if payload.discount_amount > subtotal:
+                subtotal_cents += to_cents(batch.selling_price) * qty
+                all_allocations.append((product_id, (batch, qty)))
+        return subtotal_cents, all_allocations
+
+    @staticmethod
+    def _reject_sale_below_cost(product: Product, batch: MedicineBatch) -> None:
+        if batch.selling_price < batch.cost_price:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"Discount ({payload.discount_amount:.2f}) cannot exceed "
-                    f"the subtotal ({subtotal:.2f})."
+                    f'"{product.name}" (batch {batch.batch_number}, '
+                    f"exp {batch.expiry_date.isoformat()}) would sell at a loss: "
+                    f"selling price {batch.selling_price:.2f} is below this batch's cost "
+                    f"{batch.cost_price:.2f}. This is the batch FEFO would sell "
+                    "next for this product -- raise its selling price in "
+                    "Inventory, or adjust its cost, before selling this line."
                 ),
             )
-        return SaleQuoteOut(
-            subtotal=subtotal,
-            discount_amount=payload.discount_amount,
-            total_amount=subtotal - payload.discount_amount,
+
+    @staticmethod
+    def _reject_oversized_discount(discount_cents: int, subtotal_cents: int) -> None:
+        if discount_cents > subtotal_cents:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Discount ({from_cents(discount_cents):.2f}) cannot exceed "
+                    f"the subtotal ({from_cents(subtotal_cents):.2f})."
+                ),
+            )
+
+    @staticmethod
+    def _insufficient_stock_http_error(
+        exc: InsufficientStockError, products_by_id: dict[int, Product]
+    ) -> HTTPException:
+        product = products_by_id.get(exc.product_id)
+        name = f'"{product.name}"' if product is not None else f"product {exc.product_id}"
+        detail = (
+            f"Insufficient stock for {name}: requested {exc.requested}, "
+            f"only {exc.available} available"
         )
+        if exc.held_by_stock_take:
+            detail += f" ({exc.held_by_stock_take} more held by a stock take in progress)"
+        return HTTPException(status_code=409, detail=detail)
 
     async def _find_by_idempotency_key(self, key: str) -> Sale | None:
         result = await self.db.execute(select(Sale).where(Sale.idempotency_key == key))
@@ -411,11 +439,13 @@ class SaleService:
             raise HTTPException(status_code=404, detail=f"Customer {customer_id} not found")
 
     @staticmethod
-    def _validate_payment_total(payload: SaleCreate, total_amount: float) -> None:
-        paid = sum(p.amount for p in payload.payments)
-        # Small epsilon for float rounding, never exact equality on money math.
-        if abs(paid - total_amount) > 0.01:
+    def _validate_payment_total(payload: SaleCreate, total_cents: int) -> None:
+        paid_cents = sum(to_cents(p.amount) for p in payload.payments)
+        if paid_cents != total_cents:
             raise HTTPException(
                 status_code=400,
-                detail=f"Payment total ({paid:.2f}) does not match sale total ({total_amount:.2f})",
+                detail=(
+                    f"Payment total ({from_cents(paid_cents):.2f}) does not match "
+                    f"sale total ({from_cents(total_cents):.2f})"
+                ),
             )

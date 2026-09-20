@@ -281,6 +281,45 @@ class TestAdjustments:
             assert "DAMAGED" in adjustment_rows[0].reason
             assert "Water damage" in adjustment_rows[0].reason
 
+    async def test_a_batch_held_by_a_stock_take_cannot_be_adjusted(self, client, owner_user):
+        product_id = await _make_product("Gauze Rolls")
+        batch_id = await _add_batch(product_id, qty=50)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        started = await client.post(
+            "/api/v1/stock-takes", json={"product_ids": [product_id]}, headers=headers
+        )
+        assert started.status_code == 201
+
+        r = await client.post(
+            "/api/v1/inventory/adjustments",
+            json={"batch_id": batch_id, "quantity_delta": -8, "reason": "DAMAGED"},
+            headers=headers,
+        )
+
+        assert r.status_code == 409
+        assert "locked by an open stock take" in r.json()["detail"]
+        async with AsyncSessionLocal() as db:
+            from sqlalchemy import select
+
+            batch = (
+                await db.execute(select(MedicineBatch).where(MedicineBatch.id == batch_id))
+            ).scalar_one()
+            ledger = (
+                (
+                    await db.execute(
+                        select(StockMovement).where(
+                            StockMovement.batch_id == batch_id,
+                            StockMovement.movement_type == MovementType.ADJUSTMENT,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        assert batch.qty_remaining == 50
+        assert ledger == []
+
     async def test_adjustment_cannot_take_batch_negative(self, client, owner_user):
         product_id = await _make_product("Syringes")
         batch_id = await _add_batch(product_id, qty=5)

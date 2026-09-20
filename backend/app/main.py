@@ -132,8 +132,20 @@ def _frontend_shell_response(request_path: str, frontend_dist: Path) -> FileResp
     getting the current file.
     """
     headers = {"Cache-Control": "no-cache"}
+    # The request path is attacker-controlled: a percent-encoded "..%2f"
+    # is decoded before routing, so it must be resolved and confirmed to
+    # still live inside frontend_dist -- otherwise any readable file on
+    # the machine (the SQLite database, secrets.json) could be fetched.
     candidate = frontend_dist / request_path
-    if request_path and candidate.is_file():
+    try:
+        is_servable = (
+            bool(request_path)
+            and candidate.is_file()
+            and candidate.resolve().is_relative_to(frontend_dist.resolve())
+        )
+    except (OSError, ValueError):  # e.g. an embedded NUL byte in the request path
+        is_servable = False
+    if is_servable:
         return FileResponse(candidate, headers=headers)
     # Anything else (/, /pos, /inventory, a hard refresh on a deep
     # React Router route, ...) falls back to the SPA shell, which is
@@ -151,7 +163,17 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await aclose_for_current_loop()
 
 
-app = FastAPI(title=settings.app_name, version=__version__, lifespan=lifespan)
+# The interactive docs and the OpenAPI schema describe every route to
+# anyone who can reach the server, so they exist only outside production.
+_is_production = settings.environment == "production"
+app = FastAPI(
+    title=settings.app_name,
+    version=__version__,
+    lifespan=lifespan,
+    docs_url=None if _is_production else "/docs",
+    redoc_url=None if _is_production else "/redoc",
+    openapi_url=None if _is_production else "/openapi.json",
+)
 
 app.add_middleware(
     CORSMiddleware,

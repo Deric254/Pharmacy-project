@@ -8,9 +8,11 @@ FastAPI at all — services are plain async functions/classes.
 import secrets
 import uuid
 from datetime import UTC, datetime
+from typing import Any, cast
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.redis_client import redis_client
@@ -20,6 +22,7 @@ from app.core.security import (
     decode_token,
     hash_password,
     verify_password,
+    verify_password_for_missing_account,
 )
 from app.models.audit_log import AuditLog
 from app.models.user import User, UserSession
@@ -55,6 +58,9 @@ class AuthService:
             select(User).where(User.username == username, User.is_active.is_(True))
         )
         user = result.scalar_one_or_none()
+
+        if user is None:
+            await verify_password_for_missing_account(password)
 
         if user is None or not await verify_password(password, user.hashed_password):
             await self._record_failed_attempt(rate_limit_key)
@@ -168,8 +174,22 @@ class AuthService:
         if user is None:
             raise credentials_error
 
-        session.revoked_at = func.now()
-        self.db.add(session)
+        # Claimed atomically: the WHERE clause is checked against the row
+        # at the instant the UPDATE runs, so of two concurrent redemptions
+        # of the same token exactly one wins. The loser presented an
+        # already-redeemed token, which is treated as reuse -- a plain
+        # read-then-write here would let both succeed.
+        claim = cast(
+            "CursorResult[Any]",
+            await self.db.execute(
+                update(UserSession)
+                .where(UserSession.id == session.id, UserSession.revoked_at.is_(None))
+                .values(revoked_at=func.now())
+            ),
+        )
+        if claim.rowcount == 0:
+            await self._revoke_all_sessions_for_user(int(user_id), reason="refresh_token_reuse")
+            raise credentials_error
         return await self.issue_tokens(user, device_label=device_label, ip_address=ip_address)
 
     async def _revoke_all_sessions_for_user(self, user_id: int, reason: str) -> None:
@@ -242,6 +262,7 @@ class AuthService:
         )
         if user is None or user.security_answer_hash is None:
             # Deliberately generic error — don't reveal whether the username exists.
+            await verify_password_for_missing_account(security_answer.strip())
             raise generic_error
 
         # Registration strips the answer before hashing it (see

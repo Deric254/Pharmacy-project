@@ -1,8 +1,8 @@
 """
-Shared pytest fixtures. Tests run against a throwaway SQLite DB by
-default (fast, no external services needed) — CI additionally runs the
-same suite against real MySQL (see ci.yml) since SQLite doesn't enforce
-everything MySQL does (e.g. some FK/constraint behaviors differ).
+Shared pytest fixtures. Tests run against a throwaway SQLite DB (fast, no
+external services needed). Its schema is built straight from the models;
+test_migrations_match_models.py separately proves the Alembic migrations
+produce the same schema.
 """
 
 import os

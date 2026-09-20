@@ -270,6 +270,7 @@ export function SetupPage({ onComplete }: { onComplete: () => void }) {
               value={securityAnswer}
               onChange={(e) => setSecurityAnswer(e.target.value)}
               required
+              minLength={4}
               className="mt-1 w-full border border-rule bg-paper px-3 py-2 text-ink outline-none focus-visible:border-brass"
             />
           </div>

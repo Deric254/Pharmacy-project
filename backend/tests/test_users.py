@@ -4,6 +4,11 @@ to create any user via the API at all, only reset an existing user's
 password. These tests cover the gap that closed.
 """
 
+import pytest
+from pydantic import ValidationError
+
+from app.schemas.setup import FirstUserCreate
+
 
 class TestCreateUser:
     async def test_requires_users_manage_permission(self, client, employee_user):
@@ -207,3 +212,57 @@ class TestDeactivateUser:
             f"/api/v1/users/{owner_user.id}", headers={"Authorization": f"Bearer {token}"}
         )
         assert r.status_code == 400
+
+
+class TestSecurityAnswerStrength:
+    """
+    The forgot-password flow lets whoever knows the answer set a new
+    password, so a trivially short answer (measured after stripping, since
+    that is what is stored and compared) must be refused up front.
+    """
+
+    async def _create_with_answer(self, client, seeded_roles, answer: str):
+        login = await client.post(
+            "/api/v1/auth/login", json={"username": "lucy", "password": "S3curePass!"}
+        )
+        return await client.post(
+            "/api/v1/users",
+            json={
+                "full_name": "New Cashier",
+                "username": "newcashier",
+                "password": "SafePass123",
+                "role_id": seeded_roles["Employee"],
+                "security_question": "Test question?",
+                "security_answer": answer,
+            },
+            headers={"Authorization": f"Bearer {login.json()['access_token']}"},
+        )
+
+    async def test_a_one_letter_answer_is_refused(self, client, owner_user, seeded_roles):
+        r = await self._create_with_answer(client, seeded_roles, "a")
+
+        assert r.status_code == 422
+
+    async def test_padding_cannot_stretch_a_short_answer_past_the_minimum(
+        self, client, owner_user, seeded_roles
+    ):
+        r = await self._create_with_answer(client, seeded_roles, "   ab   ")
+
+        assert r.status_code == 422
+
+    async def test_an_answer_of_exactly_the_minimum_length_is_accepted(
+        self, client, owner_user, seeded_roles
+    ):
+        r = await self._create_with_answer(client, seeded_roles, "Rexy")
+
+        assert r.status_code == 201
+
+    def test_the_first_owner_setup_schema_applies_the_same_minimum(self):
+        with pytest.raises(ValidationError):
+            FirstUserCreate(
+                full_name="Owner",
+                username="owner",
+                password="SafePass123",
+                security_question="Test question?",
+                security_answer="abc",
+            )

@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 
-from app.schemas._text import NonBlankName
+from app.schemas._text import NonBlankName, SecurityAnswer
 
 
 class UserCreate(BaseModel):
@@ -14,7 +14,7 @@ class UserCreate(BaseModel):
     password: str = Field(min_length=8)
     role_id: int
     security_question: NonBlankName = Field(min_length=1, max_length=255)
-    security_answer: NonBlankName = Field(min_length=1, max_length=255)
+    security_answer: SecurityAnswer = Field(max_length=255)
 
 
 class UserListItemOut(BaseModel):

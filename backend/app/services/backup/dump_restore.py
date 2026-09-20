@@ -29,6 +29,14 @@ from app.core.database import Base
 # reference goes stale before the update can be applied.
 EXCLUDED_TABLES = frozenset({"backup_logs", "backup_oauth_tokens"})
 
+# Tables that are dumped but never wiped or replaced by a restore. The
+# permission catalog is defined by the app's own migrations (each release
+# that adds a feature adds its permission rows), not by the shop's data --
+# so restoring an older backup must not delete permissions the running app
+# already relies on, and re-running a migration to put them back is not an
+# option (alembic considers the database up to date).
+CODE_DEFINED_TABLES = frozenset({"permissions"})
+
 
 def _restorable_tables() -> list[Table]:
     return [t for t in Base.metadata.sorted_tables if t.name not in EXCLUDED_TABLES]
@@ -112,19 +120,30 @@ async def restore_all_tables(db: AsyncSession, dump: dict[str, list[dict[str, An
     """
     Returns total rows restored across all tables.
 
-    FK checks are temporarily disabled for the duration of this
-    operation, even though SQLite doesn't enforce them by default --
-    excluded tables (backup_logs) still hold live foreign keys into
-    tables being wiped and reinserted here (e.g. users), and this stays
-    correct regardless of whether FK enforcement is ever turned on for
-    SQLite elsewhere in the app later.
+    Roles and their permission grants come back exactly as the backup had
+    them, so the shop's own customizations survive. The one addition: a
+    permission the backup predates (added by a later release) has no grant
+    rows in it, which would silently lock every role -- the owner included
+    -- out of that feature. The current grants for such permissions are
+    therefore carried across to the roles that still exist.
+
+    FK enforcement is switched off for this one transaction: excluded
+    tables (backup_logs) still hold live foreign keys into tables being
+    wiped and reinserted here (e.g. users), which would otherwise fail
+    the delete. It cannot outlive the restore -- database.py re-enables
+    it every time a connection is checked out of the pool, which is the
+    only reliable place to do so (a Session does not keep one connection
+    across the commit, so a PRAGMA issued here afterwards would land on
+    a different one).
     """
-    restorable = _restorable_tables()
+    restorable = [t for t in _restorable_tables() if t.name not in CODE_DEFINED_TABLES]
     tables_by_name = {table.name: table for table in restorable}
 
     await db.execute(text("PRAGMA foreign_keys=OFF"))
 
     try:
+        carried_over_grants = await _grants_for_permissions_the_backup_predates(db, dump)
+
         for table in reversed(restorable):
             await db.execute(table.delete())
 
@@ -136,8 +155,38 @@ async def restore_all_tables(db: AsyncSession, dump: dict[str, list[dict[str, An
             coerced_rows = [_coerce_row_for_table(table, row) for row in rows]
             await db.execute(tables_by_name[table.name].insert(), coerced_rows)
             total_rows += len(coerced_rows)
-    finally:
-        await db.execute(text("PRAGMA foreign_keys=ON"))
 
-    await db.commit()
+        await _reapply_grants(db, dump, carried_over_grants)
+
+        await db.commit()
+    except Exception:
+        await db.rollback()  # undoes the half-done restore
+        raise
+
     return total_rows
+
+
+async def _grants_for_permissions_the_backup_predates(
+    db: AsyncSession, dump: dict[str, list[dict[str, Any]]]
+) -> list[dict[str, Any]]:
+    role_permissions = Base.metadata.tables["role_permissions"]
+    known_to_backup = {row["id"] for row in dump.get("permissions", [])}
+    current = await db.execute(role_permissions.select())
+    return [dict(row._mapping) for row in current.all() if row.permission_id not in known_to_backup]
+
+
+async def _reapply_grants(
+    db: AsyncSession, dump: dict[str, list[dict[str, Any]]], grants: list[dict[str, Any]]
+) -> None:
+    role_ids_in_backup = {row["id"] for row in dump.get("roles", [])}
+    already_granted = {
+        (row["role_id"], row["permission_id"]) for row in dump.get("role_permissions", [])
+    }
+    missing = [
+        grant
+        for grant in grants
+        if grant["role_id"] in role_ids_in_backup
+        and (grant["role_id"], grant["permission_id"]) not in already_granted
+    ]
+    if missing:
+        await db.execute(Base.metadata.tables["role_permissions"].insert(), missing)

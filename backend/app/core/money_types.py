@@ -41,6 +41,34 @@ from sqlalchemy import Integer
 from sqlalchemy.types import TypeDecorator
 
 
+def to_cents(value: float) -> int:
+    """
+    The one definition of "this amount, in whole cents", shared by the
+    column type below and by any service that must compare or add money
+    exactly instead of through float arithmetic.
+
+    Decimal(str(value)) -- not Decimal(value) -- deliberately:
+    Decimal's float constructor reproduces the float's exact binary
+    value (Decimal(0.1) is 0.1000000000000000055511151...), which is
+    precisely the bug this type exists to avoid re-introducing at the
+    conversion boundary. str(float) gives the shortest decimal that
+    round-trips back to the same float, which is what a human actually
+    typed or expects.
+    """
+    cents = (Decimal(str(value)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return int(cents)
+
+
+def from_cents(cents: float) -> float:
+    return float(Decimal(cents) / 100)
+
+
+def prorate_cents(cents: int, numerator: int, denominator: int) -> int:
+    """`cents * numerator / denominator`, rounded half up, without a float in sight."""
+    exact = Decimal(cents) * numerator / denominator
+    return int(exact.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
 class MoneyCents(TypeDecorator[float]):
     impl = Integer
     cache_ok = True
@@ -48,20 +76,12 @@ class MoneyCents(TypeDecorator[float]):
     def process_bind_param(self, value: float | None, dialect: object) -> int | None:
         if value is None:
             return None
-        # Decimal(str(value)) -- not Decimal(value) -- deliberately:
-        # Decimal's float constructor reproduces the float's exact
-        # binary value (Decimal(0.1) is 0.1000000000000000055511151...),
-        # which is precisely the bug this type exists to avoid
-        # re-introducing at the conversion boundary. str(float) gives
-        # the shortest decimal that round-trips back to the same
-        # float, which is what a human actually typed or expects.
-        cents = (Decimal(str(value)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-        return int(cents)
+        return to_cents(value)
 
     def process_result_value(self, value: int | None, dialect: object) -> float | None:
         if value is None:
             return None
-        return float(Decimal(value) / 100)
+        return from_cents(value)
 
     @property
     def python_type(self) -> type[float]:

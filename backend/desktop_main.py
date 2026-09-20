@@ -24,6 +24,7 @@ import contextlib
 import json
 import os
 import secrets
+import sqlite3
 import sys
 import threading
 import time
@@ -39,6 +40,12 @@ from typing import cast
 # The underlying flow was always correct; only the on-screen timing
 # was confusing.
 sys.stdout.reconfigure(line_buffering=True)  # type: ignore[union-attr]
+
+# The desktop app is used only from this machine (Electron and the
+# fallback browser both open http://127.0.0.1), so it listens on the
+# loopback interface only -- binding every interface would expose the
+# whole API to anyone else on the pharmacy's network.
+_BIND_HOST = "127.0.0.1"
 
 
 def _log_stage(data_dir: Path, message: str) -> None:
@@ -78,13 +85,25 @@ def _load_or_create_secrets(data_dir: Path) -> dict[str, str]:
         "jwt_secret_key": secrets.token_hex(32),
         "encryption_key": base64.b64encode(os.urandom(32)).decode(),
     }
-    secrets_file.write_text(json.dumps(generated))
+    _write_file_atomically(secrets_file, json.dumps(generated))
+    return generated
+
+
+def _write_file_atomically(path: Path, content: str) -> None:
+    """
+    Writes to a temporary file beside `path`, then swaps it into place.
+    A crash or power cut mid-write can then never leave a truncated file
+    behind -- and for secrets.json a truncated file would fail json.loads
+    on every later launch, so the app could never start again.
+    """
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(content)
     # Windows has no umask concept the way POSIX does, but on any
     # POSIX system this at least keeps the secrets file from being
     # world-readable if someone ever runs this build there.
     with contextlib.suppress(OSError):
-        secrets_file.chmod(0o600)
-    return generated
+        temporary.chmod(0o600)
+    os.replace(temporary, path)
 
 
 def _configure_environment(data_dir: Path, port: int) -> None:
@@ -112,9 +131,54 @@ def _configure_environment(data_dir: Path, port: int) -> None:
     )
 
 
-def _run_migrations() -> None:
+_SNAPSHOTS_TO_KEEP = 3
+
+
+def _snapshot_before_upgrade(db_path: Path, head_revision: str | None) -> None:
+    """
+    Copies the database aside before an upgrade that will change its
+    schema. SQLite cannot reliably roll back a half-applied migration (it
+    can leave the file part-upgraded, with the recorded revision still
+    old), and an update to the app upgrades the shop's real data on the
+    very next launch -- so this is the only way back if one fails.
+
+    Uses SQLite's own backup API, which produces a consistent copy even
+    while the write-ahead log holds uncommitted-to-file changes. Only the
+    newest few snapshots are kept.
+    """
+    if not db_path.exists():
+        return  # first run: nothing to protect yet
+
+    source = sqlite3.connect(db_path)
+    try:
+        try:
+            row = source.execute("SELECT version_num FROM alembic_version").fetchone()
+        except sqlite3.OperationalError:
+            return  # no version table: a brand-new, still-empty database
+        current_revision = row[0] if row else "none"
+        if current_revision == head_revision:
+            return  # already up to date: no upgrade, no snapshot
+
+        snapshot_dir = db_path.parent / "pre-upgrade-snapshots"
+        snapshot_dir.mkdir(exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        target = snapshot_dir / f"{stamp}-{current_revision}-to-{head_revision}.db"
+        destination = sqlite3.connect(target)
+        try:
+            source.backup(destination)
+        finally:
+            destination.close()
+    finally:
+        source.close()
+
+    for stale in sorted(snapshot_dir.glob("*.db"))[:-_SNAPSHOTS_TO_KEEP]:
+        stale.unlink(missing_ok=True)
+
+
+def _run_migrations(db_path: Path) -> None:
     from alembic import command
     from alembic.config import Config
+    from alembic.script import ScriptDirectory
 
     if getattr(sys, "frozen", False):
         base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
@@ -123,6 +187,7 @@ def _run_migrations() -> None:
 
     alembic_cfg = Config(str(base / "alembic.ini"))
     alembic_cfg.set_main_option("script_location", str(base / "alembic"))
+    _snapshot_before_upgrade(db_path, ScriptDirectory.from_config(alembic_cfg).get_current_head())
     print("Setting up the database (first run may take a few seconds)...")
     command.upgrade(alembic_cfg, "head")
 
@@ -206,7 +271,7 @@ def _port_is_available(port: int) -> bool:
 
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        probe.bind(("0.0.0.0", port))
+        probe.bind((_BIND_HOST, port))
         return True
     except OSError:
         return False
@@ -301,7 +366,7 @@ def main() -> None:
     _log_stage(data_dir, "environment-configured")
 
     _log_stage(data_dir, "migrations-starting")
-    _run_migrations()
+    _run_migrations(data_dir / "pharmacy.db")
     _log_stage(data_dir, "migrations-complete")
 
     import uvicorn
@@ -335,7 +400,7 @@ def main() -> None:
 
     _log_stage(data_dir, "uvicorn-starting")
     try:
-        uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
+        uvicorn.run(app, host=_BIND_HOST, port=port, log_level="warning")
     except OSError as exc:
         if exc.errno in (10048, 98):  # Windows / POSIX "address already in use"
             print()

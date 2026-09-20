@@ -3,7 +3,7 @@ Config service.
 
 Read path: Redis cache first (this table is read on nearly every
 screen load — receipts, dashboard header, login page branding — so it
-must never hit MySQL per-request). Cache populated on first read and
+must never hit the database per-request). Cache populated on first read and
 refreshed on every write.
 
 Write path: one DB transaction, then cache overwritten (not just

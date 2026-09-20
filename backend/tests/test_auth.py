@@ -5,9 +5,16 @@ smoke testing — that's exactly why it's captured here permanently
 instead of only being verified once by hand.
 """
 
+import pytest
+from fastapi import HTTPException
+from sqlalchemy import select
+
+from app.api.v1.websocket import _authenticate
+from app.core import security as security_module
 from app.core.database import AsyncSessionLocal
-from app.core.security import hash_password
-from app.models.user import User
+from app.core.security import create_token, hash_password
+from app.models.user import User, UserSession
+from app.services.auth_service import AuthService
 
 
 async def _login(client, username: str, password: str) -> str:
@@ -211,6 +218,41 @@ class TestRefreshTokenRotation:
     async def test_logout_with_garbage_cookie_still_succeeds(self, client, owner_user):
         r = await client.post("/api/v1/auth/logout", cookies={"refresh_token": "not-a-real-jwt"})
         assert r.status_code == 204
+
+
+class TestRefreshTokenRedemptionIsAtomic:
+    async def test_of_two_racing_redemptions_only_one_wins(self, client, owner_user, monkeypatch):
+        login = await client.post(
+            "/api/v1/auth/login", json={"username": "lucy", "password": "S3curePass!"}
+        )
+        refresh_token = login.cookies["refresh_token"]
+
+        async with AsyncSessionLocal() as db_a:
+            real_execute = db_a.execute
+            racing = False
+
+            async def execute_then_let_a_rival_redeem_first(*args, **kwargs):
+                nonlocal racing
+                result = await real_execute(*args, **kwargs)
+                if not racing:
+                    racing = True  # right after A read the session, before A claims it
+                    async with AsyncSessionLocal() as db_b:
+                        await AuthService(db_b).rotate_refresh_token(refresh_token, None, None)
+                return result
+
+            monkeypatch.setattr(db_a, "execute", execute_then_let_a_rival_redeem_first)
+            with pytest.raises(HTTPException) as rejected:
+                await AuthService(db_a).rotate_refresh_token(refresh_token, None, None)
+
+        assert rejected.value.status_code == 401
+        # The loser's redemption counts as reuse, so nothing stays active.
+        async with AsyncSessionLocal() as db:
+            still_active = (
+                (await db.execute(select(UserSession).where(UserSession.revoked_at.is_(None))))
+                .scalars()
+                .all()
+            )
+        assert still_active == []
 
 
 class TestForgotPassword:
@@ -446,6 +488,47 @@ class TestHierarchicalPasswordReset:
         )
         assert relogin.status_code == 200
 
+    async def test_a_temporary_password_only_gets_as_far_as_changing_it(
+        self, client, owner_user, employee_user
+    ):
+        token = await _login(client, "lucy", "S3curePass!")
+        reset = await client.post(
+            "/api/v1/auth/admin-reset-password",
+            json={"user_id": employee_user.id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        temp_password = reset.json()["temp_password"]
+        joe = {"Authorization": f"Bearer {await _login(client, 'joe', temp_password)}"}
+
+        # Joe's role allows reading products, yet the temporary credential
+        # is refused everywhere except the two calls the change-password
+        # screen needs.
+        blocked = await client.get("/api/v1/products", headers=joe)
+        assert blocked.status_code == 403
+        assert "temporary password" in blocked.json()["detail"]
+        assert (await client.get("/api/v1/auth/me", headers=joe)).status_code == 200
+
+        change = await client.post(
+            "/api/v1/auth/change-password",
+            json={"current_password": temp_password, "new_password": "joesRealPassword1"},
+            headers=joe,
+        )
+        assert change.status_code == 204
+        assert (await client.get("/api/v1/products", headers=joe)).status_code == 200
+
+    async def test_the_live_notifications_socket_refuses_a_temporary_password(
+        self, client, employee_user
+    ):
+        token = create_token(str(employee_user.id), "access")
+        assert await _authenticate(token) is not None
+
+        async with AsyncSessionLocal() as db:
+            user = await db.get(User, employee_user.id)
+            user.must_change_password = True
+            await db.commit()
+
+        assert await _authenticate(token) is None
+
     async def test_change_password_requires_the_correct_current_password(
         self, client, employee_user
     ):
@@ -551,3 +634,94 @@ class TestAcceptTerms:
             "/api/v1/audit-logs", params={"action": "terms.accepted"}, headers=headers
         )
         assert logs.json()["total"] == 1
+
+
+class _CountingHasher:
+    """Wraps the real argon2 hasher and counts how many verifications run."""
+
+    def __init__(self, real) -> None:
+        self._real = real
+        self.verify_calls = 0
+
+    def hash(self, password: str) -> str:
+        return str(self._real.hash(password))
+
+    def verify(self, hashed: str, password: str) -> bool:
+        self.verify_calls += 1
+        return bool(self._real.verify(hashed, password))
+
+
+class TestUnknownAccountsCostTheSameAsKnownOnes:
+    """
+    A login or password reset for a username that doesn't exist used to
+    skip the ~200ms argon2 verification, so response time alone revealed
+    which usernames exist. Every branch must now run exactly one
+    verification. Counting them is deterministic, unlike asserting on
+    wall-clock time.
+    """
+
+    @pytest.fixture
+    def hasher(self, monkeypatch):
+        counting = _CountingHasher(security_module._hasher)
+        monkeypatch.setattr(security_module, "_hasher", counting)
+        return counting
+
+    @staticmethod
+    async def _give_joe_a_security_answer() -> None:
+        async with AsyncSessionLocal() as db:
+            user = (await db.execute(select(User).where(User.username == "joe"))).scalar_one()
+            user.security_question = "Favourite colour?"
+            user.security_answer_hash = await hash_password("blue")
+            await db.commit()
+
+    @staticmethod
+    def _reset_payload(username: str, answer: str) -> dict[str, str]:
+        return {"username": username, "security_answer": answer, "new_password": "brandNewPass1"}
+
+    async def test_login_for_an_unknown_username_runs_one_verification(
+        self, client, employee_user, hasher
+    ):
+        r = await client.post("/api/v1/auth/login", json={"username": "nobody", "password": "x"})
+
+        assert r.status_code == 401
+        assert hasher.verify_calls == 1
+
+    async def test_login_with_a_wrong_password_runs_one_verification(
+        self, client, employee_user, hasher
+    ):
+        r = await client.post("/api/v1/auth/login", json={"username": "joe", "password": "wrong"})
+
+        assert r.status_code == 401
+        assert hasher.verify_calls == 1
+
+    async def test_reset_for_an_unknown_username_runs_one_verification(
+        self, client, employee_user, hasher
+    ):
+        r = await client.post(
+            "/api/v1/auth/forgot-password", json=self._reset_payload("nobody", "blue")
+        )
+
+        assert r.status_code == 400
+        assert hasher.verify_calls == 1
+
+    async def test_reset_for_an_account_without_a_security_answer_runs_one_verification(
+        self, client, employee_user, hasher
+    ):
+        r = await client.post(
+            "/api/v1/auth/forgot-password", json=self._reset_payload("joe", "blue")
+        )
+
+        assert r.status_code == 400
+        assert hasher.verify_calls == 1
+
+    async def test_reset_with_a_wrong_answer_runs_one_verification(
+        self, client, employee_user, hasher
+    ):
+        await self._give_joe_a_security_answer()
+
+        r = await client.post(
+            "/api/v1/auth/forgot-password", json=self._reset_payload("joe", "red")
+        )
+
+        assert r.status_code == 400
+        assert hasher.verify_calls == 1

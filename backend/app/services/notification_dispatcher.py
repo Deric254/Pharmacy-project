@@ -6,7 +6,7 @@ module already publishes domain events to (app.core.events), and for
 each event decides who should see it based on EVENT_PERMISSION_MAP,
 then hands it to the ConnectionManager to broadcast. This is the piece
 that makes "real-time cross-module sync" literally true: a sale
-completing, a PO changing status, a backup failing, or the business
+completing, a stock take closing, a backup failing, or the business
 config changing all reach a connected screen without polling.
 
 Kept deliberately separate from the WebSocket route itself: this
@@ -35,7 +35,6 @@ EVENT_PERMISSION_MAP: dict[str, str | None] = {
     "sale.completed": "reports.view",
     "stock.low": "inventory.view",
     "batch.expiring": "inventory.view",
-    "po.status_changed": "purchasing.create_po",
     "backup.failed": "backups.manage",
     "stocktake.closed": "reports.view",
     "config.updated": None,
@@ -69,7 +68,12 @@ async def run_notification_dispatcher(manager: ConnectionManager) -> None:
     pubsub = await subscribe()
     try:
         async for raw_message in _listen(pubsub):
-            await dispatch_one_message(manager, raw_message)
+            try:
+                await dispatch_one_message(manager, raw_message)
+            except Exception:
+                # One bad message must not end the loop: this task is the
+                # only thing delivering live updates until the app restarts.
+                logger.exception("Could not dispatch a notification; continuing with the next")
     finally:
         await pubsub.unsubscribe()
 

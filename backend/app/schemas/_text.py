@@ -37,6 +37,24 @@ def _must_have_real_content(value: str) -> str:
 
 NonBlankName = Annotated[str, AfterValidator(_must_have_real_content)]
 
+# The forgot-password flow lets whoever knows this answer set a new password
+# for the account, so a one-letter answer would be guessable within minutes
+# even behind the login rate limit. Measured after stripping, because the
+# stored (and later compared) value is the stripped one.
+MIN_SECURITY_ANSWER_LENGTH = 4
+
+
+def _long_enough_security_answer(value: str) -> str:
+    stripped = value.strip()
+    if len(stripped) < MIN_SECURITY_ANSWER_LENGTH:
+        raise ValueError(
+            f"A security answer needs at least {MIN_SECURITY_ANSWER_LENGTH} characters."
+        )
+    return stripped
+
+
+SecurityAnswer = Annotated[str, AfterValidator(_long_enough_security_answer)]
+
 
 def _strip_or_none(value: str | None) -> str | None:
     if value is None:

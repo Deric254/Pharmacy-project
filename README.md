@@ -86,13 +86,10 @@ migrations), then always finishes by starting the backend and frontend
 and opening your browser to the same setup screen the installer shows.
 Nothing else to click, nothing to remember to run first.
 
-If Redis isn't already on your machine, the script downloads a real,
-portable Redis-for-Windows build automatically (from the actively
-maintained [redis-windows/redis-windows](https://github.com/redis-windows/redis-windows)
-project) into `redis-portable\` next to the script — no install, no admin
-rights, nothing added to PATH. That only fails if the machine has no
-internet access, in which case it prints the manual Memurai fallback
-instead of just stopping.
+Nothing else needs installing: in this mode the backend keeps its cache and
+live-update channel in memory (`REDIS_MODE=memory`), exactly as the installed
+desktop app does. To develop against a real Redis instead, set
+`REDIS_MODE=redis` and `REDIS_URL` in `backend\.env`.
 
 **Important (Option 2):** extract the `.zip` fully first (right-click
 → Extract All). Double-clicking a `.bat` file from inside Windows
@@ -117,11 +114,7 @@ is exactly what that produces. A second one was caught building the exe
 itself: it crashed with a raw traceback instead of a readable message if
 launched without a console attached. Both are now guarded the same way
 everything else is: every failure path prints why, then pauses instead of
-vanishing. The Redis auto-download (`windows\download-redis.ps1`) carries
-the same caveat most directly — real GitHub API calls, real PowerShell
-`Expand-Archive`, checked carefully for correctness, but never actually
-run on a Windows machine. If it fails, the script falls back to printing
-the manual Memurai steps rather than leaving you stuck.
+vanishing.
 
 The Electron installer (Option 1) carries the biggest version of this
 caveat: Electron needs a real display to open a window, which this

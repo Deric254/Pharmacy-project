@@ -60,8 +60,8 @@ def _configure_sqlite_pragmas(dbapi_connection: Any, _connection_record: object)
       checks with no database-level backstop. dump_restore.py
       explicitly toggles this OFF for the duration of a restore
       (deleting and reinserting every table necessarily violates FKs
-      transiently) and back ON afterward -- that toggle only matters
-      at all because this is on by default everywhere else.
+      transiently); _enforce_foreign_keys_on_checkout below is what
+      guarantees it is back ON afterward.
 
     - journal_mode=WAL: this app's real scenario is a handful of
       concurrent users on one machine, not a single writer. WAL mode
@@ -100,3 +100,24 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI dependency -- one session per request, always closed."""
     async with AsyncSessionLocal() as session:
         yield session
+
+
+@event.listens_for(engine.sync_engine, "checkout")
+def _enforce_foreign_keys_on_checkout(
+    dbapi_connection: Any, _connection_record: object, _connection_proxy: object
+) -> None:
+    """
+    foreign_keys is per-connection, SQLite silently ignores changes to it
+    while a transaction is open, and a Session does not keep one
+    connection across commits. So code that switches it off for a single
+    transaction (dump_restore.py) cannot reliably switch it back on
+    afterwards: the follow-up PRAGMA lands on whichever pooled connection
+    the session happens to check out next, while the connection that was
+    switched off returns to the pool still off. Re-asserting it every
+    time a connection leaves the pool -- before anything can have opened
+    a transaction on it -- means no connection is ever put back in
+    service with enforcement off, however it was left.
+    """
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()

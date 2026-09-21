@@ -36,12 +36,6 @@ class ProfitByProductEntry(BaseModel):
     profit_margin_percent: float | None
 
 
-class ProfitByProductOut(BaseModel):
-    start_date: date
-    end_date: date
-    entries: list[ProfitByProductEntry]
-
-
 class ExpiredStockEntry(BaseModel):
     batch_id: int
     product_id: int

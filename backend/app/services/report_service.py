@@ -47,7 +47,6 @@ from app.schemas.reports import (
     ProductMovementEntry,
     ProductPairEntry,
     ProfitByProductEntry,
-    ProfitByProductOut,
     ProfitReportOut,
     ReceivingDiscrepancyEntry,
     ReceivingDiscrepancyReportOut,
@@ -242,7 +241,9 @@ class ReportService:
             profit_margin_percent=round(margin, 2),
         )
 
-    async def profit_by_product(self, start_date: date, end_date: date) -> ProfitByProductOut:
+    async def profit_by_product(
+        self, start_date: date, end_date: date
+    ) -> list[ProfitByProductEntry]:
         """
         profit_report(), broken down per product: same period bounds,
         same net-of-refunds revenue, same frozen SaleItem.unit_cost
@@ -307,8 +308,7 @@ class ReportService:
                 )
             )
         entries.sort(key=lambda entry: (-entry.profit, entry.name))
-
-        return ProfitByProductOut(start_date=start_date, end_date=end_date, entries=entries)
+        return entries
 
     async def _sold_cost_cents_by_product(
         self, utc_start: datetime, utc_end: datetime

@@ -545,12 +545,6 @@ export interface ProfitByProductEntry {
   profit_margin_percent: number | null
 }
 
-export interface ProfitByProductOut {
-  start_date: string
-  end_date: string
-  entries: ProfitByProductEntry[]
-}
-
 export interface ExpiredStockEntry {
   batch_id: number
   product_id: number

@@ -11,7 +11,7 @@ import type {
   ExpiredStockReportOut,
   FastSlowMoversOut,
   ProductCoOccurrenceOut,
-  ProfitByProductOut,
+  ProfitByProductEntry,
   ProfitReportOut,
   ReceivingDiscrepancyReportOut,
   SalesSummaryOut,
@@ -289,7 +289,7 @@ function ProfitReport() {
   const timezone = useConfigStore((s) => s.config?.timezone) ?? fallbackTimezone()
   const [{ start, end }, setRange] = useState(() => defaultDateRange(timezone))
   const [data, setData] = useState<ProfitReportOut | null>(null)
-  const [byProduct, setByProduct] = useState<ProfitByProductOut | null>(null)
+  const [byProduct, setByProduct] = useState<ProfitByProductEntry[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const salesVersion = useSaleCompletedRefresh(true)
 
@@ -329,7 +329,7 @@ function ProfitReport() {
             </tr>
           </thead>
           <tbody>
-            {byProduct.entries.map((e) => (
+            {byProduct.map((e) => (
               <tr key={e.product_id} className="ruled-row">
                 <td className="px-3 py-2">{e.name}</td>
                 <td className="figure px-3 py-2">{e.net_quantity_sold}</td>
@@ -343,7 +343,7 @@ function ProfitReport() {
                 </td>
               </tr>
             ))}
-            {byProduct.entries.length === 0 && (
+            {byProduct.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-3 py-4 text-center text-ink-soft">
                   No sales in this period.

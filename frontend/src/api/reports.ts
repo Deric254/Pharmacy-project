@@ -5,7 +5,7 @@ import type {
   FastSlowMoversOut,
   KpiDashboardOut,
   ProductCoOccurrenceOut,
-  ProfitByProductOut,
+  ProfitByProductEntry,
   ProfitReportOut,
   ReceivingDiscrepancyReportOut,
   RevenuePotentialOut,
@@ -44,7 +44,7 @@ export const reportsApi = {
   profit: (startDate: string, endDate: string) =>
     api.get<ProfitReportOut>('/reports/profit', { start_date: startDate, end_date: endDate }),
   profitByProduct: (startDate: string, endDate: string) =>
-    api.get<ProfitByProductOut>('/reports/profit-by-product', {
+    api.get<ProfitByProductEntry[]>('/reports/profit-by-product', {
       start_date: startDate,
       end_date: endDate,
     }),

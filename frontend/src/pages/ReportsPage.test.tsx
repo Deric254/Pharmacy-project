@@ -6,14 +6,13 @@ import { reportsApi } from '../api/reports'
 import { useAuthStore } from '../auth/store'
 import { useConfigStore } from '../config/store'
 import { formatMoney } from '../lib/currency'
-import type { ProfitByProductOut, ProfitReportOut, UserOut } from '../types/api'
+import type { ProfitByProductEntry, ProfitReportOut, UserOut } from '../types/api'
 import type { BusinessConfigOut } from '../types/config'
 
 vi.mock('../api/reports', () => ({
   reportsApi: {
     profit: vi.fn(),
     profitByProduct: vi.fn(),
-    profitLossPdf: vi.fn(),
   },
   downloadReportExport: vi.fn(),
 }))
@@ -43,30 +42,26 @@ const TOTALS: ProfitReportOut = {
   profit_margin_percent: 15.1,
 }
 
-const BREAKDOWN: ProfitByProductOut = {
-  start_date: '2026-08-22',
-  end_date: '2026-09-21',
-  entries: [
-    {
-      product_id: 1,
-      name: 'Amoxicillin 500mg',
-      net_quantity_sold: 3,
-      revenue: 30,
-      cost: 12,
-      profit: 18,
-      profit_margin_percent: 60,
-    },
-    {
-      product_id: 2,
-      name: 'Damaged Syrup',
-      net_quantity_sold: 0,
-      revenue: 0,
-      cost: 8,
-      profit: -8,
-      profit_margin_percent: null,
-    },
-  ],
-}
+const BREAKDOWN: ProfitByProductEntry[] = [
+  {
+    product_id: 1,
+    name: 'Amoxicillin 500mg',
+    net_quantity_sold: 3,
+    revenue: 30,
+    cost: 12,
+    profit: 18,
+    profit_margin_percent: 60,
+  },
+  {
+    product_id: 2,
+    name: 'Damaged Syrup',
+    net_quantity_sold: 0,
+    revenue: 0,
+    cost: 8,
+    profit: -8,
+    profit_margin_percent: null,
+  },
+]
 
 // Testing Library collapses whitespace (Intl puts a non-breaking space in
 // currency output) in the text it matches against, so do the same here.
@@ -141,7 +136,7 @@ describe('ReportsPage profit tab', () => {
       total_profit: 0,
       profit_margin_percent: 0,
     })
-    vi.mocked(reportsApi.profitByProduct).mockResolvedValue({ ...BREAKDOWN, entries: [] })
+    vi.mocked(reportsApi.profitByProduct).mockResolvedValue([])
     renderProfitTab()
 
     expect(await screen.findByText('No sales in this period.')).toBeInTheDocument()

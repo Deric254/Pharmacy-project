@@ -1904,6 +1904,49 @@ class TestProfitLossPdf:
         assert len(re.findall(rb"\bS\b", all_data)) > 0
 
 
+async def _owner_headers(client) -> dict[str, str]:
+    token = await _login(client, "lucy", "S3curePass!")
+    return {"Authorization": f"Bearer {token}"}
+
+
+async def _sell(client, headers, lines: list[tuple[int, int]], total: float, discount: float = 0.0):
+    """Sells [(product_id, quantity)]; one cash payment covering `total` exactly."""
+    r = await client.post(
+        "/api/v1/sales",
+        json={
+            "items": [{"product_id": product_id, "quantity": qty} for product_id, qty in lines],
+            "payments": [{"method": "CASH", "amount": total}],
+            "discount_amount": discount,
+        },
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+async def _refund(client, headers, sale: dict, quantity: int, restock: bool, line: int = 0) -> None:
+    r = await client.post(
+        f"/api/v1/sales/{sale['id']}/refunds",
+        json={
+            "reason": "CUSTOMER_RETURN" if restock else "DAMAGED",
+            "method": "CASH",
+            "items": [
+                {
+                    "sale_item_id": sale["items"][line]["id"],
+                    "quantity": quantity,
+                    "restock": restock,
+                }
+            ],
+        },
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+
+
+def _cents(amount: float) -> int:
+    return round(amount * 100)
+
+
 class TestProfitByProduct:
     """
     The per-product breakdown under the Profit tab. The property that
@@ -1912,27 +1955,21 @@ class TestProfitByProduct:
     the cent, through discounts and refunds -- not approximately.
     """
 
-    @staticmethod
-    def _cents(amount: float) -> int:
-        return round(amount * 100)
-
     async def _entries_by_name(self, client, headers, start: str, end: str) -> dict:
         """The breakdown keyed by product name, after asserting it sums to /reports/profit."""
         params = {"start_date": start, "end_date": end}
         total = (await client.get("/api/v1/reports/profit", params=params, headers=headers)).json()
         r = await client.get("/api/v1/reports/profit-by-product", params=params, headers=headers)
         assert r.status_code == 200, r.text
-        entries = r.json()["entries"]
+        entries = r.json()
         for field, total_field in (
             ("revenue", "total_revenue"),
             ("cost", "total_cost"),
             ("profit", "total_profit"),
         ):
-            assert sum(self._cents(e[field]) for e in entries) == self._cents(total[total_field])
+            assert sum(_cents(e[field]) for e in entries) == _cents(total[total_field])
         for entry in entries:
-            assert self._cents(entry["revenue"]) - self._cents(entry["cost"]) == self._cents(
-                entry["profit"]
-            )
+            assert _cents(entry["revenue"]) - _cents(entry["cost"]) == _cents(entry["profit"])
         return {e["name"]: e for e in entries}
 
     async def test_a_discount_that_does_not_split_evenly_still_adds_up_exactly(
@@ -1949,40 +1986,20 @@ class TestProfitByProduct:
         a_id, _ = await _make_product_with_batch(price=10.0, cost=4.0, name="Split A")
         b_id, _ = await _make_product_with_batch(price=10.0, cost=6.0, name="Split B")
         c_id, _ = await _make_product_with_batch(price=10.0, cost=1.0, name="Split C")
-        token = await _login(client, "lucy", "S3curePass!")
-        headers = {"Authorization": f"Bearer {token}"}
-
-        sale = await client.post(
-            "/api/v1/sales",
-            json={
-                "items": [
-                    {"product_id": a_id, "quantity": 1},
-                    {"product_id": b_id, "quantity": 1},
-                    {"product_id": c_id, "quantity": 1},
-                ],
-                "payments": [{"method": "CASH", "amount": 29.9}],
-                "discount_amount": 0.10,
-            },
-            headers=headers,
-        )
-        assert sale.status_code == 201, sale.text
+        headers = await _owner_headers(client)
+        await _sell(client, headers, [(a_id, 1), (b_id, 1), (c_id, 1)], total=29.9, discount=0.10)
 
         today = (await _business_today()).isoformat()
         by_name = await self._entries_by_name(client, headers, today, today)
 
-        assert (by_name["Split A"]["revenue"], by_name["Split A"]["profit"]) == (9.97, 5.97)
-        assert (by_name["Split B"]["revenue"], by_name["Split B"]["profit"]) == (9.97, 3.97)
-        assert (by_name["Split C"]["revenue"], by_name["Split C"]["profit"]) == (9.96, 8.96)
+        assert {name: (e["revenue"], e["profit"]) for name, e in by_name.items()} == {
+            "Split A": (9.97, 5.97),
+            "Split B": (9.97, 3.97),
+            "Split C": (9.96, 8.96),
+        }
         assert by_name["Split A"]["profit_margin_percent"] == round(5.97 / 9.97 * 100, 2)
         assert all(e["net_quantity_sold"] == 1 for e in by_name.values())
-
-        r = await client.get(
-            "/api/v1/reports/profit-by-product",
-            params={"start_date": today, "end_date": today},
-            headers=headers,
-        )
-        # Most profitable first.
-        assert [e["name"] for e in r.json()["entries"]] == ["Split C", "Split A", "Split B"]
+        assert list(by_name) == ["Split C", "Split A", "Split B"]  # most profitable first
 
     async def test_multi_batch_cost_and_units_roll_up_per_product(self, client, owner_user):
         """
@@ -2009,17 +2026,8 @@ class TestProfitByProduct:
             await db.commit()
             product_id = int(product.id)
 
-        token = await _login(client, "lucy", "S3curePass!")
-        headers = {"Authorization": f"Bearer {token}"}
-        sale = await client.post(
-            "/api/v1/sales",
-            json={
-                "items": [{"product_id": product_id, "quantity": 7}],
-                "payments": [{"method": "CASH", "amount": 70.0}],
-            },
-            headers=headers,
-        )
-        assert sale.status_code == 201, sale.text
+        headers = await _owner_headers(client)
+        await _sell(client, headers, [(product_id, 7)], total=70.0)
 
         today = (await _business_today()).isoformat()
         by_name = await self._entries_by_name(client, headers, today, today)
@@ -2040,42 +2048,13 @@ class TestProfitByProduct:
         """
         p_id, _ = await _make_product_with_batch(price=10.0, cost=4.0, qty=20, name="Refund P")
         q_id, _ = await _make_product_with_batch(price=20.0, cost=8.0, qty=20, name="Refund Q")
-        token = await _login(client, "lucy", "S3curePass!")
-        headers = {"Authorization": f"Bearer {token}"}
-
-        sold = []
-        for product_id, qty, amount in ((p_id, 5, 50.0), (q_id, 1, 20.0)):
-            r = await client.post(
-                "/api/v1/sales",
-                json={
-                    "items": [{"product_id": product_id, "quantity": qty}],
-                    "payments": [{"method": "CASH", "amount": amount}],
-                },
-                headers=headers,
-            )
-            assert r.status_code == 201, r.text
-            sold.append(r.json())
-
-        for sale, qty, restock, reason in (
-            (sold[0], 2, True, "CUSTOMER_RETURN"),
-            (sold[1], 1, False, "DAMAGED"),
-        ):
-            r = await client.post(
-                f"/api/v1/sales/{sale['id']}/refunds",
-                json={
-                    "reason": reason,
-                    "method": "CASH",
-                    "items": [
-                        {
-                            "sale_item_id": sale["items"][0]["id"],
-                            "quantity": qty,
-                            "restock": restock,
-                        }
-                    ],
-                },
-                headers=headers,
-            )
-            assert r.status_code == 201, r.text
+        headers = await _owner_headers(client)
+        await _refund(
+            client, headers, await _sell(client, headers, [(p_id, 5)], total=50.0), 2, True
+        )
+        await _refund(
+            client, headers, await _sell(client, headers, [(q_id, 1)], total=20.0), 1, False
+        )
 
         today = (await _business_today()).isoformat()
         by_name = await self._entries_by_name(client, headers, today, today)
@@ -2105,18 +2084,8 @@ class TestProfitByProduct:
         product_id, _ = await _make_product_with_batch(
             price=10.0, cost=4.0, qty=20, name="Old Sale Product"
         )
-        token = await _login(client, "lucy", "S3curePass!")
-        headers = {"Authorization": f"Bearer {token}"}
-        sale = (
-            await client.post(
-                "/api/v1/sales",
-                json={
-                    "items": [{"product_id": product_id, "quantity": 5}],
-                    "payments": [{"method": "CASH", "amount": 50.0}],
-                },
-                headers=headers,
-            )
-        ).json()
+        headers = await _owner_headers(client)
+        sale = await _sell(client, headers, [(product_id, 5)], total=50.0)
 
         async with AsyncSessionLocal() as db:
             from sqlalchemy import select as _select
@@ -2126,17 +2095,7 @@ class TestProfitByProduct:
             row = (await db.execute(_select(Sale).where(Sale.id == sale["id"]))).scalar_one()
             row.created_at = datetime.now() - timedelta(days=3)
             await db.commit()
-
-        refund = await client.post(
-            f"/api/v1/sales/{sale['id']}/refunds",
-            json={
-                "reason": "CUSTOMER_RETURN",
-                "method": "CASH",
-                "items": [{"sale_item_id": sale["items"][0]["id"], "quantity": 2, "restock": True}],
-            },
-            headers=headers,
-        )
-        assert refund.status_code == 201, refund.text
+        await _refund(client, headers, sale, 2, True)
 
         today = await _business_today()
         by_name = await self._entries_by_name(client, headers, today.isoformat(), today.isoformat())
@@ -2158,28 +2117,10 @@ class TestProfitByProduct:
         product_id, _ = await _make_product_with_batch(
             price=10.0, cost=4.0, qty=20, name="Undone Product"
         )
-        token = await _login(client, "lucy", "S3curePass!")
-        headers = {"Authorization": f"Bearer {token}"}
-        sale = (
-            await client.post(
-                "/api/v1/sales",
-                json={
-                    "items": [{"product_id": product_id, "quantity": 2}],
-                    "payments": [{"method": "CASH", "amount": 20.0}],
-                },
-                headers=headers,
-            )
-        ).json()
-        refund = await client.post(
-            f"/api/v1/sales/{sale['id']}/refunds",
-            json={
-                "reason": "CUSTOMER_RETURN",
-                "method": "CASH",
-                "items": [{"sale_item_id": sale["items"][0]["id"], "quantity": 2, "restock": True}],
-            },
-            headers=headers,
+        headers = await _owner_headers(client)
+        await _refund(
+            client, headers, await _sell(client, headers, [(product_id, 2)], total=20.0), 2, True
         )
-        assert refund.status_code == 201, refund.text
 
         today = (await _business_today()).isoformat()
         assert await self._entries_by_name(client, headers, today, today) == {}
@@ -2213,72 +2154,51 @@ class TestProfitByProduct:
             )[0]
             for i, (price, cost) in enumerate(catalogue)
         ]
-        token = await _login(client, "lucy", "S3curePass!")
-        headers = {"Authorization": f"Bearer {token}"}
+        headers = await _owner_headers(client)
 
         sales = []
         for _ in range(30):
-            picks = rng.sample(range(len(catalogue)), rng.randint(1, 3))
-            lines = [(idx, rng.randint(1, 6)) for idx in picks]
-            subtotal_cents = sum(round(catalogue[idx][0] * 100) * qty for idx, qty in lines)
+            lines = [
+                (idx, rng.randint(1, 6))
+                for idx in rng.sample(range(len(catalogue)), rng.randint(1, 3))
+            ]
+            subtotal_cents = sum(_cents(catalogue[idx][0]) * qty for idx, qty in lines)
             discount_cents = rng.randint(0, subtotal_cents * 4 // 10) if rng.random() < 0.6 else 0
-            r = await client.post(
-                "/api/v1/sales",
-                json={
-                    "items": [
-                        {"product_id": product_ids[idx], "quantity": qty} for idx, qty in lines
-                    ],
-                    "payments": [
-                        {"method": "CASH", "amount": (subtotal_cents - discount_cents) / 100}
-                    ],
-                    "discount_amount": discount_cents / 100,
-                },
-                headers=headers,
+            sales.append(
+                await _sell(
+                    client,
+                    headers,
+                    [(product_ids[idx], qty) for idx, qty in lines],
+                    total=(subtotal_cents - discount_cents) / 100,
+                    discount=discount_cents / 100,
+                )
             )
-            assert r.status_code == 201, r.text
-            sales.append(r.json())
 
         for sale in rng.sample(sales, 12):
-            line = rng.choice(sale["items"])
-            r = await client.post(
-                f"/api/v1/sales/{sale['id']}/refunds",
-                json={
-                    "reason": "CUSTOMER_RETURN",
-                    "method": "CASH",
-                    "items": [
-                        {
-                            "sale_item_id": line["id"],
-                            "quantity": rng.randint(1, line["quantity"]),
-                            "restock": rng.random() < 0.5,
-                        }
-                    ],
-                },
-                headers=headers,
+            line = rng.randrange(len(sale["items"]))
+            await _refund(
+                client,
+                headers,
+                sale,
+                rng.randint(1, sale["items"][line]["quantity"]),
+                rng.random() < 0.5,
+                line,
             )
-            assert r.status_code == 201, r.text
 
         today = (await _business_today()).isoformat()
         by_name = await self._entries_by_name(client, headers, today, today)
         assert len(by_name) == len(catalogue)
 
     async def test_empty_period_returns_no_entries(self, client, owner_user):
-        token = await _login(client, "lucy", "S3curePass!")
-        headers = {"Authorization": f"Bearer {token}"}
+        headers = await _owner_headers(client)
         today = (await _business_today()).isoformat()
-        r = await client.get(
-            "/api/v1/reports/profit-by-product",
-            params={"start_date": today, "end_date": today},
-            headers=headers,
-        )
-        assert r.status_code == 200
-        assert r.json()["entries"] == []
+        assert await self._entries_by_name(client, headers, today, today) == {}
 
     async def test_start_after_end_is_rejected(self, client, owner_user):
-        token = await _login(client, "lucy", "S3curePass!")
         r = await client.get(
             "/api/v1/reports/profit-by-product",
             params={"start_date": "2026-02-02", "end_date": "2026-02-01"},
-            headers={"Authorization": f"Bearer {token}"},
+            headers=await _owner_headers(client),
         )
         assert r.status_code == 400
 
@@ -2302,8 +2222,36 @@ class TestProfitLossPdfProductBreakdown:
     """
 
     @staticmethod
-    def _pdf_text(content: bytes) -> str:
-        return "\n".join(page.extract_text() for page in PdfReader(io.BytesIO(content)).pages)
+    def _pages(**overrides) -> list[str]:
+        from app.services.report_export_service import generate_profit_loss_pdf
+
+        args = {
+            "business_name": "Test Pharmacy",
+            "start_date": "2026-01-01",
+            "end_date": "2026-01-31",
+            "revenue": 0.0,
+            "cost_of_goods_sold": 0.0,
+            "gross_profit": 0.0,
+            "gross_margin_percent": 0.0,
+            "currency": "KES",
+        } | overrides
+        content = generate_profit_loss_pdf(**args)
+        return [page.extract_text() for page in PdfReader(io.BytesIO(content)).pages]
+
+    @staticmethod
+    def _entry(product_id: int, name: str, units: int, revenue: float, cost: float):
+        from app.schemas.reports import ProfitByProductEntry
+
+        profit = round(revenue - cost, 2)
+        return ProfitByProductEntry(
+            product_id=product_id,
+            name=name,
+            net_quantity_sold=units,
+            revenue=revenue,
+            cost=cost,
+            profit=profit,
+            profit_margin_percent=round(profit / revenue * 100, 2) if revenue > 0 else None,
+        )
 
     async def test_breakdown_appears_and_its_total_row_agrees_with_the_statement(
         self, client, owner_user
@@ -2313,22 +2261,8 @@ class TestProfitLossPdfProductBreakdown:
         a_id, _ = await _make_product_with_batch(price=10.0, cost=4.0, name="Pdf Split A")
         b_id, _ = await _make_product_with_batch(price=10.0, cost=6.0, name="Pdf Split B")
         c_id, _ = await _make_product_with_batch(price=10.0, cost=1.0, name="Pdf Split C")
-        token = await _login(client, "lucy", "S3curePass!")
-        headers = {"Authorization": f"Bearer {token}"}
-        sale = await client.post(
-            "/api/v1/sales",
-            json={
-                "items": [
-                    {"product_id": a_id, "quantity": 1},
-                    {"product_id": b_id, "quantity": 1},
-                    {"product_id": c_id, "quantity": 1},
-                ],
-                "payments": [{"method": "CASH", "amount": 29.9}],
-                "discount_amount": 0.10,
-            },
-            headers=headers,
-        )
-        assert sale.status_code == 201, sale.text
+        headers = await _owner_headers(client)
+        await _sell(client, headers, [(a_id, 1), (b_id, 1), (c_id, 1)], total=29.9, discount=0.10)
 
         today = (await _business_today()).isoformat()
         r = await client.get(
@@ -2337,7 +2271,7 @@ class TestProfitLossPdfProductBreakdown:
             headers=headers,
         )
         assert r.status_code == 200
-        text = self._pdf_text(r.content)
+        text = "\n".join(page.extract_text() for page in PdfReader(io.BytesIO(r.content)).pages)
 
         assert "Profit by product" in text
         for name in ("Pdf Split A", "Pdf Split B", "Pdf Split C"):
@@ -2352,33 +2286,14 @@ class TestProfitLossPdfProductBreakdown:
         assert text.count("63.2%") >= 2
 
     def test_a_long_breakdown_spans_pages_and_repeats_its_header(self):
-        from app.schemas.reports import ProfitByProductEntry
-        from app.services.report_export_service import generate_profit_loss_pdf
-
-        entries = [
-            ProfitByProductEntry(
-                product_id=i,
-                name=f"Product {i:03d}",
-                net_quantity_sold=1,
-                revenue=10.0,
-                cost=4.0,
-                profit=6.0,
-                profit_margin_percent=60.0,
-            )
-            for i in range(150)
-        ]
-        content = generate_profit_loss_pdf(
-            business_name="Test Pharmacy",
-            start_date="2026-01-01",
-            end_date="2026-01-31",
+        entries = [self._entry(i, f"Product {i:03d}", 1, 10.0, 4.0) for i in range(150)]
+        pages = self._pages(
             revenue=1500.0,
             cost_of_goods_sold=600.0,
             gross_profit=900.0,
             gross_margin_percent=60.0,
-            currency="KES",
             product_breakdown=entries,
         )
-        pages = [page.extract_text() for page in PdfReader(io.BytesIO(content)).pages]
 
         assert len(pages) > 1
         for i in range(150):
@@ -2389,52 +2304,17 @@ class TestProfitLossPdfProductBreakdown:
         assert "1,500.00" in pages[-1]  # the Total row lands on the last page
 
     def test_awkward_product_names_and_missing_margin_do_not_break_the_pdf(self):
-        from app.schemas.reports import ProfitByProductEntry
-        from app.services.report_export_service import generate_profit_loss_pdf
-
-        entries = [
-            ProfitByProductEntry(
-                product_id=1,
-                name="Cough & Cold <Syrup> " + "Long Name " * 20,
-                net_quantity_sold=0,
-                revenue=0.0,
-                cost=8.0,
-                profit=-8.0,
-                profit_margin_percent=None,
-            )
-        ]
-        content = generate_profit_loss_pdf(
-            business_name="Test Pharmacy",
-            start_date="2026-01-01",
-            end_date="2026-01-31",
-            revenue=0.0,
-            cost_of_goods_sold=8.0,
-            gross_profit=-8.0,
-            gross_margin_percent=0.0,
-            currency="KES",
-            product_breakdown=entries,
+        entry = self._entry(1, "Cough & Cold <Syrup> " + "Long Name " * 20, 0, 0.0, 8.0)
+        text = "\n".join(
+            self._pages(cost_of_goods_sold=8.0, gross_profit=-8.0, product_breakdown=[entry])
         )
-        text = self._pdf_text(content)
         assert "Cough & Cold <Syrup>" in text
         assert "n/a" in text
         assert "-8.00" in text
 
     def test_no_breakdown_means_no_breakdown_section(self):
-        from app.services.report_export_service import generate_profit_loss_pdf
-
         for breakdown in (None, []):
-            content = generate_profit_loss_pdf(
-                business_name="Test Pharmacy",
-                start_date="2026-01-01",
-                end_date="2026-01-31",
-                revenue=0.0,
-                cost_of_goods_sold=0.0,
-                gross_profit=0.0,
-                gross_margin_percent=0.0,
-                currency="KES",
-                product_breakdown=breakdown,
-            )
-            assert "Profit by product" not in self._pdf_text(content)
+            assert "Profit by product" not in "\n".join(self._pages(product_breakdown=breakdown))
 
 
 class TestProfitReportCentPrecision:
@@ -2450,28 +2330,9 @@ class TestProfitReportCentPrecision:
         product_id, _ = await _make_product_with_batch(
             price=0.10, cost=0.05, qty=20, name="Cent Precision"
         )
-        token = await _login(client, "lucy", "S3curePass!")
-        headers = {"Authorization": f"Bearer {token}"}
-        sale = (
-            await client.post(
-                "/api/v1/sales",
-                json={
-                    "items": [{"product_id": product_id, "quantity": 3}],
-                    "payments": [{"method": "CASH", "amount": 0.3}],
-                },
-                headers=headers,
-            )
-        ).json()
-        refund = await client.post(
-            f"/api/v1/sales/{sale['id']}/refunds",
-            json={
-                "reason": "CUSTOMER_RETURN",
-                "method": "CASH",
-                "items": [{"sale_item_id": sale["items"][0]["id"], "quantity": 1, "restock": True}],
-            },
-            headers=headers,
-        )
-        assert refund.status_code == 201, refund.text
+        headers = await _owner_headers(client)
+        sale = await _sell(client, headers, [(product_id, 3)], total=0.3)
+        await _refund(client, headers, sale, 1, True)
 
         today = (await _business_today()).isoformat()
         params = {"start_date": today, "end_date": today}

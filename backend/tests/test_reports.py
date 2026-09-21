@@ -1916,7 +1916,8 @@ class TestProfitByProduct:
     def _cents(amount: float) -> int:
         return round(amount * 100)
 
-    async def _totals_match_profit_report(self, client, headers, start: str, end: str) -> dict:
+    async def _entries_by_name(self, client, headers, start: str, end: str) -> dict:
+        """The breakdown keyed by product name, after asserting it sums to /reports/profit."""
         params = {"start_date": start, "end_date": end}
         total = (await client.get("/api/v1/reports/profit", params=params, headers=headers)).json()
         r = await client.get("/api/v1/reports/profit-by-product", params=params, headers=headers)
@@ -1967,7 +1968,7 @@ class TestProfitByProduct:
         assert sale.status_code == 201, sale.text
 
         today = (await _business_today()).isoformat()
-        by_name = await self._totals_match_profit_report(client, headers, today, today)
+        by_name = await self._entries_by_name(client, headers, today, today)
 
         assert (by_name["Split A"]["revenue"], by_name["Split A"]["profit"]) == (9.97, 5.97)
         assert (by_name["Split B"]["revenue"], by_name["Split B"]["profit"]) == (9.97, 3.97)
@@ -2021,7 +2022,7 @@ class TestProfitByProduct:
         assert sale.status_code == 201, sale.text
 
         today = (await _business_today()).isoformat()
-        by_name = await self._totals_match_profit_report(client, headers, today, today)
+        by_name = await self._entries_by_name(client, headers, today, today)
         assert list(by_name) == ["Rollup Product"]
         entry = by_name["Rollup Product"]
         assert entry["net_quantity_sold"] == 7
@@ -2077,7 +2078,7 @@ class TestProfitByProduct:
             assert r.status_code == 201, r.text
 
         today = (await _business_today()).isoformat()
-        by_name = await self._totals_match_profit_report(client, headers, today, today)
+        by_name = await self._entries_by_name(client, headers, today, today)
 
         p = by_name["Refund P"]
         assert (p["revenue"], p["cost"], p["profit"], p["net_quantity_sold"]) == (
@@ -2138,9 +2139,7 @@ class TestProfitByProduct:
         assert refund.status_code == 201, refund.text
 
         today = await _business_today()
-        by_name = await self._totals_match_profit_report(
-            client, headers, today.isoformat(), today.isoformat()
-        )
+        by_name = await self._entries_by_name(client, headers, today.isoformat(), today.isoformat())
         entry = by_name["Old Sale Product"]
         assert (entry["revenue"], entry["cost"], entry["profit"]) == (-20.0, -8.0, -12.0)
         assert entry["net_quantity_sold"] == -2
@@ -2148,7 +2147,7 @@ class TestProfitByProduct:
 
         # The whole window nets it back to the real picture: 3 net
         # units, 30 revenue, 12 cost.
-        wide = await self._totals_match_profit_report(
+        wide = await self._entries_by_name(
             client, headers, (today - timedelta(days=5)).isoformat(), today.isoformat()
         )
         entry = wide["Old Sale Product"]
@@ -2183,7 +2182,7 @@ class TestProfitByProduct:
         assert refund.status_code == 201, refund.text
 
         today = (await _business_today()).isoformat()
-        assert await self._totals_match_profit_report(client, headers, today, today) == {}
+        assert await self._entries_by_name(client, headers, today, today) == {}
 
     async def test_entries_add_up_exactly_across_many_random_discounted_and_refunded_sales(
         self, client, owner_user
@@ -2259,7 +2258,7 @@ class TestProfitByProduct:
             assert r.status_code == 201, r.text
 
         today = (await _business_today()).isoformat()
-        by_name = await self._totals_match_profit_report(client, headers, today, today)
+        by_name = await self._entries_by_name(client, headers, today, today)
         assert len(by_name) == len(catalogue)
 
     async def test_empty_period_returns_no_entries(self, client, owner_user):
@@ -2436,3 +2435,50 @@ class TestProfitLossPdfProductBreakdown:
                 product_breakdown=breakdown,
             )
             assert "Profit by product" not in self._pdf_text(content)
+
+
+class TestProfitReportCentPrecision:
+    """
+    Money is whole cents everywhere it is stored, so the report's
+    totals must be too: 0.30 - 0.10 is 0.19999999999999998 in float
+    arithmetic, and that used to leak straight into the JSON.
+    """
+
+    async def test_revenue_cost_and_profit_are_exact_to_the_cent(self, client, owner_user):
+        # 3 x 0.10 sold (cost 0.05 each), 1 returned and restocked:
+        # revenue 0.30 - 0.10, cost 0.15 - 0.05, profit 0.20 - 0.10.
+        product_id, _ = await _make_product_with_batch(
+            price=0.10, cost=0.05, qty=20, name="Cent Precision"
+        )
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        sale = (
+            await client.post(
+                "/api/v1/sales",
+                json={
+                    "items": [{"product_id": product_id, "quantity": 3}],
+                    "payments": [{"method": "CASH", "amount": 0.3}],
+                },
+                headers=headers,
+            )
+        ).json()
+        refund = await client.post(
+            f"/api/v1/sales/{sale['id']}/refunds",
+            json={
+                "reason": "CUSTOMER_RETURN",
+                "method": "CASH",
+                "items": [{"sale_item_id": sale["items"][0]["id"], "quantity": 1, "restock": True}],
+            },
+            headers=headers,
+        )
+        assert refund.status_code == 201, refund.text
+
+        today = (await _business_today()).isoformat()
+        params = {"start_date": today, "end_date": today}
+        body = (await client.get("/api/v1/reports/profit", params=params, headers=headers)).json()
+        assert (body["total_revenue"], body["total_cost"], body["total_profit"]) == (0.2, 0.1, 0.1)
+
+        kpi = (
+            await client.get("/api/v1/reports/kpi-dashboard", params=params, headers=headers)
+        ).json()
+        assert (kpi["revenue"], kpi["profit"]) == (0.2, 0.1)

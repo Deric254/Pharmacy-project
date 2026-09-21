@@ -228,9 +228,9 @@ class ReportService:
                 RefundItem.restocked.is_(True),
             )
         )
-        total_cost -= float(cost_reversal_result.scalar_one())
+        total_cost = round(total_cost - float(cost_reversal_result.scalar_one()), 2)
 
-        total_profit = total_revenue - total_cost
+        total_profit = round(total_revenue - total_cost, 2)
         margin = (total_profit / total_revenue * 100) if total_revenue > 0 else 0.0
 
         return ProfitReportOut(
@@ -262,32 +262,92 @@ class ReportService:
 
         gross_rows = await self._gross_product_revenue(utc_start, utc_end)
         name_by_product = {product_id: name for product_id, name, _, _ in gross_rows}
-        units_by_product = {product_id: units for product_id, _, units, _ in gross_rows}
+        net_units: defaultdict[int, int] = defaultdict(
+            int, {product_id: units for product_id, _, units, _ in gross_rows}
+        )
+        sales_total_result = await self.db.execute(
+            select(func.coalesce(func.sum(Sale.total_amount), 0.0)).where(
+                Sale.created_at >= utc_start, Sale.created_at < utc_end
+            )
+        )
+        sales_cents = _apportion_cents(
+            {product_id: cents for product_id, _, _, cents in gross_rows},
+            to_cents(sales_total_result.scalar_one()),
+        )
+        revenue_cents: defaultdict[int, int] = defaultdict(int, sales_cents)
+        for product_id, name, refunded_units, refunded_cents in await self._refunds_by_product(
+            utc_start, utc_end
+        ):
+            name_by_product.setdefault(product_id, name)
+            net_units[product_id] -= refunded_units
+            revenue_cents[product_id] -= refunded_cents
 
-        sales_total = (
-            await self.db.execute(
-                select(func.coalesce(func.sum(Sale.total_amount), 0.0)).where(
-                    Sale.created_at >= utc_start,
-                    Sale.created_at < utc_end,
+        cost_cents: defaultdict[int, int] = defaultdict(
+            int, await self._sold_cost_cents_by_product(utc_start, utc_end)
+        )
+        restocked = await self._restocked_cost_cents_by_product(utc_start, utc_end)
+        for product_id, restocked_cents in restocked.items():
+            cost_cents[product_id] -= restocked_cents
+
+        entries: list[ProfitByProductEntry] = []
+        for product_id, name in name_by_product.items():
+            revenue, cost = revenue_cents[product_id], cost_cents[product_id]
+            if revenue == 0 and cost == 0:
+                continue
+            profit = revenue - cost
+            entries.append(
+                ProfitByProductEntry(
+                    product_id=product_id,
+                    name=name,
+                    net_quantity_sold=net_units[product_id],
+                    revenue=from_cents(revenue),
+                    cost=from_cents(cost),
+                    profit=from_cents(profit),
+                    profit_margin_percent=round(profit / revenue * 100, 2) if revenue > 0 else None,
                 )
             )
-        ).scalar_one()
-        sales_cents_by_product = _apportion_cents(
-            {product_id: cents for product_id, _, _, cents in gross_rows},
-            to_cents(float(sales_total)),
-        )
+        entries.sort(key=lambda entry: (-entry.profit, entry.name))
 
-        cost_result = await self.db.execute(
+        return ProfitByProductOut(start_date=start_date, end_date=end_date, entries=entries)
+
+    async def _sold_cost_cents_by_product(
+        self, utc_start: datetime, utc_end: datetime
+    ) -> dict[int, int]:
+        """Frozen SaleItem.unit_cost COGS of every sale line in the window, per product."""
+        result = await self.db.execute(
             select(SaleItem.product_id, func.sum(SaleItem.quantity * SaleItem.unit_cost))
             .join(Sale, Sale.id == SaleItem.sale_id)
             .where(Sale.created_at >= utc_start, Sale.created_at < utc_end)
             .group_by(SaleItem.product_id)
         )
-        cost_cents_by_product = {
-            product_id: to_cents(float(cost)) for product_id, cost in cost_result.all()
-        }
+        return {product_id: to_cents(cost) for product_id, cost in result.all()}
 
-        refund_result = await self.db.execute(
+    async def _restocked_cost_cents_by_product(
+        self, utc_start: datetime, utc_end: datetime
+    ) -> dict[int, int]:
+        """
+        Cost of units returned to the shelf in the window, per product,
+        at the original sale line's frozen unit_cost -- the same
+        reversal profit_report applies to its COGS total.
+        """
+        result = await self.db.execute(
+            select(RefundItem.product_id, func.sum(RefundItem.quantity * SaleItem.unit_cost))
+            .join(SaleItem, SaleItem.id == RefundItem.sale_item_id)
+            .join(Refund, Refund.id == RefundItem.refund_id)
+            .where(
+                Refund.created_at >= utc_start,
+                Refund.created_at < utc_end,
+                RefundItem.restocked.is_(True),
+            )
+            .group_by(RefundItem.product_id)
+        )
+        return {product_id: to_cents(cost) for product_id, cost in result.all()}
+
+    async def _refunds_by_product(
+        self, utc_start: datetime, utc_end: datetime
+    ) -> list[tuple[int, str, int, int]]:
+        """Per product refunded in the window: (id, name, units, refunded cents)."""
+        result = await self.db.execute(
             select(
                 RefundItem.product_id,
                 Product.name,
@@ -299,55 +359,10 @@ class ReportService:
             .where(Refund.created_at >= utc_start, Refund.created_at < utc_end)
             .group_by(RefundItem.product_id, Product.name)
         )
-        refunded_units_by_product: dict[int, int] = {}
-        refunded_cents_by_product: dict[int, int] = {}
-        for product_id, name, refunded_units, refunded in refund_result.all():
-            name_by_product.setdefault(product_id, name)
-            refunded_units_by_product[product_id] = int(refunded_units)
-            refunded_cents_by_product[product_id] = to_cents(float(refunded))
-
-        restocked_cost_result = await self.db.execute(
-            select(RefundItem.product_id, func.sum(RefundItem.quantity * SaleItem.unit_cost))
-            .join(SaleItem, SaleItem.id == RefundItem.sale_item_id)
-            .join(Refund, Refund.id == RefundItem.refund_id)
-            .where(
-                Refund.created_at >= utc_start,
-                Refund.created_at < utc_end,
-                RefundItem.restocked.is_(True),
-            )
-            .group_by(RefundItem.product_id)
-        )
-        restocked_cost_cents_by_product = {
-            product_id: to_cents(float(cost)) for product_id, cost in restocked_cost_result.all()
-        }
-
-        entries: list[ProfitByProductEntry] = []
-        for product_id, name in name_by_product.items():
-            revenue_cents = sales_cents_by_product.get(product_id, 0)
-            revenue_cents -= refunded_cents_by_product.get(product_id, 0)
-            cost_cents = cost_cents_by_product.get(product_id, 0)
-            cost_cents -= restocked_cost_cents_by_product.get(product_id, 0)
-            if revenue_cents == 0 and cost_cents == 0:
-                continue
-            profit_cents = revenue_cents - cost_cents
-            net_units = units_by_product.get(product_id, 0)
-            net_units -= refunded_units_by_product.get(product_id, 0)
-            entries.append(
-                ProfitByProductEntry(
-                    product_id=product_id,
-                    name=name,
-                    net_quantity_sold=net_units,
-                    revenue=from_cents(revenue_cents),
-                    cost=from_cents(cost_cents),
-                    profit=from_cents(profit_cents),
-                    profit_margin_percent=(
-                        round(profit_cents / revenue_cents * 100, 2) if revenue_cents > 0 else None
-                    ),
-                )
-            )
-        entries.sort(key=lambda entry: (-entry.profit, entry.name))
-
-        return ProfitByProductOut(start_date=start_date, end_date=end_date, entries=entries)
+        return [
+            (product_id, name, int(units), to_cents(refunded))
+            for product_id, name, units, refunded in result.all()
+        ]
 
     async def expired_stock(self) -> ExpiredStockReportOut:
         today = await business_today(self.db)
@@ -789,7 +804,10 @@ class ReportService:
             )
         )
         total_refunds = refund_result.scalar_one()
-        net_revenue = float(total_revenue) - float(total_refunds)
+        # Rounded back to whole cents: subtracting two floats that are
+        # each exact cents can land a hair off (0.30 - 0.10 is
+        # 0.19999999999999998), and that noise ends up in the JSON.
+        net_revenue = round(float(total_revenue) - float(total_refunds), 2)
         return net_revenue, int(count)
 
     async def _gross_product_revenue(

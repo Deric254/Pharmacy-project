@@ -131,13 +131,12 @@ async def profit_loss_pdf(
     from app.models.audit_log import AuditLog
     from app.services.business_config_service import BusinessConfigService
 
-    result = await ReportService(db).profit_report(start_date, end_date)
-    trend = await ReportService(db).revenue_trend(start_date, end_date, include_profit=True)
-    top_products_result = await ReportService(db).top_products_by_revenue(
-        start_date, end_date, limit=8
-    )
-    top_customers_result = await ReportService(db).top_customers(start_date, end_date, limit=8)
-    breakdown = await ReportService(db).profit_by_product(start_date, end_date)
+    reports = ReportService(db)
+    result = await reports.profit_report(start_date, end_date)
+    trend = await reports.revenue_trend(start_date, end_date, include_profit=True)
+    top_products_result = await reports.top_products_by_revenue(start_date, end_date, limit=8)
+    top_customers_result = await reports.top_customers(start_date, end_date, limit=8)
+    breakdown = await reports.profit_by_product(start_date, end_date)
     config = await BusinessConfigService(db).get()
 
     content = await run_in_threadpool(

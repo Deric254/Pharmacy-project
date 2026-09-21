@@ -11,6 +11,7 @@ import type {
   ExpiredStockReportOut,
   FastSlowMoversOut,
   ProductCoOccurrenceOut,
+  ProfitByProductOut,
   ProfitReportOut,
   ReceivingDiscrepancyReportOut,
   SalesSummaryOut,
@@ -288,14 +289,17 @@ function ProfitReport() {
   const timezone = useConfigStore((s) => s.config?.timezone) ?? fallbackTimezone()
   const [{ start, end }, setRange] = useState(() => defaultDateRange(timezone))
   const [data, setData] = useState<ProfitReportOut | null>(null)
+  const [byProduct, setByProduct] = useState<ProfitByProductOut | null>(null)
   const [error, setError] = useState<string | null>(null)
   const salesVersion = useSaleCompletedRefresh(true)
 
   useEffect(() => {
     setError(null)
-    reportsApi
-      .profit(start, end)
-      .then(setData)
+    Promise.all([reportsApi.profit(start, end), reportsApi.profitByProduct(start, end)])
+      .then(([totals, products]) => {
+        setData(totals)
+        setByProduct(products)
+      })
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load report.'))
   }, [start, end, salesVersion])
 
@@ -311,6 +315,43 @@ function ProfitReport() {
           <Stat label="Profit" value={formatCurrency(data.total_profit)} accent />
           <Stat label="Margin" value={`${data.profit_margin_percent.toFixed(1)}%`} accent />
         </div>
+      )}
+      {byProduct && (
+        <table className="mt-6 w-full text-sm">
+          <thead>
+            <tr className="border-b border-rule text-left text-xs uppercase tracking-wide text-ink-soft">
+              <th className="px-3 py-2">Product</th>
+              <th className="px-3 py-2">Units</th>
+              <th className="px-3 py-2">Revenue</th>
+              <th className="px-3 py-2">Cost</th>
+              <th className="px-3 py-2">Profit</th>
+              <th className="px-3 py-2">Margin</th>
+            </tr>
+          </thead>
+          <tbody>
+            {byProduct.entries.map((e) => (
+              <tr key={e.product_id} className="ruled-row">
+                <td className="px-3 py-2">{e.name}</td>
+                <td className="figure px-3 py-2">{e.net_quantity_sold}</td>
+                <td className="figure px-3 py-2">{formatCurrency(e.revenue)}</td>
+                <td className="figure px-3 py-2">{formatCurrency(e.cost)}</td>
+                <td className={`figure px-3 py-2 ${e.profit < 0 ? 'text-stamp-red' : ''}`}>
+                  {formatCurrency(e.profit)}
+                </td>
+                <td className="figure px-3 py-2">
+                  {e.profit_margin_percent !== null ? `${e.profit_margin_percent.toFixed(1)}%` : '—'}
+                </td>
+              </tr>
+            ))}
+            {byProduct.entries.length === 0 && (
+              <tr>
+                <td colSpan={6} className="px-3 py-4 text-center text-ink-soft">
+                  No sales in this period.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       )}
     </div>
   )

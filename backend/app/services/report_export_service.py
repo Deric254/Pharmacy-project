@@ -10,6 +10,7 @@ what an SME pharmacy report actually needs.
 
 import io
 from typing import TYPE_CHECKING, Literal
+from xml.sax.saxutils import escape
 
 from fastapi import Response
 from openpyxl import Workbook
@@ -21,10 +22,17 @@ from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
 from starlette.concurrency import run_in_threadpool
 
+from app.core.money_types import from_cents, to_cents
+
 if TYPE_CHECKING:
     from reportlab.graphics.shapes import Drawing
 
-    from app.schemas.reports import RevenueTrendPoint, TopCustomerEntry, TopProductEntry
+    from app.schemas.reports import (
+        ProfitByProductEntry,
+        RevenueTrendPoint,
+        TopCustomerEntry,
+        TopProductEntry,
+    )
 
 ExportFormat = Literal["json", "excel", "pdf"]
 
@@ -186,6 +194,7 @@ def generate_profit_loss_pdf(
     trend_points: list["RevenueTrendPoint"] | None = None,
     top_products: list["TopProductEntry"] | None = None,
     top_customers: list["TopCustomerEntry"] | None = None,
+    product_breakdown: list["ProfitByProductEntry"] | None = None,
 ) -> bytes:
     """
     A real, honest Gross Profit statement -- not a full P&L. This
@@ -264,6 +273,14 @@ def generate_profit_loss_pdf(
         elements.append(Spacer(1, 6))
         elements.append(_build_customer_pareto_chart_drawing(top_customers))
 
+    if product_breakdown:
+        elements.append(Spacer(1, 20))
+        elements.append(Paragraph("Profit by product", subtitle_style))
+        elements.append(Spacer(1, 6))
+        elements.append(
+            _build_product_profit_table(product_breakdown, currency, gross_margin_percent)
+        )
+
     elements.append(
         Paragraph(
             "This statement reflects revenue and cost of goods sold only, computed directly "
@@ -276,6 +293,84 @@ def generate_profit_loss_pdf(
     )
     doc.build(elements)
     return buffer.getvalue()
+
+
+def _build_product_profit_table(
+    entries: list["ProfitByProductEntry"], currency: str, overall_margin_percent: float
+) -> Table:
+    """
+    One row per product plus a Total row summed from those same rows
+    (in whole cents, never float addition), so the statement's own
+    Revenue / Cost / Profit figures above can be checked against it at
+    a glance. Amounts carry no currency prefix -- it is in the column
+    headers -- to keep seven-figure values inside their columns.
+    """
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.platypus import Paragraph
+
+    name_style = ParagraphStyle("PLProductName", fontName="Helvetica", fontSize=8, leading=10)
+
+    def amount(value: float) -> str:
+        return f"{value:,.2f}"
+
+    revenue_cents = sum(to_cents(e.revenue) for e in entries)
+    cost_cents = sum(to_cents(e.cost) for e in entries)
+    rows: list[list[object]] = [
+        [
+            "Product",
+            "Units",
+            f"Revenue ({currency})",
+            f"Cost ({currency})",
+            f"Profit ({currency})",
+            "Margin",
+        ]
+    ]
+    for e in entries:
+        rows.append(
+            [
+                Paragraph(escape(e.name), name_style),
+                str(e.net_quantity_sold),
+                amount(e.revenue),
+                amount(e.cost),
+                amount(e.profit),
+                "n/a" if e.profit_margin_percent is None else f"{e.profit_margin_percent:.1f}%",
+            ]
+        )
+    rows.append(
+        [
+            "Total",
+            "",
+            amount(from_cents(revenue_cents)),
+            amount(from_cents(cost_cents)),
+            amount(from_cents(revenue_cents - cost_cents)),
+            f"{overall_margin_percent:.1f}%",
+        ]
+    )
+
+    table = Table(
+        rows,
+        colWidths=[4.9 * cm, 1.5 * cm, 2.6 * cm, 2.6 * cm, 2.6 * cm, 1.7 * cm],
+        repeatRows=1,
+    )
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0F172A")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                ("LINEABOVE", (0, -1), (-1, -1), 1.5, colors.HexColor("#0F172A")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F1F5F9")]),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]
+        )
+    )
+    return table
 
 
 def _build_trend_chart_drawing(trend_points: list["RevenueTrendPoint"]) -> "Drawing":

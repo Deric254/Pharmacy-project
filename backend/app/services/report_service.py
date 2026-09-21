@@ -13,6 +13,7 @@ which is what keeps reports fast regardless of how many years of
 sales have accumulated, rather than loading every row into Python.
 """
 
+import math
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal
@@ -25,6 +26,7 @@ from app.core.business_time import (
     local_day_bounds_utc,
     local_offset_segments,
 )
+from app.core.money_types import from_cents, to_cents
 from app.models.customer import Customer
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
@@ -44,6 +46,8 @@ from app.schemas.reports import (
     ProductCoOccurrenceOut,
     ProductMovementEntry,
     ProductPairEntry,
+    ProfitByProductEntry,
+    ProfitByProductOut,
     ProfitReportOut,
     ReceivingDiscrepancyEntry,
     ReceivingDiscrepancyReportOut,
@@ -64,6 +68,24 @@ from app.schemas.reports import (
     TopProductEntry,
 )
 from app.services.inventory_service import InventoryService
+
+
+def _apportion_cents(exact_cents: dict[int, float], total_cents: int) -> dict[int, int]:
+    """
+    Rounds each entry's exact (fractional-cent) share to whole cents so
+    the shares add up to total_cents exactly: everything is floored,
+    then the leftover cents go one each to the largest fractional
+    remainders. Rounding each entry on its own can leave a table a cent
+    or two off the total it is meant to break down.
+    """
+    floors = {key: math.floor(cents) for key, cents in exact_cents.items()}
+    leftover = total_cents - sum(floors.values())
+    largest_remainder_first = sorted(
+        exact_cents, key=lambda key: (floors[key] - exact_cents[key], key)
+    )
+    for key in largest_remainder_first[: max(leftover, 0)]:
+        floors[key] += 1
+    return floors
 
 
 class ReportService:
@@ -219,6 +241,113 @@ class ReportService:
             total_profit=total_profit,
             profit_margin_percent=round(margin, 2),
         )
+
+    async def profit_by_product(self, start_date: date, end_date: date) -> ProfitByProductOut:
+        """
+        profit_report(), broken down per product: same period bounds,
+        same net-of-refunds revenue, same frozen SaleItem.unit_cost
+        COGS with restocked refunds reversed out, so the entries add
+        up to profit_report()'s totals exactly, to the cent.
+
+        Everything is summed in whole cents. Revenue is the one figure
+        that is not already whole cents per product (a sale's discount
+        is prorated across its lines -- see _gross_product_revenue), so
+        it is apportioned to the period's real total sales amount
+        rather than rounded entry by entry. Units are net of returned
+        units, so revenue / units is the price actually taken. A
+        product whose revenue and cost both net to zero (sold and fully
+        refunded back to stock) has nothing to show and is left out.
+        """
+        utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
+
+        gross_rows = await self._gross_product_revenue(utc_start, utc_end)
+        name_by_product = {product_id: name for product_id, name, _, _ in gross_rows}
+        units_by_product = {product_id: units for product_id, _, units, _ in gross_rows}
+
+        sales_total = (
+            await self.db.execute(
+                select(func.coalesce(func.sum(Sale.total_amount), 0.0)).where(
+                    Sale.created_at >= utc_start,
+                    Sale.created_at < utc_end,
+                )
+            )
+        ).scalar_one()
+        sales_cents_by_product = _apportion_cents(
+            {product_id: cents for product_id, _, _, cents in gross_rows},
+            to_cents(float(sales_total)),
+        )
+
+        cost_result = await self.db.execute(
+            select(SaleItem.product_id, func.sum(SaleItem.quantity * SaleItem.unit_cost))
+            .join(Sale, Sale.id == SaleItem.sale_id)
+            .where(Sale.created_at >= utc_start, Sale.created_at < utc_end)
+            .group_by(SaleItem.product_id)
+        )
+        cost_cents_by_product = {
+            product_id: to_cents(float(cost)) for product_id, cost in cost_result.all()
+        }
+
+        refund_result = await self.db.execute(
+            select(
+                RefundItem.product_id,
+                Product.name,
+                func.sum(RefundItem.quantity),
+                func.sum(RefundItem.line_total),
+            )
+            .join(Refund, Refund.id == RefundItem.refund_id)
+            .join(Product, Product.id == RefundItem.product_id)
+            .where(Refund.created_at >= utc_start, Refund.created_at < utc_end)
+            .group_by(RefundItem.product_id, Product.name)
+        )
+        refunded_units_by_product: dict[int, int] = {}
+        refunded_cents_by_product: dict[int, int] = {}
+        for product_id, name, refunded_units, refunded in refund_result.all():
+            name_by_product.setdefault(product_id, name)
+            refunded_units_by_product[product_id] = int(refunded_units)
+            refunded_cents_by_product[product_id] = to_cents(float(refunded))
+
+        restocked_cost_result = await self.db.execute(
+            select(RefundItem.product_id, func.sum(RefundItem.quantity * SaleItem.unit_cost))
+            .join(SaleItem, SaleItem.id == RefundItem.sale_item_id)
+            .join(Refund, Refund.id == RefundItem.refund_id)
+            .where(
+                Refund.created_at >= utc_start,
+                Refund.created_at < utc_end,
+                RefundItem.restocked.is_(True),
+            )
+            .group_by(RefundItem.product_id)
+        )
+        restocked_cost_cents_by_product = {
+            product_id: to_cents(float(cost)) for product_id, cost in restocked_cost_result.all()
+        }
+
+        entries: list[ProfitByProductEntry] = []
+        for product_id, name in name_by_product.items():
+            revenue_cents = sales_cents_by_product.get(product_id, 0)
+            revenue_cents -= refunded_cents_by_product.get(product_id, 0)
+            cost_cents = cost_cents_by_product.get(product_id, 0)
+            cost_cents -= restocked_cost_cents_by_product.get(product_id, 0)
+            if revenue_cents == 0 and cost_cents == 0:
+                continue
+            profit_cents = revenue_cents - cost_cents
+            net_units = units_by_product.get(product_id, 0)
+            net_units -= refunded_units_by_product.get(product_id, 0)
+            entries.append(
+                ProfitByProductEntry(
+                    product_id=product_id,
+                    name=name,
+                    net_quantity_sold=net_units,
+                    revenue=from_cents(revenue_cents),
+                    cost=from_cents(cost_cents),
+                    profit=from_cents(profit_cents),
+                    profit_margin_percent=(
+                        round(profit_cents / revenue_cents * 100, 2) if revenue_cents > 0 else None
+                    ),
+                )
+            )
+        entries.sort(key=lambda entry: (-entry.profit, entry.name))
+
+        return ProfitByProductOut(start_date=start_date, end_date=end_date, entries=entries)
 
     async def expired_stock(self) -> ExpiredStockReportOut:
         today = await business_today(self.db)
@@ -663,6 +792,48 @@ class ReportService:
         net_revenue = float(total_revenue) - float(total_refunds)
         return net_revenue, int(count)
 
+    async def _gross_product_revenue(
+        self, utc_start: datetime, utc_end: datetime
+    ) -> list[tuple[int, str, int, float]]:
+        """
+        Per product with sales in [utc_start, utc_end): (id, name,
+        units sold, discount-prorated revenue in raw cents, unrounded,
+        before refunds). The one place that proration lives, shared by
+        top_products_by_revenue and profit_by_product so the two can
+        never disagree -- see top_products_by_revenue for why and how.
+        """
+        sale_totals = (
+            select(Sale.id, Sale.subtotal, Sale.total_amount)
+            .where(Sale.created_at >= utc_start, Sale.created_at < utc_end)
+            .subquery()
+        )
+        # A sale with a zero subtotal (every line free) has nothing to
+        # prorate a discount against -- keep that line at face value
+        # (ratio 1.0) rather than dividing by zero.
+        discount_ratio = case(
+            (cast(sale_totals.c.subtotal, Float) == 0, 1.0),
+            else_=cast(sale_totals.c.total_amount, Float) / cast(sale_totals.c.subtotal, Float),
+        )
+        revenue_cents_expr = cast(
+            func.sum(SaleItem.quantity * cast(SaleItem.unit_price, Float) * discount_ratio),
+            Float,
+        )
+        result = await self.db.execute(
+            select(
+                Product.id,
+                Product.name,
+                func.sum(SaleItem.quantity).label("quantity_sold"),
+                revenue_cents_expr.label("revenue_cents"),
+            )
+            .join(SaleItem, SaleItem.product_id == Product.id)
+            .join(sale_totals, sale_totals.c.id == SaleItem.sale_id)
+            .group_by(Product.id, Product.name)
+        )
+        return [
+            (product_id, name, int(quantity_sold), float(revenue_cents))
+            for product_id, name, quantity_sold, revenue_cents in result.all()
+        ]
+
     async def top_products_by_revenue(
         self, start_date: date, end_date: date, limit: int
     ) -> list[TopProductEntry]:
@@ -693,15 +864,16 @@ class ReportService:
         compiles that as `total_amount / CAST(subtotal AS NUMERIC)`
         to give true (non-truncating) division, confirmed against
         this exact query with a >50% discount before this was
-        trusted. The explicit CAST(... AS FLOAT) calls below are kept
-        anyway, for two reasons that have nothing to do with that
-        truncation risk: they pin the whole expression to a plain
-        float end type, and the aggregate is deliberately computed in
-        the raw-cents domain and converted to dollars with one
-        explicit /100 in Python at the end, rather than trusted to
-        MoneyCents' automatic decode on an expression this heavily
-        multiplied and cast -- that decode is only verified reliable
-        on a plain summed column (see the refund netting just below).
+        trusted. The explicit CAST(... AS FLOAT) calls in
+        _gross_product_revenue are kept anyway, for two reasons that
+        have nothing to do with that truncation risk: they pin the
+        whole expression to a plain float end type, and the aggregate
+        is deliberately computed in the raw-cents domain and
+        converted to dollars with one explicit /100 in Python at the
+        end, rather than trusted to MoneyCents' automatic decode on
+        an expression this heavily multiplied and cast -- that
+        decode is only verified reliable on a plain summed column
+        (see the refund netting just below).
         Pinned by test_top_products_revenue_is_net_of_discount (a 250
         sale discounted by 50 -> exactly 200) and
         test_top_products_revenue_survives_a_discount_over_half_price
@@ -709,41 +881,15 @@ class ReportService:
         integer truncation if it were happening).
         """
         utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
-        sale_totals = (
-            select(Sale.id, Sale.subtotal, Sale.total_amount)
-            .where(Sale.created_at >= utc_start, Sale.created_at < utc_end)
-            .subquery()
-        )
-        # A sale with a zero subtotal (every line free) has nothing to
-        # prorate a discount against -- keep that line at face value
-        # (ratio 1.0) rather than dividing by zero.
-        discount_ratio = case(
-            (cast(sale_totals.c.subtotal, Float) == 0, 1.0),
-            else_=cast(sale_totals.c.total_amount, Float) / cast(sale_totals.c.subtotal, Float),
-        )
-        revenue_cents_expr = cast(
-            func.sum(SaleItem.quantity * cast(SaleItem.unit_price, Float) * discount_ratio),
-            Float,
-        )
-        result = await self.db.execute(
-            select(
-                Product.id,
-                Product.name,
-                func.sum(SaleItem.quantity).label("quantity_sold"),
-                revenue_cents_expr.label("revenue_cents"),
-            )
-            .join(SaleItem, SaleItem.product_id == Product.id)
-            .join(sale_totals, sale_totals.c.id == SaleItem.sale_id)
-            .group_by(Product.id, Product.name)
-        )
-
         name_by_product: dict[int, str] = {}
         qty_by_product: dict[int, int] = {}
         revenue_by_product: dict[int, float] = defaultdict(float)
-        for product_id, name, quantity_sold, revenue_cents in result.all():
+        for product_id, name, quantity_sold, revenue_cents in await self._gross_product_revenue(
+            utc_start, utc_end
+        ):
             name_by_product[product_id] = name
-            qty_by_product[product_id] = int(quantity_sold)
-            revenue_by_product[product_id] = float(revenue_cents) / 100.0
+            qty_by_product[product_id] = quantity_sold
+            revenue_by_product[product_id] = revenue_cents / 100.0
 
         # RefundItem.line_total is already the real, discount-prorated
         # money handed back on that line (see refund_service.py) -- no

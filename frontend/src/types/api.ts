@@ -535,6 +535,22 @@ export interface ProfitReportOut {
   profit_margin_percent: number
 }
 
+export interface ProfitByProductEntry {
+  product_id: number
+  name: string
+  net_quantity_sold: number
+  revenue: number
+  cost: number
+  profit: number
+  profit_margin_percent: number | null
+}
+
+export interface ProfitByProductOut {
+  start_date: string
+  end_date: string
+  entries: ProfitByProductEntry[]
+}
+
 export interface ExpiredStockEntry {
   batch_id: number
   product_id: number

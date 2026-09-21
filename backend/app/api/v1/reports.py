@@ -14,6 +14,7 @@ from app.schemas.reports import (
     FastSlowMoversOut,
     KpiDashboardOut,
     ProductCoOccurrenceOut,
+    ProfitByProductOut,
     ProfitReportOut,
     ReceivingDiscrepancyReportOut,
     RevenuePotentialOut,
@@ -102,6 +103,20 @@ async def profit_report(
 
 
 @router.get(
+    "/profit-by-product",
+    response_model=ProfitByProductOut,
+    dependencies=[Depends(require_permission("reports.view_profit"))],
+)
+async def profit_by_product(
+    db: Annotated[AsyncSession, Depends(get_db)], start_date: date, end_date: date
+) -> ProfitByProductOut:
+    if start_date > end_date:
+        raise HTTPException(status_code=400, detail="start_date must be before end_date")
+    # JSON-only for the same reason as /profit above -- no export param.
+    return await ReportService(db).profit_by_product(start_date, end_date)
+
+
+@router.get(
     "/profit-loss-pdf",
     dependencies=[Depends(require_permission("reports.view_profit"))],
 )
@@ -122,6 +137,7 @@ async def profit_loss_pdf(
         start_date, end_date, limit=8
     )
     top_customers_result = await ReportService(db).top_customers(start_date, end_date, limit=8)
+    breakdown = await ReportService(db).profit_by_product(start_date, end_date)
     config = await BusinessConfigService(db).get()
 
     content = await run_in_threadpool(
@@ -137,6 +153,7 @@ async def profit_loss_pdf(
         trend_points=trend.points,
         top_products=top_products_result,
         top_customers=top_customers_result.entries,
+        product_breakdown=breakdown.entries,
     )
 
     # This is the one place profit data can leave the system as a

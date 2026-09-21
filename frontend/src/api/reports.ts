@@ -5,6 +5,7 @@ import type {
   FastSlowMoversOut,
   KpiDashboardOut,
   ProductCoOccurrenceOut,
+  ProfitByProductOut,
   ProfitReportOut,
   ReceivingDiscrepancyReportOut,
   RevenuePotentialOut,
@@ -42,6 +43,11 @@ export const reportsApi = {
     }),
   profit: (startDate: string, endDate: string) =>
     api.get<ProfitReportOut>('/reports/profit', { start_date: startDate, end_date: endDate }),
+  profitByProduct: (startDate: string, endDate: string) =>
+    api.get<ProfitByProductOut>('/reports/profit-by-product', {
+      start_date: startDate,
+      end_date: endDate,
+    }),
   expiredStock: () => api.get<ExpiredStockReportOut>('/reports/expired-stock'),
   fastSlowMovers: (days: number, limit: number) =>
     api.get<FastSlowMoversOut>('/reports/fast-slow-movers', { days, limit }),

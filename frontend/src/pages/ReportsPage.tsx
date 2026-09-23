@@ -550,6 +550,9 @@ function StockTakeHistoryReport() {
               <th className="px-3 py-2">Closed</th>
               <th className="px-3 py-2">Shrinkage value</th>
               <th className="px-3 py-2">Shrinkage %</th>
+              <th className="px-3 py-2">Excess value</th>
+              <th className="px-3 py-2">Excess %</th>
+              <th className="px-3 py-2">Net variance</th>
             </tr>
           </thead>
           <tbody>
@@ -564,11 +567,22 @@ function StockTakeHistoryReport() {
                   {formatCurrency(e.shrinkage_value)}
                 </td>
                 <td className="figure px-3 py-2">{e.shrinkage_percent.toFixed(2)}%</td>
+                <td className="figure px-3 py-2 text-emerald-600">
+                  {formatCurrency(e.excess_value)}
+                </td>
+                <td className="figure px-3 py-2">{e.excess_percent.toFixed(2)}%</td>
+                <td
+                  className={`figure px-3 py-2 ${
+                    e.net_variance_value < 0 ? 'text-stamp-red' : 'text-emerald-600'
+                  }`}
+                >
+                  {formatCurrency(e.net_variance_value)}
+                </td>
               </tr>
             ))}
             {data.entries.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-3 py-4 text-center text-ink-soft">
+                <td colSpan={8} className="px-3 py-4 text-center text-ink-soft">
                   No closed stock takes yet.
                 </td>
               </tr>

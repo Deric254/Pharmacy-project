@@ -55,6 +55,8 @@ class StockTakeClosedEvent(DomainEvent):
     stock_take_id: int
     shrinkage_value: str  # decimal serialized as string, never float, for money
     shrinkage_percent: float
+    excess_value: str  # decimal serialized as string, never float, for money
+    excess_percent: float
 
 
 class BusinessConfigUpdatedEvent(DomainEvent):

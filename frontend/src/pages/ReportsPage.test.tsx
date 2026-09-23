@@ -6,13 +6,14 @@ import { reportsApi } from '../api/reports'
 import { useAuthStore } from '../auth/store'
 import { useConfigStore } from '../config/store'
 import { formatMoney } from '../lib/currency'
-import type { ProfitByProductEntry, ProfitReportOut, UserOut } from '../types/api'
+import type { ProfitByProductEntry, ProfitReportOut, StockTakeHistoryOut, UserOut } from '../types/api'
 import type { BusinessConfigOut } from '../types/config'
 
 vi.mock('../api/reports', () => ({
   reportsApi: {
     profit: vi.fn(),
     profitByProduct: vi.fn(),
+    stockTakeHistory: vi.fn(),
   },
   downloadReportExport: vi.fn(),
 }))
@@ -67,6 +68,14 @@ const money = (value: number) => formatMoney(value, 'KES').replace(/\s+/g, ' ')
 function renderProfitTab() {
   return render(
     <MemoryRouter initialEntries={['/reports?tab=profit']}>
+      <ReportsPage />
+    </MemoryRouter>,
+  )
+}
+
+function renderStockTakesTab() {
+  return render(
+    <MemoryRouter initialEntries={['/reports?tab=stocktakes']}>
       <ReportsPage />
     </MemoryRouter>,
   )
@@ -146,5 +155,72 @@ describe('ReportsPage profit tab', () => {
 
     expect(await screen.findByText('Could not load report.')).toBeInTheDocument()
     expect(screen.queryByText(money(38348))).not.toBeInTheDocument()
+  })
+})
+
+describe('ReportsPage stock take history tab', () => {
+  beforeEach(() => {
+    vi.mocked(reportsApi.stockTakeHistory).mockReset()
+    useAuthStore.setState({ user: OWNER_USER, status: 'authenticated' })
+    useConfigStore.setState({
+      config: { timezone: 'Africa/Nairobi', currency: 'KES' } as BusinessConfigOut,
+      status: 'ready',
+    })
+  })
+
+  it('shows shrinkage and excess side by side, not shrinkage only', async () => {
+    const history: StockTakeHistoryOut = {
+      entries: [
+        {
+          stock_take_id: 15,
+          started_at: '2026-09-23T00:00:00Z',
+          closed_at: '2026-09-23T00:00:00Z',
+          shrinkage_value: 0,
+          shrinkage_percent: 0,
+          excess_value: 8,
+          excess_percent: 22.94,
+          net_variance_value: 8,
+        },
+      ],
+    }
+    vi.mocked(reportsApi.stockTakeHistory).mockResolvedValue(history)
+    renderStockTakesTab()
+
+    const row = (await screen.findByText('#15')).closest('tr')!
+    const cells = within(row).getAllByRole('cell')
+    expect(cells).toHaveLength(8) // stock take, started, closed, shrinkage x2, excess x2, net
+    expect(cells[3]).toHaveTextContent(money(0)) // shrinkage_value
+    expect(cells[5]).toHaveTextContent(money(8)) // excess_value
+    expect(cells[5]).toHaveClass('text-emerald-600')
+    expect(cells[6]).toHaveTextContent('22.94%') // excess_percent
+    // net_variance_value is positive (excess outweighs shrinkage): must not
+    // render in the loss color used for a genuine net shortfall.
+    expect(cells[7]).toHaveTextContent(money(8))
+    expect(cells[7]).toHaveClass('text-emerald-600')
+    expect(cells[7]).not.toHaveClass('text-stamp-red')
+  })
+
+  it('colors a net loss red so it reads the same as the old shrinkage-only column did', async () => {
+    const history: StockTakeHistoryOut = {
+      entries: [
+        {
+          stock_take_id: 2,
+          started_at: '2026-08-05T00:00:00Z',
+          closed_at: '2026-08-05T00:00:00Z',
+          shrinkage_value: 6527,
+          shrinkage_percent: 22.94,
+          excess_value: 0,
+          excess_percent: 0,
+          net_variance_value: -6527,
+        },
+      ],
+    }
+    vi.mocked(reportsApi.stockTakeHistory).mockResolvedValue(history)
+    renderStockTakesTab()
+
+    const row = (await screen.findByText('#2')).closest('tr')!
+    const cells = within(row).getAllByRole('cell')
+    expect(cells[7]).toHaveTextContent(money(-6527))
+    expect(cells[7]).toHaveClass('text-stamp-red')
   })
 })

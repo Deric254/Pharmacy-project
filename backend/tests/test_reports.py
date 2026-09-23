@@ -669,6 +669,8 @@ class TestStockTakeHistory:
         assert r.status_code == 200
         entry = next(e for e in r.json()["entries"] if e["stock_take_id"] == stock_take_id)
         assert entry["shrinkage_value"] == 4.0  # 2 units * 2.0 cost
+        assert entry["excess_value"] == 0.0
+        assert entry["net_variance_value"] == -4.0
         assert entry["closed_at"] is not None
 
     async def test_stock_take_with_no_items_still_appears_with_zero_shrinkage(
@@ -707,6 +709,8 @@ class TestStockTakeHistory:
         entry = next(e for e in r.json()["entries"] if e["stock_take_id"] == stock_take_id)
         assert entry["shrinkage_value"] == 0.0
         assert entry["shrinkage_percent"] == 0.0
+        assert entry["excess_value"] == 0.0
+        assert entry["net_variance_value"] == 0.0
 
     async def test_stock_take_overage_is_not_counted_as_shrinkage(self, client, owner_user):
         """
@@ -714,8 +718,10 @@ class TestStockTakeHistory:
         counting MORE than expected (physical_qty > expected_qty) is
         an overage, not shrinkage -- it must not add to
         shrinkage_value, only a genuine shortfall (physical < expected)
-        should. Kept within the self-approve threshold so the count
-        actually resolves and the stock take can close.
+        should. It must instead show up under excess_value, which is
+        the whole point of this report carrying both directions.
+        Kept within the self-approve threshold so the count actually
+        resolves and the stock take can close.
         """
         product_id, _ = await _make_product_with_batch(qty=50, cost=2.0)
         token = await _login(client, "lucy", "S3curePass!")
@@ -738,6 +744,8 @@ class TestStockTakeHistory:
         entry = next(e for e in r.json()["entries"] if e["stock_take_id"] == stock_take_id)
         assert entry["shrinkage_value"] == 0.0
         assert entry["shrinkage_percent"] == 0.0
+        assert entry["excess_value"] == 4.0  # 2 units * 2.0 cost
+        assert entry["net_variance_value"] == 4.0
 
 
 class TestKpiDashboard:

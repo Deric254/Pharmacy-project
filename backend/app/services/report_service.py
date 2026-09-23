@@ -642,7 +642,7 @@ class ReportService:
         of its StockTakeItem rows (lazy="selectin", so not literally
         N+1 queries, but still every row of a business's entire
         stock-take history, always, on every single request to this
-        report) and sum shrinkage in a Python double loop. A pharmacy
+        report) and sum shrinkage/excess in a Python double loop. A pharmacy
         running weekly counts for a few years could have thousands of
         stock takes here; this report has no date filter or limit at
         all today, so unlike the sales-based reports above, there was
@@ -694,6 +694,29 @@ class ReportService:
             ),
             Float,
         )
+        # Mirror of shrinkage_cents for the opposite direction: physical
+        # count higher than expected (found stock, miscount corrections,
+        # over-receipts never logged). Same cost basis, same NULL-safety
+        # via cost_cents' coalesce, same guard against an uncounted item
+        # (physical_qty is null) being treated as a zero-variance excess.
+        excess_cents = cast(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                StockTakeItem.physical_qty.is_not(None),
+                                StockTakeItem.physical_qty > StockTakeItem.expected_qty,
+                            ),
+                            (StockTakeItem.physical_qty - StockTakeItem.expected_qty) * cost_cents,
+                        ),
+                        else_=0.0,
+                    )
+                ),
+                0.0,
+            ),
+            Float,
+        )
 
         result = await self.db.execute(
             select(
@@ -702,6 +725,7 @@ class ReportService:
                 StockTake.closed_at,
                 expected_cents.label("expected_cents"),
                 shrinkage_cents.label("shrinkage_cents"),
+                excess_cents.label("excess_cents"),
             )
             .outerjoin(StockTakeItem, StockTakeItem.stock_take_id == StockTake.id)
             .outerjoin(MedicineBatch, MedicineBatch.id == StockTakeItem.batch_id)
@@ -717,12 +741,15 @@ class ReportService:
             closed_at,
             expected_cents_value,
             shrinkage_cents_value,
+            excess_cents_value,
         ) in result.all():
             expected_value = float(expected_cents_value) / 100.0
             shrinkage_value = float(shrinkage_cents_value) / 100.0
+            excess_value = float(excess_cents_value) / 100.0
             shrinkage_percent = (
                 (shrinkage_value / expected_value * 100) if expected_value > 0 else 0.0
             )
+            excess_percent = (excess_value / expected_value * 100) if expected_value > 0 else 0.0
             entries.append(
                 StockTakeHistoryEntry(
                     stock_take_id=stock_take_id,
@@ -730,6 +757,9 @@ class ReportService:
                     closed_at=closed_at,
                     shrinkage_value=round(shrinkage_value, 2),
                     shrinkage_percent=round(shrinkage_percent, 2),
+                    excess_value=round(excess_value, 2),
+                    excess_percent=round(excess_percent, 2),
+                    net_variance_value=round(excess_value - shrinkage_value, 2),
                 )
             )
 

@@ -694,6 +694,58 @@ class TestClose:
         await pubsub.unsubscribe(CHANNEL)
         assert found, "Expected a stocktake.closed event with shrinkage data"
 
+    async def test_excess_event_published_on_close(self, client, owner_user):
+        """
+        Mirror of test_shrinkage_event_published_on_close for the
+        opposite direction: a stock take that finds MORE stock than
+        expected must publish a non-zero excess_value/excess_percent
+        on the same event, with shrinkage staying at zero -- so a
+        listener (live notification, audit review) sees the full
+        picture either way, not just losses.
+        """
+        product_id, _ = await _make_product_with_batch(qty=100, cost=4.0)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        pubsub = redis_client.pubsub()
+        await pubsub.subscribe(CHANNEL)
+        await pubsub.get_message(timeout=1)
+
+        create_resp = await client.post(
+            "/api/v1/stock-takes", json={"product_ids": [product_id]}, headers=headers
+        )
+        stock_take_id = create_resp.json()["id"]
+        item_id = create_resp.json()["items"][0]["id"]
+        # +2 is within self-approve threshold, keeps this a single-step test
+        await client.post(
+            f"/api/v1/stock-takes/{stock_take_id}/items/{item_id}/count",
+            json={"physical_qty": 102, "reason": "MISCOUNT"},
+            headers=headers,
+        )
+        await client.post(f"/api/v1/stock-takes/{stock_take_id}/close", headers=headers)
+
+        found = False
+        for _ in range(10):
+            message = await pubsub.get_message(timeout=1)
+            if message and message["type"] == "message":
+                envelope = json.loads(message["data"])
+                if envelope["event_type"] == "stocktake.closed":
+                    assert envelope["payload"]["stock_take_id"] == stock_take_id
+                    assert float(envelope["payload"]["excess_value"]) == 8.0  # 2 units * 4.0 cost
+                    assert float(envelope["payload"]["shrinkage_value"]) == 0.0
+                    found = True
+                    break
+        await pubsub.unsubscribe(CHANNEL)
+        assert found, "Expected a stocktake.closed event with excess data"
+
+        audit = await client.get(
+            "/api/v1/audit-logs", params={"action": "stock_take.closed"}, headers=headers
+        )
+        entries = audit.json()["entries"]
+        matching = [e for e in entries if e["entity_id"] == str(stock_take_id)]
+        assert len(matching) == 1
+        assert "excess_value=8.00" in matching[0]["new_value"]
+
 
 class TestStockTakeExcelRoundTrip:
     """

@@ -5,8 +5,8 @@ Lifecycle: initiate (snapshot + lock batches) -> count each item ->
 non-zero variances need a reason, and either self-approve (small,
 within SELF_APPROVE_THRESHOLD) or wait for a manager
 (stocktake.approve_variance) -> close (requires every item counted and
-resolved, unlocks batches, publishes a shrinkage event if losses are
-significant).
+resolved, unlocks batches, publishes a shrinkage/excess event summarizing
+what the count found).
 
 The ledger write for an approved variance sets qty_remaining directly
 to the physical count rather than adding the delta -- since the batch
@@ -221,6 +221,7 @@ class StockTakeService:
 
         shrinkage_value = 0.0
         expected_value = 0.0
+        excess_value = 0.0
         for item in stock_take.items:
             # item.batch is lazy="selectin" on StockTakeItem, so it was
             # already fetched in one batched query when stock_take.items
@@ -234,6 +235,8 @@ class StockTakeService:
             expected_value += item.expected_qty * batch.cost_price
             if variance < 0:
                 shrinkage_value += abs(variance) * batch.cost_price
+            elif variance > 0:
+                excess_value += variance * batch.cost_price
 
         # Summary-level fact StockMovement's per-batch rows don't
         # capture on their own: who closed this count, and what it
@@ -252,7 +255,8 @@ class StockTakeService:
                 old_value=None,
                 new_value=(
                     f"{len(stock_take.items)} item(s) counted, "
-                    f"shrinkage_value={shrinkage_value:.2f}, expected_value={expected_value:.2f}"
+                    f"shrinkage_value={shrinkage_value:.2f}, excess_value={excess_value:.2f}, "
+                    f"expected_value={expected_value:.2f}"
                 ),
             )
         )
@@ -261,11 +265,14 @@ class StockTakeService:
         await self.db.refresh(stock_take, attribute_names=["items", "status", "closed_at"])
 
         shrinkage_percent = (shrinkage_value / expected_value * 100) if expected_value > 0 else 0.0
+        excess_percent = (excess_value / expected_value * 100) if expected_value > 0 else 0.0
         await publish(
             StockTakeClosedEvent(
                 stock_take_id=stock_take.id,
                 shrinkage_value=f"{shrinkage_value:.2f}",
                 shrinkage_percent=round(shrinkage_percent, 2),
+                excess_value=f"{excess_value:.2f}",
+                excess_percent=round(excess_percent, 2),
             )
         )
 

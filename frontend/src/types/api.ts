@@ -619,6 +619,9 @@ export interface StockTakeHistoryEntry {
   closed_at: string | null
   shrinkage_value: number
   shrinkage_percent: number
+  excess_value: number
+  excess_percent: number
+  net_variance_value: number
 }
 
 export interface StockTakeHistoryOut {

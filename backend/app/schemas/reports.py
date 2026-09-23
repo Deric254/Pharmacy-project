@@ -92,6 +92,9 @@ class StockTakeHistoryEntry(BaseModel):
     closed_at: datetime | None
     shrinkage_value: float
     shrinkage_percent: float
+    excess_value: float
+    excess_percent: float
+    net_variance_value: float  # excess_value - shrinkage_value; negative = net loss
 
 
 class StockTakeHistoryOut(BaseModel):

@@ -71,7 +71,7 @@ async def select_batches_fefo(
             MedicineBatch.product_id == product_id,
             MedicineBatch.qty_remaining > 0,
             MedicineBatch.locked_by_stock_take_id.is_(None),
-            MedicineBatch.expiry_date >= today,
+            MedicineBatch.expiry_date > today,
         )
         .order_by(MedicineBatch.expiry_date.asc())
     )
@@ -95,7 +95,7 @@ async def select_batches_fefo(
             select(func.coalesce(func.sum(MedicineBatch.qty_remaining), 0)).where(
                 MedicineBatch.product_id == product_id,
                 MedicineBatch.locked_by_stock_take_id.is_not(None),
-                MedicineBatch.expiry_date >= today,
+                MedicineBatch.expiry_date > today,
             )
         )
         raise InsufficientStockError(

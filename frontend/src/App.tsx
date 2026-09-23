@@ -24,15 +24,6 @@ import { BackupsPage } from './pages/BackupsPage'
 import { HelpPage } from './pages/HelpPage'
 import { AiAssistantPage } from './pages/AiAssistantPage'
 
-// Deliberately much shorter than the client's generous 30s default
-// (meant for large Excel imports and AI calls). These two calls gate
-// the very first thing anyone sees -- a real backend confirmed alive
-// by Electron's own health check before this window was even shown
-// should answer a same-machine loopback request in well under a
-// second, not tens of seconds. Capping this short means a genuinely
-// slow or stuck response resolves to a visible retry/login screen
-// quickly, instead of leaving an indefinite blank screen that reads
-// as "the app is broken" rather than "still starting."
 const BOOTSTRAP_TIMEOUT_MS = 8000
 
 type SetupCheck = 'checking' | 'setup_needed' | 'setup_done' | 'unreachable'
@@ -54,15 +45,6 @@ export function App() {
       .then((s) => {
         if (!cancelled) setSetupCheck(s.needs_setup ? 'setup_needed' : 'setup_done')
       })
-      // Never silently guess an answer here -- whether to show Setup
-      // or Login is exactly the decision that must not be wrong. A
-      // wrong guess doesn't just look bad, it actively breaks things:
-      // guessing "no setup needed" when the server is actually just
-      // unreachable shows a login screen for an account that may not
-      // even exist yet, which fails again the moment it's used, for a
-      // completely different, more confusing reason than the real
-      // one. This state is shown honestly instead, with a real retry
-      // that re-runs the same check rather than papering over it.
       .catch(() => {
         if (!cancelled) setSetupCheck('unreachable')
       })
@@ -72,13 +54,6 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bootstrap, loadConfig, retryCount])
 
-  // Branding (theme, name, logo) must be in place before first paint
-  // of real content -- otherwise every business sees the same
-  // hardcoded look for a flash, which is exactly what should never
-  // happen again in this app. This is real, visible feedback, not a
-  // bare empty div -- a genuinely slow or stuck backend response
-  // used to render as pure blank nothing here, indistinguishable from
-  // the app having failed to start at all.
   if (configStatus === 'loading' || setupCheck === 'checking') {
     return (
       <div className="grid min-h-screen place-items-center bg-paper">

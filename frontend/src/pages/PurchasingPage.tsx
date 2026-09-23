@@ -495,21 +495,6 @@ interface QuickPurchaseLineDraft {
   expiryDate: string
   unitCost: number
   sellingPrice: number
-  // markupPercent is intentionally NOT stored here -- it's derived from
-  // unitCost/sellingPrice at render time (see markupFor() below). Storing
-  // it separately let it go stale the moment Unit cost or Selling price
-  // was edited directly, which is the same desync bug fixed in
-  // InventoryPage.tsx's BatchPriceRow.
-  // True only once the person actually edits the Selling price or
-  // Markup % field for this line -- as opposed to `sellingPrice`
-  // simply holding the product's current default because that's what
-  // gets seeded in when a product is picked. Submitting a line whose
-  // price was never touched must NOT tell the backend "explicitly sell
-  // this batch at this price": if `batchNumber`/`expiryDate` happen to
-  // match an existing batch (a restock), the backend now treats any
-  // submitted selling_price as an explicit instruction, and would
-  // wrongly 409 -- or wrongly overwrite -- that batch's real price
-  // just because it differs from today's generic product default.
   sellingPriceTouched: boolean
 }
 
@@ -531,11 +516,6 @@ function QuickPurchaseModal({
   onReceived: () => void
 }) {
   const [supplierId, setSupplierId] = useState<number | ''>(suppliers[0]?.id ?? '')
-  // Computed once per modal open (lazy initializer), not on every
-  // render -- every line in this same delivery shares one batch
-  // identifier by default, matching "received together, same batch",
-  // while staying fully editable per line for anyone who wants a
-  // different one for a specific product.
   const [sessionBatchNumber] = useState(generateSessionBatchNumber)
   const [lines, setLines] = useState<QuickPurchaseLineDraft[]>([
     {
@@ -679,13 +659,6 @@ function QuickPurchaseModal({
                           updateLine(index, {
                             productId: p.id,
                             productName: p.name,
-                            // Seeded from this product's current
-                            // effective price (whichever batch would
-                            // sell next) purely as a starting display
-                            // value -- sellingPriceTouched stays false,
-                            // so nothing is actually submitted unless
-                            // the person edits it (see the field's own
-                            // comment on why that distinction matters).
                             sellingPrice: p.current_selling_price ?? 0,
                           })
                           setActiveSearchIndex(null)
@@ -777,10 +750,6 @@ function QuickPurchaseModal({
                   step="any"
                   value={Math.round(markupFor(line) * 100) / 100 || ''}
                   onChange={(e) => {
-                    // Not clamped to >= 0: matches InventoryPage's
-                    // BatchPriceRow -- below-cost pricing is a real,
-                    // permitted case, not something to silently block here
-                    // while allowing it to display elsewhere.
                     const markupPercent = Number(e.target.value) || 0
                     const sellingPrice =
                       Math.round(line.unitCost * (1 + markupPercent / 100) * 100) / 100

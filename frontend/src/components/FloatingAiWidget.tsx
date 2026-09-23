@@ -11,18 +11,6 @@ interface Turn {
   providerUsed: string | null
 }
 
-/**
- * A real answer touches real business data before it touches the AI
- * provider at all (today's revenue, stock levels, top products --
- * see ai_assistant_service.py's _build_business_context), then makes
- * an actual network call to a hosted LLM, which can itself take
- * several seconds -- and if more than one provider is configured,
- * a slow or down first choice is retried against the next one rather
- * than failing fast. None of that is a bug to hide; it's genuinely
- * what a grounded, multi-provider answer requires. This just narrates
- * it honestly instead of leaving a static "…" for however long that
- * takes.
- */
 function ThinkingIndicator() {
   const [elapsedMs, setElapsedMs] = useState(0)
   useEffect(() => {

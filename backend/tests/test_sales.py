@@ -877,9 +877,31 @@ class TestExpiredStockNeverSold:
         )
         assert r.status_code == 409
 
-    async def test_batch_expiring_today_can_still_be_sold(self, client, owner_user):
+    async def test_batch_expiring_today_cannot_be_sold(self, client, owner_user):
+        """
+        A batch printed with today's expiry date is expired stock as
+        of today, the same as the Inventory page's own EXPIRED badge
+        (days_remaining <= 0) already treats it. FEFO must refuse it
+        exactly as it refuses a batch that expired yesterday, not
+        treat "today" as one more still-sellable day.
+        """
         today = (await _business_today()).isoformat()
         product_id = await _make_product_with_batch(price=10.0, qty=20, expiry=today)
+        token = await _login(client, "lucy", "S3curePass!")
+
+        r = await client.post(
+            "/api/v1/sales",
+            json={
+                "items": [{"product_id": product_id, "quantity": 1}],
+                "payments": [{"method": "CASH", "amount": 10.0}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 409
+
+    async def test_batch_expiring_tomorrow_can_still_be_sold(self, client, owner_user):
+        tomorrow = (await _business_today() + timedelta(days=1)).isoformat()
+        product_id = await _make_product_with_batch(price=10.0, qty=20, expiry=tomorrow)
         token = await _login(client, "lucy", "S3curePass!")
 
         r = await client.post(

@@ -13,10 +13,6 @@ import type { TopCustomerEntry } from '../../types/api'
 import { useCurrencyFormatter } from '../../lib/currency'
 import { ChartScrollArea } from './ChartScrollArea'
 
-// Names are angled at -35deg rather than horizontal, so each customer
-// needs less width than an upright label would, but still enough that
-// adjacent angled labels don't run into each other as the customer
-// count grows.
 const PX_PER_CUSTOMER = 68
 export function CustomerParetoChart({ data }: { data: TopCustomerEntry[] }) {
   const formatCurrency = useCurrencyFormatter()
@@ -28,11 +24,7 @@ export function CustomerParetoChart({ data }: { data: TopCustomerEntry[] }) {
   return (
     <ChartScrollArea itemCount={data.length} minPxPerItem={PX_PER_CUSTOMER}>
     <ResponsiveContainer width="100%" height={280}>
-      {/* top:28 gives the tallest bar's revenue label room above it
-          instead of butting against the container edge; bottom:44
-          gives the angled customer-name ticks room below the plot
-          without the cumulative-% line's own labels landing on top
-          of them. */}
+      {}
       <ComposedChart data={data} margin={{ top: 28, right: 12, left: 8, bottom: 44 }}>
         <CartesianGrid stroke="var(--color-rule)" strokeDasharray="3 3" />
         <XAxis

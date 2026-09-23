@@ -56,12 +56,6 @@ const MONTH_NAMES = [
 ]
 
 function topSeasonalEntries(seasonal: SeasonalTrendsOut, count = 5) {
-  // Entries already come back sorted by total_quantity_sold (see
-  // ReportService.seasonal_trends), across every product/month
-  // combination in range -- this is purely the overview card's own
-  // cap to a handful of headline patterns, matching the same "Intel
-  // shows an overview, Reports shows everything" split as every other
-  // card here.
   return seasonal.entries.slice(0, count)
 }
 
@@ -75,7 +69,7 @@ function presetRange(preset: Preset, timezone: string): { start: string; end: st
   if (preset === 'month') {
     return { start: startOfMonth(end), end }
   }
-  return { start: end, end } // today
+  return { start: end, end } 
 }
 
 export function DashboardPage() {
@@ -146,10 +140,7 @@ export function DashboardPage() {
         setRevenueTrend(trend)
         setTopCustomers(customers.entries)
       })
-      .catch(() => {
-        // Charts are supplementary to the KPI figures above --
-        // if they fail to load, the numbers still stand on their own.
-      })
+      .catch(() => {})
     return () => {
       cancelled = true
     }
@@ -163,10 +154,7 @@ export function DashboardPage() {
       .then((data) => {
         if (!cancelled) setRevenuePotential(data)
       })
-      .catch(() => {
-        // Non-critical for the dashboard as a whole -- just omit this
-        // one card rather than surface an error for a secondary figure.
-      })
+      .catch(() => {})
     return () => {
       cancelled = true
     }
@@ -180,22 +168,13 @@ export function DashboardPage() {
       .then((data) => {
         if (!cancelled) setCashierSales(data.entries)
       })
-      .catch(() => {
-        // Same reasoning as revenuePotential above -- supplementary,
-        // not worth surfacing an error banner for.
-      })
+      .catch(() => {})
     return () => {
       cancelled = true
     }
   }, [canSeeProfit, range, salesVersion])
 
   useEffect(() => {
-    // Fixed lookback windows, same as the Reports page uses for these
-    // same two endpoints -- NOT tied to the KPI date-range picker
-    // above, since stock-runway and fast-movers are rolling "last N
-    // days from now" calculations on the backend, not calendar-range
-    // queries. Wiring them to `range` would either silently ignore a
-    // custom range or misrepresent what's actually being shown.
     if (!canSeeReports) return
     let cancelled = false
     Promise.all([
@@ -211,10 +190,7 @@ export function DashboardPage() {
         setCoOccurrence(pairs)
         setSeasonalTrends(seasonal)
       })
-      .catch(() => {
-        // Supplementary to the KPI figures above -- omit rather than
-        // surface an error banner for secondary cards.
-      })
+      .catch(() => {})
     return () => {
       cancelled = true
     }
@@ -228,9 +204,7 @@ export function DashboardPage() {
       .then((data) => {
         if (!cancelled) setExpiredStock(data)
       })
-      .catch(() => {
-        // Same reasoning as the other supplementary cards above.
-      })
+      .catch(() => {})
     return () => {
       cancelled = true
     }

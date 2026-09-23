@@ -25,11 +25,6 @@ const MONTH_NAMES = [
   'Dec',
 ]
 
-// Three lines, three colors -- deliberately not a wider palette. This
-// app's whole visual language is a narrow, consistent ledger palette
-// (brass/red/green), not a chart-library rainbow, so the product
-// count shown is capped to match the colors actually available
-// rather than the other way around.
 const LINE_COLORS = ['var(--color-brass)', 'var(--color-stamp-red)', 'var(--color-stamp-green)']
 
 export function SeasonalTrendsChart({ data }: { data: SeasonalTrendEntry[] }) {

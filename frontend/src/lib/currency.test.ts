@@ -16,15 +16,12 @@ describe('formatMoney', () => {
 
   it('formats a real-world Kenyan Shilling amount', () => {
     const result = formatMoney(1553.68, 'KES')
-    // Exact symbol/spacing is locale-dependent (KES has no universal
-    // single-character symbol), but the number itself must be exact
-    // and unambiguous.
     expect(result).toContain('1,553.68')
   })
 
   it('formats a negative amount (a refund) without losing the sign', () => {
     const result = formatMoney(-25.5, 'USD')
-    expect(result).toMatch(/-|\(.*\)/) // Intl may render as "-$25.50" or "($25.50)"
+    expect(result).toMatch(/-|\(.*\)/) 
     expect(result).toContain('25.50')
   })
 
@@ -35,17 +32,11 @@ describe('formatMoney', () => {
   })
 
   it('rounds to exactly 2 decimal places for a currency with sub-cent floating point drift', () => {
-    // 10.005 is a classic float-precision trap -- the output must
-    // still be a clean 2-decimal figure, not something like
-    // "$10.004999999999999".
     const result = formatMoney(10.005, 'USD')
     expect(result).toMatch(/^\$10\.0[01]$/)
   })
 
   it('falls back to a plain "CODE amount" string for an unrecognized currency code', () => {
-    // Intl.NumberFormat throws on a currency code it doesn't
-    // recognize -- this must never crash the page over a typo'd
-    // currency in business settings.
     expect(formatMoney(10, 'NOTACURRENCY')).toBe('NOTACURRENCY 10.00')
   })
 
@@ -54,9 +45,6 @@ describe('formatMoney', () => {
   })
 
   it('falls back gracefully for a lowercase currency code Intl rejects', () => {
-    // Real ISO codes are case-insensitive in Intl, but a garbage
-    // lowercase string that isn't a real code at all must still not
-    // throw.
     const result = formatMoney(10, 'notreal')
     expect(result).toContain('10.00')
   })

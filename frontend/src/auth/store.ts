@@ -38,11 +38,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  // Called once on app load. There is no access token in memory yet
-  // (a hard refresh wipes it by design) -- but if a valid refresh
-  // cookie exists, /auth/me will 401 once, apiRequest will silently
-  // redeem it, and this resolves into a restored session with no
-  // visible login flash for a returning user.
   bootstrap: async () => {
     try {
       const user = await authApi.me()

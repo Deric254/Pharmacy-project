@@ -24,11 +24,7 @@ export function AuditLogPage() {
       .then((options) => {
         if (!cancelled) setFilterOptions(options)
       })
-      .catch(() => {
-        // Non-critical: the dropdowns just fall back to "All" only if
-        // this fails, the rest of the page (list, dates, pagination,
-        // export) works exactly the same either way.
-      })
+      .catch(() => {})
     return () => {
       cancelled = true
     }

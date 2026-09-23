@@ -1,10 +1,3 @@
-/**
- * Renders a small, safe subset of markdown as real React elements --
- * bold text, bullet lists, numbered lists, and paragraphs. Built
- * specifically for AI assistant responses, which reliably use only
- * these few constructs. Never uses dangerouslySetInnerHTML, so
- * there's no injection risk regardless of what a provider returns.
- */
 import type { ReactNode } from 'react'
 
 function renderInline(text: string, keyPrefix: string): ReactNode[] {
@@ -58,11 +51,6 @@ export function MarkdownLite({ text }: { text: string }) {
       listType = 'ol'
       listBuffer.push(numberedMatch[1])
     } else if (headerMatch) {
-      // A defensive backstop, not the primary fix -- the assistant is
-      // instructed not to use headers at all, since this renderer
-      // only ever turns them into bold text, never a real heading
-      // size. This just guarantees a stray "#" never shows up as a
-      // literal character on screen if one slips through anyway.
       flushList()
       blocks.push(
         <p key={blocks.length} className="mb-1 font-semibold last:mb-0">

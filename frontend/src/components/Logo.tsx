@@ -7,9 +7,6 @@ export function Logo({ className = 'h-8 w-8' }: { className?: string }) {
     return <img src={logoUrl} alt="" className={`${className} object-contain`} />
   }
 
-  // Neutral fallback mark (a generic mortar & pestle glyph via a plain
-  // cross-in-box, not any specific business's branding) so an
-  // unconfigured deployment still looks intentional, not broken.
   return (
     <div
       className={`${className} flex items-center justify-center border border-rule-strong text-brass`}

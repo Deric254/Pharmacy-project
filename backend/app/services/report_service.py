@@ -369,7 +369,7 @@ class ReportService:
         result = await self.db.execute(
             select(MedicineBatch, Product.name)
             .join(Product, Product.id == MedicineBatch.product_id)
-            .where(MedicineBatch.expiry_date < today, MedicineBatch.qty_remaining > 0)
+            .where(MedicineBatch.expiry_date <= today, MedicineBatch.qty_remaining > 0)
             .order_by(MedicineBatch.expiry_date)
         )
 
@@ -1122,7 +1122,7 @@ class ReportService:
                 MedicineBatch,
                 and_(
                     MedicineBatch.product_id == Product.id,
-                    MedicineBatch.expiry_date >= today,
+                    MedicineBatch.expiry_date > today,
                     MedicineBatch.locked_by_stock_take_id.is_(None),
                 ),
             )
@@ -1371,7 +1371,7 @@ class ReportService:
                 MedicineBatch,
                 and_(
                     MedicineBatch.product_id == Product.id,
-                    MedicineBatch.expiry_date >= today,
+                    MedicineBatch.expiry_date > today,
                     MedicineBatch.locked_by_stock_take_id.is_(None),
                 ),
             )

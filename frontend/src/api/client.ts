@@ -1,24 +1,5 @@
 import type { ApiErrorBody } from '../types/api'
 
-/**
- * No fetch() in this file had any timeout at all until now -- if a
- * request hung for any reason (a flaky loopback connection, security
- * software stalling localhost traffic, anything), the returned
- * promise never resolved AND never rejected. A .catch() on a hung
- * promise never fires either; it just never runs. For the calls that
- * gate the app's very first paint (config, setup-status), that meant
- * a permanently blank screen with no error, no retry, nothing --
- * confirmed as a real, reproducible failure mode, not a hypothetical
- * one. Every request now aborts after a bounded time and turns into
- * a normal, catchable error instead.
- *
- * DEFAULT_TIMEOUT_MS is generous on purpose (large Excel imports,
- * PDF generation) while still guaranteeing recovery. The AI assistant
- * gets its own longer override (see api/ai.ts) since a real answer
- * can legitimately take longer -- see ai_assistant_service.py's own
- * per-provider timeout and fallback chain -- and cutting that off
- * early would turn a slow-but-working answer into a false failure.
- */
 const DEFAULT_TIMEOUT_MS = 30_000
 
 export async function fetchWithTimeout(
@@ -44,13 +25,6 @@ export async function fetchWithTimeout(
   }
 }
 
-/**
- * Access token lives ONLY in this module-level variable -- never in
- * localStorage/sessionStorage, which are readable by any injected
- * script (XSS). It's lost on a hard refresh by design; the refresh
- * token (httpOnly cookie, invisible to JS) is what lets `bootstrap()`
- * silently re-establish a session on page load instead.
- */
 let accessToken: string | null = null
 
 export function setAccessToken(token: string | null): void {
@@ -79,12 +53,6 @@ function extractMessage(body: ApiErrorBody | null, fallback: string): string {
   return body.detail.message
 }
 
-// Multiple requests can 401 at the same moment (e.g. a page that fires
-// five requests on mount right as the access token expires). Without
-// this, each one would race to refresh independently, and the server's
-// one-time-use refresh-token rotation means only the first would
-// succeed -- the rest would get a used-up token and force a real
-// logout. Coalescing to a single in-flight refresh fixes that.
 let refreshInFlight: Promise<boolean> | null = null
 
 async function doRefresh(): Promise<boolean> {
@@ -162,9 +130,6 @@ async function rawRequest<T>(path: string, options: RequestOptions): Promise<T> 
   return parsedBody as T
 }
 
-/** Core request function: on a 401, tries exactly one silent refresh
- * and retries the original request once. Two failures in a row means
- * the session is genuinely over -- surface the error, don't loop. */
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   try {
     return await rawRequest<T>(path, options)
@@ -196,9 +161,6 @@ async function rawUpload<T>(
 ): Promise<T> {
   const headers: Record<string, string> = {}
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`
-  // Deliberately no Content-Type here -- the browser sets multipart/
-  // form-data with the correct boundary itself; setting it manually
-  // breaks the upload.
 
   const formData = new FormData()
   formData.append('file', file)
@@ -206,9 +168,6 @@ async function rawUpload<T>(
     formData.append(key, value)
   }
 
-  // Generous timeout -- this is a large file upload plus real
-  // server-side processing (parsing hundreds/thousands of import
-  // rows), not a quick lookup.
   const res = await fetchWithTimeout(
     `/api/v1${path}`,
     {
@@ -254,15 +213,6 @@ export async function uploadFile<T>(
   }
 }
 
-/**
- * Excel/PDF exports return a binary file with a real filename in
- * Content-Disposition, not JSON -- the generic `api` client (which
- * always parses JSON) doesn't fit here. This does its own fetch,
- * reuses the same in-memory access token, and triggers a normal
- * browser download via a throwaway object URL. Shared by every
- * export-capable list (Reports, Products, Customers, Audit Trail),
- * not reports-specific despite where it was originally written.
- */
 async function fetchBinaryWithRefresh(
   input: string,
   init: RequestInit,
@@ -288,9 +238,7 @@ async function fetchAndDownload(path: string, fallbackFilename: string): Promise
     try {
       const body = (await res.json()) as { detail?: string }
       if (body.detail) message = body.detail
-    } catch {
-      // response wasn't JSON -- keep the statusText fallback
-    }
+    } catch {}
     throw new ApiError(res.status, message, null)
   }
 
@@ -332,9 +280,7 @@ export async function postAndDownload(
     try {
       const errBody = (await res.json()) as { detail?: string }
       if (errBody.detail) message = errBody.detail
-    } catch {
-      // response wasn't JSON -- keep the statusText fallback
-    }
+    } catch {}
     throw new ApiError(res.status, message, null)
   }
 
@@ -381,9 +327,7 @@ export async function fetchBlob(path: string): Promise<Blob> {
     try {
       const body = (await res.json()) as { detail?: string }
       if (body.detail) message = body.detail
-    } catch {
-      // response wasn't JSON -- keep the statusText fallback
-    }
+    } catch {}
     throw new ApiError(res.status, message, null)
   }
   return res.blob()

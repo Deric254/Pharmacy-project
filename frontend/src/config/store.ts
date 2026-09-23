@@ -30,9 +30,6 @@ export const useConfigStore = create<ConfigState>((set) => ({
       applyBranding(config)
       set({ config, status: 'ready' })
     } catch {
-      // Branding failing to load must never block the app -- fall back
-      // to whatever theme is already compiled into index.css (ledger)
-      // and a generic title, rather than showing a blank screen.
       set({ config: null, status: 'error' })
     }
   },

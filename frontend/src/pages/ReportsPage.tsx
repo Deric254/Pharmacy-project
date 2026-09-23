@@ -54,10 +54,6 @@ const TABS: { id: Tab; label: string; permission: string }[] = [
   { id: 'seasonalTrends', label: 'Seasonal Trends', permission: 'reports.view' },
 ]
 
-// Falls back to the device's own timezone only if branding/config
-// genuinely failed to load (see config/store.ts) -- matches that
-// store's own established "never block the app" behavior, rather
-// than introducing a second, different failure mode here.
 function defaultDateRange(timezone: string) {
   const end = businessToday(timezone)
   return { start: subtractDays(end, 30), end }

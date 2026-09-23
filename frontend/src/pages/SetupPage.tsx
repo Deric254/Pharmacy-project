@@ -62,17 +62,11 @@ export function SetupPage({ onComplete }: { onComplete: () => void }) {
         password,
         security_question: securityQuestion,
         security_answer: securityAnswer,
-        // Best-effort: the backend applies this after the account
-        // itself is already created, so a detection failure or an
-        // unrecognized zone here can never block finishing setup --
-        // see SetupService.create_first_user.
         timezone: detectBrowserTimezone(),
       })
       onComplete()
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
-        // Setup already completed -- most likely this page was left
-        // open in a second tab/window after someone else finished it.
         onComplete()
       } else {
         setError(

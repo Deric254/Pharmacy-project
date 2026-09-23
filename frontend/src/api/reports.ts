@@ -65,11 +65,6 @@ export const reportsApi = {
     api.get<ProductCoOccurrenceOut>('/reports/co-occurrence', { days, limit }),
   seasonalTrends: (days = 730) =>
     api.get<SeasonalTrendsOut>('/reports/seasonal-trends', { days }),
-  // A dedicated PDF, not the generic ExportButtons mechanism -- the
-  // Profit report deliberately has no ?export= option (see the
-  // profit_loss_pdf audit-logging comment server-side), so this is
-  // the one sanctioned, audited way to get profit data out of the
-  // system as a file.
   profitLossPdf: (startDate: string, endDate: string) =>
     downloadFile(
       `/reports/profit-loss-pdf?start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`,
@@ -77,7 +72,4 @@ export const reportsApi = {
     ),
 }
 
-// Kept under its original name here so ReportsPage.tsx's existing
-// import doesn't need to change -- the real implementation now lives
-// in client.ts as the shared, generic downloadExport.
 export const downloadReportExport = downloadExport

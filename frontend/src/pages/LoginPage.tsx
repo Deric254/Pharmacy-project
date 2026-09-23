@@ -165,9 +165,6 @@ function ForgotPasswordModal({ onClose }: { onClose: () => void }) {
       })
       setStep('done')
     } catch (err) {
-      // Deliberately the same generic message regardless of whether
-      // the username was wrong, the answer was wrong, or the account
-      // never had a question set — never confirm which one it was.
       setError(
         err instanceof ApiError
           ? 'That answer didn\'t match. Ask an owner or administrator to reset your password instead.'

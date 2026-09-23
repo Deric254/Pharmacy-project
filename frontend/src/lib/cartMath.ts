@@ -5,15 +5,6 @@ export interface CartLine {
   quantity: number
 }
 
-/**
- * The subtotal shown in the cart before any discount -- sum of each
- * line's own selling price times quantity. An empty cart is 0, not
- * NaN or undefined, so callers never need a special case for "cart
- * hasn't been touched yet". `current_selling_price` is only ever null
- * for a product with zero stock, which the POS never lets into the
- * cart in the first place (see PosPage's total_qty_available check) --
- * the `?? 0` here is a type-safety fallback, not a real case.
- */
 export function calculateSubtotal(cart: CartLine[]): number {
   return cart.reduce(
     (sum, line) => sum + (line.product.current_selling_price ?? 0) * line.quantity,
@@ -21,29 +12,11 @@ export function calculateSubtotal(cart: CartLine[]): number {
   )
 }
 
-/**
- * The final charge amount: subtotal minus discount, floored at 0.
- * Floored rather than allowed to go negative -- a discount typed in
- * before the cart is fully built, or one that briefly exceeds the
- * subtotal while items are still being removed, must never produce a
- * negative total a payment method would have to somehow charge.
- */
 export function calculateTotal(cart: CartLine[], discount: number): number {
   const subtotal = calculateSubtotal(cart)
   return Math.max(0, subtotal - discount)
 }
 
-/**
- * The stable identifier for what's actually being charged, used to
- * decide whether a checkout attempt is a genuine retry (reuse the
- * same idempotency key) or a new sale (needs a fresh one). Order of
- * cart lines must not matter -- adding the same two products in a
- * different order is still the same sale -- so lines are sorted by
- * product id before joining. Distinct from a deep-equality check:
- * this is deliberately a compact string, not a full object diff,
- * because it only needs to answer "did what's being charged change",
- * not "what exactly changed".
- */
 export function cartSignature(
   cart: CartLine[],
   discount: number,

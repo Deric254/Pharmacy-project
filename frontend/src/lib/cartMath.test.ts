@@ -40,9 +40,6 @@ describe('calculateSubtotal', () => {
   })
 
   it('handles the classic 0.1 + 0.2 floating-point case without visible drift', () => {
-    // Not exactly 0.3 in IEEE 754 -- the point of this test is that
-    // the result is close enough for currency display (toBeCloseTo),
-    // not that JS floating point becomes exact.
     expect(calculateSubtotal([line(1, 0.1, 1), line(2, 0.2, 1)])).toBeCloseTo(0.3, 10)
   })
 
@@ -83,10 +80,6 @@ describe('calculateTotal', () => {
   })
 
   it('never goes negative even with a negative discount value', () => {
-    // The UI clamps discount input to >= 0, but the pure function
-    // must not silently produce a nonsensical negative charge (or a
-    // total LARGER than the subtotal) if it's ever called with bad
-    // input from somewhere else.
     const result = calculateTotal([line(1, 10, 1)], -5)
     expect(result).toBeGreaterThanOrEqual(0)
   })
@@ -134,10 +127,6 @@ describe('cartSignature', () => {
   })
 
   it('distinguishes two genuinely different sales that happen to have the same subtotal', () => {
-    // 2 units of a 10-currency item vs 1 unit of a 20-currency item
-    // -- same subtotal (20), must NOT produce the same signature,
-    // since they are different carts and would need different
-    // idempotency keys.
     const a = cartSignature([line(1, 10, 2)], 0, 'CASH', 'none')
     const b = cartSignature([line(2, 20, 1)], 0, 'CASH', 'none')
     expect(a).not.toBe(b)

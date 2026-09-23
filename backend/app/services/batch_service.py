@@ -195,7 +195,7 @@ class BatchService:
         a reason distinct from the usual "keep scopes narrow"
         principle: this one can specifically make an already-expired
         batch look valid again, letting it back into FEFO sale
-        selection (see stock_selection_service.py's `expiry_date >=
+        selection (see stock_selection_service.py's `expiry_date >
         today` filter). A cost correction can only ever misstate
         money; this one, misused, is a route to selling expired
         medicine. See migration 0035's own docstring for the full

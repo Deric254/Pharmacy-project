@@ -28,14 +28,6 @@ export function PosPage() {
 
   const estimatedTotal = calculateTotal(cart, discount)
 
-  // Live search: results update automatically as the cashier types, no
-  // button press or Enter required. Debounced by 300ms so a fast typist
-  // (or a barcode scanner, which types the whole code near-instantly)
-  // doesn't fire a request per keystroke -- one request lands shortly
-  // after typing pauses. With nothing typed, this shows every in-stock
-  // product instead of an empty screen -- already sorted most-stocked
-  // first by the backend, so browsing and searching share one list
-  // and one click-to-add behavior, never two different code paths.
   async function searchProducts(text: string): Promise<ProductOut[]> {
     if (!text) {
       const all = await productsApi.list('')
@@ -43,14 +35,11 @@ export function PosPage() {
     }
     const nameResults = await productsApi.list(text)
     if (nameResults.length > 0) return nameResults
-    // Nothing matched by name -- try an exact barcode match before
-    // giving up, since a scanned code often has nothing in common
-    // with the product's name text.
     try {
       const byBarcode = await productsApi.getByBarcode(text)
       return [byBarcode]
     } catch {
-      return nameResults // genuinely no match either way
+      return nameResults 
     }
   }
 
@@ -89,8 +78,6 @@ export function PosPage() {
       const activeIsRealInput =
         active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement
       if (activeIsRealInput) {
-        // Someone deliberately focused a real field -- their typing
-        // is never touched, full stop, regardless of its speed.
         buffer = ''
         sawSlowGap = false
         return
@@ -110,10 +97,10 @@ export function PosPage() {
         return
       }
 
-      if (e.key.length !== 1) return // ignore Shift, Tab, arrow keys, etc.
+      if (e.key.length !== 1) return 
 
       if (buffer && gap > SCANNER_MAX_GAP_MS) {
-        sawSlowGap = true // too slow anywhere in the sequence to be a real scan
+        sawSlowGap = true 
       }
       buffer += e.key
     }
@@ -135,15 +122,6 @@ export function PosPage() {
     })
   }
 
-  // A real barcode scan sends its digits and an Enter keystroke
-  // within milliseconds -- far faster than the 300ms debounce above
-  // ever gets a chance to fire. Acting on `results` here would mean
-  // acting on whatever was on screen *before* the scan even started,
-  // not the scanned item. Searching directly, right here, guarantees
-  // this always acts on the real, current answer regardless of
-  // typing or scanning speed. Only adds when there's exactly one
-  // match -- with several results, this does nothing rather than
-  // risk adding the wrong one, so speed here never costs accuracy.
   async function handleEnterToAdd(text: string) {
     const trimmed = text.trim()
     if (!trimmed) return
@@ -176,13 +154,6 @@ export function PosPage() {
   }
 
   const submittingRef = useRef(false)
-  // One identifier per checkout ATTEMPT, not per click -- reused
-  // across a manual retry of the same cart (the real case this
-  // exists for: the sale actually committed server-side, the response
-  // never arrived, the cashier sees "failed" and clicks again). Only
-  // regenerated when what's actually being charged changes, so a
-  // genuinely different sale never reuses a stale key and gets
-  // silently merged into a previous one.
   const idempotencyKeyRef = useRef<string>(crypto.randomUUID())
   const idempotencySignatureRef = useRef<string>('')
 
@@ -200,16 +171,6 @@ export function PosPage() {
     return idempotencyKeyRef.current
   }
 
-  /**
-   * Same matching rules as the manual "Find" button, extracted so
-   * checkout can reuse them instead of skipping straight to creating
-   * a new customer -- which is exactly what caused real duplicates:
-   * typing an EXISTING customer's name and going straight to
-   * checkout (skipping "Find") used to always create a brand new
-   * customer record, never reusing the one that already existed.
-   * Pure lookup, no UI state touched here -- callers decide what to
-   * do with the result.
-   */
   async function findExistingCustomer(): Promise<
     | { status: 'found'; customer: CustomerOut }
     | { status: 'ambiguous'; matches: CustomerOut[] }
@@ -292,30 +253,12 @@ export function PosPage() {
 
   async function handleCheckout() {
     if (cart.length === 0) return
-    if (submittingRef.current) return // synchronous guard against a very fast double-click
+    if (submittingRef.current) return 
     submittingRef.current = true
-    // Computed once per attempt, right up front -- stable across
-    // everything checkout does below (customer lookup, registration)
-    // so a retry of the same attempt sends the same key regardless of
-    // which branch the customer-handling logic takes.
     const idempotencyKey = getIdempotencyKeyForThisAttempt()
     setCheckingOut(true)
     setError(null)
     try {
-      // A cashier typing a name is a reasonable, common thing to do
-      // without also remembering to press "Find" first -- but jumping
-      // straight to "create a new customer" whenever nothing was
-      // explicitly attached is exactly what caused real duplicates:
-      // typing an EXISTING customer's name and checking out directly
-      // (skipping "Find") used to always create a second, separate
-      // record for the same person instead of reusing the one that
-      // already existed. This looks the person up first, the same
-      // way the manual "Find" button does, and only creates a new
-      // customer when a lookup genuinely finds nobody. If the name
-      // matches more than one existing customer, checkout stops and
-      // shows the same picker "Find" would -- guessing which
-      // same-named customer this sale belongs to would be its own
-      // way of getting the data wrong.
       let customerId = attachedCustomer?.id ?? null
       if (customerId === null && (customerName.trim() || customerPhone.trim())) {
         try {
@@ -354,11 +297,6 @@ export function PosPage() {
         customer_id: customerId,
         idempotency_key: idempotencyKey,
       })
-      // Explicit reset, not just relying on the next signature happening
-      // to differ -- two genuinely separate sales with identical
-      // contents (same product, quantity, payment method, no customer)
-      // would otherwise compute the same signature and silently reuse
-      // this key, merging the second sale into the first server-side.
       idempotencyKeyRef.current = crypto.randomUUID()
       idempotencySignatureRef.current = ''
       setReceipt(sale)
@@ -369,22 +307,9 @@ export function PosPage() {
       setCustomerPhone('')
       setCustomerName('')
       setNameMatches(null)
-      // Explicit re-fetch, not just clearing results and hoping the
-      // debounced [query] effect notices -- if the cashier was
-      // already on the default (empty-query, "all in stock") view
-      // when this sale completed, query goes from '' to '' as part
-      // of the reset above, which is not a *change* React's effect
-      // dependency array would ever re-fire on. Without this, the
-      // product list would sit there blank, or worse, keep showing
-      // pre-sale stock counts, until something else happened to
-      // change the query. searchProducts('') directly, not query.trim(),
-      // sidesteps React's batched-update timing entirely -- reading
-      // the query state variable here could still see its pre-reset
-      // value depending on when this line actually runs relative to
-      // the setQuery('') above.
       searchProducts('')
         .then(setResults)
-        .catch(() => undefined) // a failed silent refresh is not worth surfacing as an error over a completed sale
+        .catch(() => undefined) 
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Checkout failed. Nothing was charged.')
     } finally {
@@ -644,15 +569,6 @@ function Receipt({ sale, onNewSale }: { sale: SaleOut; onNewSale: () => void }) 
   }
 
   useEffect(() => {
-    // Any keypress dismisses the receipt back to a fresh sale -- a
-    // busy pharmacy counter wants the fastest possible path back to
-    // selling, not a specific button to hunt for. Attached after a
-    // short delay, specifically so the keypress that triggered
-    // checkout in the first place (e.g. pressing Enter while focused
-    // on "Charge & complete sale") can never bleed through and
-    // instantly dismiss a receipt the cashier hasn't even seen yet.
-    // Bare modifier keys are ignored -- someone resting a finger on
-    // Shift isn't asking to start a new sale.
     const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta'])
     let active = false
     const activateTimer = setTimeout(() => {
@@ -669,13 +585,6 @@ function Receipt({ sale, onNewSale }: { sale: SaleOut; onNewSale: () => void }) 
       clearTimeout(activateTimer)
       document.removeEventListener('keydown', handleKeyDown)
     }
-    // Deliberately [sale.id], not [onNewSale] -- onNewSale is a fresh
-    // inline closure on every PosPage render, and several state
-    // updates land right after this receipt appears (cart/discount/
-    // query/customer fields resetting, the product list refreshing).
-    // Depending on it would re-subscribe this effect on each of those
-    // renders, repeatedly restarting the 200ms activation delay for
-    // no reason. One sale, one receipt, one subscription.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sale.id])
 
@@ -716,8 +625,6 @@ function Receipt({ sale, onNewSale }: { sale: SaleOut; onNewSale: () => void }) 
       if (navigator.share && navigator.canShare?.({ files: [file] })) {
         await navigator.share({ files: [file], title: `Receipt #${sale.id}` })
       } else {
-        // No native share support on this device -- download is the
-        // fallback so the receipt is still in the person's hands.
         await handleDownload()
       }
     } finally {

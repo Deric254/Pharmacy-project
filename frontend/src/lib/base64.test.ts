@@ -12,11 +12,7 @@ describe('arrayBufferToBase64', () => {
   })
 
   it('matches a known base64 vector ("Man" -> "TWFu")', () => {
-    // The textbook base64 test vector: three bytes encode to exactly
-    // four base64 characters with no padding, which makes it a good
-    // sanity check that byte order and grouping are correct, not just
-    // that "some" base64 comes out.
-    const bytes = [0x4d, 0x61, 0x6e] // 'M', 'a', 'n'
+    const bytes = [0x4d, 0x61, 0x6e] 
     expect(arrayBufferToBase64(toBuffer(bytes))).toBe('TWFu')
   })
 
@@ -28,10 +24,6 @@ describe('arrayBufferToBase64', () => {
   })
 
   it('round-trips a buffer larger than one internal chunk (exercises the chunking loop itself, not just small inputs)', () => {
-    // CHUNK_SIZE inside the implementation is 0x8000 (32768) -- this
-    // buffer spans three full chunks plus a partial one, so a bug in
-    // the chunk-boundary math (an off-by-one, a dropped tail chunk)
-    // would show up here even though it wouldn't in a small buffer.
     const length = 0x8000 * 3 + 123
     const bytes = Array.from({ length }, (_, i) => (i * 7) % 256)
     const encoded = arrayBufferToBase64(toBuffer(bytes))
@@ -40,9 +32,6 @@ describe('arrayBufferToBase64', () => {
   })
 
   it('matches the output of the original byte-at-a-time implementation', () => {
-    // Guards against the fast version being merely fast rather than
-    // equivalent -- compares against the exact old algorithm this
-    // replaces, not just against atob() round-tripping.
     const bytes = Array.from({ length: 5000 }, (_, i) => (i * 31) % 256)
     const buffer = toBuffer(bytes)
     const slow = btoa(

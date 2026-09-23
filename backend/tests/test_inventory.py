@@ -229,6 +229,40 @@ class TestValuation:
             assert row["qty_on_hand"] == 0
             assert row["value"] == 0.0
 
+    async def test_a_batch_expiring_today_does_not_inflate_valuation_or_availability(
+        self, client, owner_user
+    ):
+        """
+        Same rule as test_expired_stock_does_not_inflate_valuation, one
+        day later on the calendar: a batch printed with TODAY'S expiry
+        date is expired stock as of today (see TestExpiringBatches for
+        the matching UI-badge rule), not one more still-sellable day,
+        so it must not count here either.
+        """
+        today = date.today().isoformat()
+        product_id = await _make_product("Expires Today Product")
+        await _add_batch(product_id, qty=100, expiry=today)
+
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        valuation_row = next(
+            (
+                p
+                for p in (await client.get("/api/v1/inventory/valuation", headers=headers)).json()[
+                    "by_product"
+                ]
+                if p["product_id"] == product_id
+            ),
+            None,
+        )
+        if valuation_row is not None:
+            assert valuation_row["qty_on_hand"] == 0
+            assert valuation_row["value"] == 0.0
+
+        product = (await client.get(f"/api/v1/products/{product_id}", headers=headers)).json()
+        assert product["total_qty_available"] == 0
+
 
 class TestAdjustments:
     async def test_adjustment_requires_permission(self, client, employee_user):
@@ -711,6 +745,25 @@ class TestExpiredStockWriteOff:
         assert matching[0]["old_value"] == "qty_remaining=15"
         assert matching[0]["new_value"] == "qty_remaining=0"
 
+    async def test_a_batch_expiring_today_can_already_be_written_off(self, client, owner_user):
+        """
+        A batch printed with today's expiry date is expired stock as
+        of today, matching the Inventory page's own EXPIRED badge --
+        it must not have to wait until tomorrow to become eligible
+        here, the way it used to.
+        """
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id = await _make_product("Expires Today Write-off Product")
+        today = date.today().isoformat()
+        batch_id = await _add_batch(product_id, qty=9, expiry=today, batch_number="WO_TODAY")
+
+        r = await client.post(
+            f"/api/v1/inventory/batches/{batch_id}/write-off-expired", headers=headers
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["quantity_written_off"] == 9
+
     async def test_a_batch_that_has_not_expired_yet_is_rejected(self, client, owner_user):
         token = await _login(client, "lucy", "S3curePass!")
         headers = {"Authorization": f"Bearer {token}"}
@@ -810,6 +863,24 @@ class TestExpiredStockWriteOff:
         assert len(entries) == 1
         assert "batches=2" in entries[0]["new_value"]
         assert "total_quantity=16" in entries[0]["new_value"]
+
+    async def test_bulk_write_off_includes_a_batch_expiring_today(self, client, owner_user):
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        product_id = await _make_product("Bulk Today Product")
+        today = date.today().isoformat()
+        expires_today = await _add_batch(product_id, qty=4, expiry=today, batch_number="BULK_TODAY")
+        still_good = await _add_batch(
+            product_id, qty=20, expiry="2029-01-01", batch_number="BULK_OK"
+        )
+
+        r = await client.post("/api/v1/inventory/write-off-all-expired", headers=headers)
+        assert r.status_code == 200, r.text
+        assert {d["batch_id"] for d in r.json()["details"]} == {expires_today}
+
+        async with AsyncSessionLocal() as db:
+            assert (await db.get(MedicineBatch, expires_today)).qty_remaining == 0
+            assert (await db.get(MedicineBatch, still_good)).qty_remaining == 20
 
     async def test_bulk_write_off_with_nothing_expired_is_a_clean_no_op(self, client, owner_user):
         token = await _login(client, "lucy", "S3curePass!")

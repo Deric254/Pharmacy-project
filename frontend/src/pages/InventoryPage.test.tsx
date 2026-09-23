@@ -28,9 +28,6 @@ const OWNER_USER: UserOut = {
   full_name: 'Lucy Kangai',
   username: 'lucy',
   role_name: 'ChemistOwner',
-  // Deliberately just inventory.adjust, not products.manage -- keeps
-  // ProductManagementPanel out of these renders entirely, so this
-  // file only ever has to deal with the write-off UI it's testing.
   permissions: ['inventory.adjust'],
   is_active: true,
   must_change_password: false,
@@ -100,7 +97,7 @@ describe('InventoryPage expired-stock write-off', () => {
   it('clicking the per-row write-off button calls the API for that exact batch and refreshes the list', async () => {
     vi.mocked(inventoryApi.expiring)
       .mockResolvedValueOnce([EXPIRED_ITEM])
-      .mockResolvedValueOnce([]) // the post-write-off refresh: it's gone now
+      .mockResolvedValueOnce([]) 
     vi.mocked(inventoryApi.writeOffExpired).mockResolvedValue({
       batch_id: 101,
       quantity_written_off: 12,

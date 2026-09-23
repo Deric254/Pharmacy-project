@@ -27,8 +27,6 @@ describe('useUpdateCheck', () => {
   })
 
   it('correctly compares double-digit version segments, not string order', async () => {
-    // The exact bug class naive string comparison gets wrong:
-    // "1.9.0" > "1.10.0" as strings, but 1.10.0 is the newer release.
     fetchMock.mockImplementation((url: string) => {
       if (url === HEALTH_URL) return Promise.resolve(jsonResponse({ version: '1.9.0' }))
       if (url === RELEASES_LATEST_URL) {
@@ -67,8 +65,6 @@ describe('useUpdateCheck', () => {
 
     const { result } = renderHook(() => useUpdateCheck())
 
-    // Give the effect a tick to run and settle -- info should stay
-    // null the whole time, never briefly show a false update.
     await new Promise((r) => setTimeout(r, 10))
     expect(result.current.info).toBeNull()
   })
@@ -160,7 +156,7 @@ describe('useReleaseHistory', () => {
             {
               tag_name: 'v1.1.0',
               html_url: 'https://github.com/releases/v1.1.0',
-              assets: [], // e.g. a release still building, or source-only
+              assets: [], 
             },
             {
               tag_name: 'v1.0.0',

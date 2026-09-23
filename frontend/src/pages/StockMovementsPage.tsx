@@ -9,9 +9,6 @@ const PAGE_SIZE = 25
 const MOVEMENT_TYPES = ['PURCHASE', 'SALE', 'ADJUSTMENT', 'RETURN'] as const
 
 export function StockMovementsPage() {
-  // product_id / batch_id arrive via query string so other pages (e.g.
-  // a future "History" link on a batch row) can deep-link straight into
-  // a filtered view without this page needing to know who's linking in.
   const [searchParams, setSearchParams] = useSearchParams()
   const productIdParam = searchParams.get('product_id') ?? ''
   const batchIdParam = searchParams.get('batch_id') ?? ''

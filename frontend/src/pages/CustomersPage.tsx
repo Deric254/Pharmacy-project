@@ -37,9 +37,6 @@ export function CustomersPage() {
   }, [canSeeLtv])
 
   const ltvByCustomerId = new Map(ltv?.entries.map((e) => [e.customer_id, e]) ?? [])
-  // Ordered by lifetime value, highest first -- customers with no
-  // purchases yet (not in the LTV data at all) keep the existing
-  // alphabetical order and simply sort after every real spender.
   const orderedCustomers = query.trim()
     ? customers
     : [...customers].sort((a, b) => {

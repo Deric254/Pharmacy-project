@@ -3,21 +3,6 @@ import { fetchWithTimeout } from '../api/client'
 
 const REPO = 'Deric254/Pharmacy-project'
 
-// Every other fetch in this app goes through client.ts's own
-// fetchWithTimeout precisely because a bare fetch() that never
-// resolves or rejects is a real, previously-reported failure mode
-// (see that file's own comment) -- this update check used to be the
-// one remaining exception, calling fetch() directly with no bound at
-// all. That mattered here specifically: unlike the backend health
-// check (a same-machine loopback call), this reaches out to GitHub's
-// public API, which is only reachable at all when the machine has
-// internet access -- and a slow, filtered, or half-working connection
-// (common on a small business's network) can leave an un-timed fetch
-// hanging far longer than any offline failure ever would, which is
-// exactly the "sometimes hangs on startup, but only with internet"
-// shape this was causing. This check is purely informational (an
-// update banner), so a shorter bound than the app's general 30s
-// default is fine -- there is nothing here worth a long wait for.
 const UPDATE_CHECK_TIMEOUT_MS = 10_000
 
 export interface UpdateInfo {
@@ -37,8 +22,6 @@ function normalizeVersion(v: string): string {
   return v.replace(/^v/i, '')
 }
 
-/** Simple numeric semver comparison -- good enough for x.y.z tags,
- * which is all this project's release workflow ever produces. */
 function isNewer(latest: string, current: string): boolean {
   const a = normalizeVersion(latest).split('.').map(Number)
   const b = normalizeVersion(current).split('.').map(Number)
@@ -64,17 +47,11 @@ async function fetchLatestReleaseInfo(): Promise<UpdateInfo | null> {
     {},
     UPDATE_CHECK_TIMEOUT_MS,
   )
-  if (!releaseRes.ok) return null // no releases yet, rate-limited, offline -- fine, just skip
+  if (!releaseRes.ok) return null 
   const release = (await releaseRes.json()) as GithubRelease
 
   if (!isNewer(release.tag_name, health.version)) return null
 
-  // Specifically the installer (Pharmacy-ERP-Setup-*.exe), not just
-  // any .exe -- a release attaches both the installer and the raw
-  // backend exe it wraps (the latter exists only so Electron has
-  // something to bundle, never meant as a public download), and an
-  // in-app update banner should only ever point someone at the one
-  // real users are meant to run.
   const installerAsset = release.assets.find(
     (a) => a.name.startsWith('Pharmacy-ERP-Setup-') && a.name.endsWith('.exe'),
   )
@@ -95,11 +72,7 @@ export function useUpdateCheck(): UpdateCheckResult {
     try {
       const result = await fetchLatestReleaseInfo()
       setInfo(result)
-    } catch {
-      // Update checks are informational, never load-bearing -- any
-      // failure (offline, GitHub API down, rate-limited) just means
-      // no banner shows, not an error the user needs to see.
-    } finally {
+    } catch {} finally {
       setChecking(false)
     }
   }
@@ -110,11 +83,7 @@ export function useUpdateCheck(): UpdateCheckResult {
       .then((result) => {
         if (!cancelled) setInfo(result)
       })
-      .catch(() => {
-        // Same as above -- silent on failure, this is the automatic
-        // once-per-session check, not a user-initiated action that
-        // needs feedback either way.
-      })
+      .catch(() => {})
     return () => {
       cancelled = true
     }
@@ -130,16 +99,6 @@ export interface ReleaseOption {
   isCurrent: boolean
 }
 
-/**
- * Every release that has a real installer asset, newest first --
- * unlike useUpdateCheck above (which only ever surfaces "is there
- * something newer"), this is what lets someone deliberately install
- * an OLDER version too. Kept as a separate, on-demand hook rather
- * than folded into useUpdateCheck: fetching the full release list is
- * unnecessary API usage for the common case (just checking whether
- * to upgrade), and this is only ever needed once someone actually
- * opens the "install a specific version" section.
- */
 export function useReleaseHistory(): {
   releases: ReleaseOption[] | null
   loading: boolean

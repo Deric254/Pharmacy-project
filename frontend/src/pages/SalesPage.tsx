@@ -296,7 +296,7 @@ function RefundModal({
   }
 
   async function handleSubmit() {
-    if (submittingRef.current) return // synchronous guard against a fast double-click
+    if (submittingRef.current) return 
     const toRefund = lines.filter((l) => l.quantity > 0)
     if (toRefund.length === 0) {
       setError('Choose a quantity to refund for at least one item.')

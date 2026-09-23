@@ -15,9 +15,6 @@ export function CoOccurrencePairsChart({ data }: { data: ProductPairEntry[] }) {
     return <p className="text-sm text-ink-soft">Not enough shared sales yet to find a pattern.</p>
   }
 
-  // Already sorted by co_occurrence_count from the backend, but the
-  // chart only has room to show so many pairs meaningfully -- the top
-  // ones are also the most statistically real ones.
   const top = data.slice(0, 15).map((p) => ({
     ...p,
     pairLabel: `${p.product_a_name} + ${p.product_b_name}`,

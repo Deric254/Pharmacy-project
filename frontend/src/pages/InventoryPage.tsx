@@ -401,29 +401,12 @@ function AdjustmentPanel({
           </div>
           <div className="space-y-2">
             {(() => {
-              // Mirrors the backend's FEFO selection (expiry order,
-              // qty_remaining > 0, not expired) closely enough for
-              // display purposes -- batches already arrive sorted by
-              // expiry_date from the API, matching select_batches_fefo.
-              // The one thing this can't see is a batch mid stock-take
-              // lock (BatchOut doesn't expose that), so this is "the
-              // batch that will sell next once any active count on it
-              // finishes" rather than a byte-for-byte guarantee.
               const today = businessToday(timezone)
               const fefoNextId = batches.find(
                 (b) => b.qty_remaining > 0 && b.expiry_date >= today,
               )?.id
               return batches.map((batch) => (
                 <BatchAdjustRow
-                  // Local price/markup state is seeded once on mount
-                  // (useState's initializer only runs once per key).
-                  // Folding selling_price into the key means a real
-                  // server-side price change -- from another user, or
-                  // from a refetch after adjusting a *different*
-                  // batch's quantity -- forces a clean remount instead
-                  // of leaving this row's draft compared against a
-                  // stale baseline, which could otherwise let "Save"
-                  // silently overwrite someone else's concurrent edit.
                   key={`${batch.id}-${batch.selling_price ?? 'null'}-${batch.cost_price}`}
                   batch={batch}
                   onSubmit={submitAdjustment}
@@ -469,27 +452,13 @@ function BatchPriceRow({
   canCorrectExpiry: boolean
 }) {
   const [sellingPrice, setSellingPrice] = useState(batch.selling_price ?? 0)
-  // Markup is *derived* from sellingPrice on every render, never stored as
-  // its own state. Two numbers that represent the same fact (price vs.
-  // markup %) drift apart the moment one of them updates without the
-  // other -- that's what produced the stale/impossible markup values.
-  // A single source of truth (sellingPrice) makes that class of bug
-  // impossible instead of merely unlikely.
   const markupPercent =
     batch.cost_price > 0 ? ((sellingPrice - batch.cost_price) / batch.cost_price) * 100 : 0
   const [savingPrice, setSavingPrice] = useState(false)
-  // Free to correct at any time, on any batch -- see BatchService.
-  // correct_cost_price's own comment for why this is safe: a sale's
-  // recorded cost is frozen the moment it happens (SaleItem.unit_cost),
-  // so a correction here can only ever affect this batch's remaining
-  // valuation and future sales, never a past, already-recorded one.
   const [correctingCost, setCorrectingCost] = useState(false)
   const [costDraft, setCostDraft] = useState(batch.cost_price)
   const [costReason, setCostReason] = useState('')
   const [savingCost, setSavingCost] = useState(false)
-  // Its own permission, not bundled with cost correction -- see
-  // migration 0035's reasoning: this one can make an expired batch
-  // sellable again, which cost correction can never do.
   const [correctingExpiry, setCorrectingExpiry] = useState(false)
   const [expiryDraft, setExpiryDraft] = useState(batch.expiry_date)
   const [expiryReason, setExpiryReason] = useState('')
@@ -638,14 +607,6 @@ function BatchPriceRow({
         <input
           type="number"
           min={0}
-          // step="any" instead of a decimal step: browsers' native
-          // stepMismatch check does its arithmetic in floating point, and
-          // 0.01 isn't exactly representable in binary -- for larger
-          // values that check accumulates enough error to reject valid
-          // input and suggest nonsense "nearest" values (e.g. typing
-          // 545456 gets flagged with a suggested fix of 354.54). Real
-          // 2dp rounding is already enforced below and by MoneyCents
-          // server-side, so the browser doesn't need to gatekeep it too.
           step="any"
           value={sellingPrice}
           disabled={!canReprice}
@@ -662,10 +623,6 @@ function BatchPriceRow({
           value={Number.isFinite(markupPercent) ? Math.round(markupPercent * 100) / 100 : 0}
           disabled={!canReprice}
           onChange={(e) => {
-            // Markup can legitimately go negative (clearance / loss-leader
-            // pricing on a batch nearing expiry) -- it isn't clamped to 0
-            // here, since that would silently contradict what the field
-            // shows for an already-below-cost batch on load.
             const nextMarkup = Number(e.target.value) || 0
             setSellingPrice(Math.round(batch.cost_price * (1 + nextMarkup / 100) * 100) / 100)
           }}
@@ -868,7 +825,6 @@ function ProductManagementPanel({ onChanged }: { onChanged: () => void }) {
 
   useEffect(() => {
     void runSearch('')
-    // Only on mount -- subsequent searches are user-triggered via the form.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -1058,18 +1014,6 @@ function ProductFormModal({
     setBatches(await productsApi.batches(product.id))
   }
 
-  // Drives the "what POS charges right now" and "cost" figures below --
-  // computed live from `batches` (which refreshes after every batch
-  // price/cost save) instead of the `product` prop, which is a
-  // snapshot from when the modal opened and never updates. Using
-  // `product.current_selling_price`/`current_cost` here was the bug:
-  // saving a batch price updated the batch row but left this summary
-  // showing the pre-save figure until the modal was closed and
-  // reopened.
-  //
-  // Same FEFO display-hint logic as the Adjustment panel's batch list
-  // -- see that panel's own comment for what this can't fully see (an
-  // active stock-take lock).
   const fefoNextBatch = useMemo(() => {
     if (!batches || batches.length === 0) return null
     const today = businessToday(timezone)

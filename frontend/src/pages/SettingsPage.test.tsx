@@ -13,10 +13,6 @@ vi.mock('../api/config', () => ({
   },
 }))
 
-// SettingsPage also renders the "Software updates" section, which
-// calls out to GitHub for release info the moment its "Check for
-// updates" button is pressed -- not relevant to anything under test
-// here, and a real network call has no place in a unit test.
 vi.mock('../lib/updateCheck', () => ({
   useUpdateCheck: () => ({ info: null, checking: false, checkNow: vi.fn() }),
   useReleaseHistory: () => ({ releases: null, loading: false, error: false, load: vi.fn() }),
@@ -75,7 +71,6 @@ describe('SettingsPage timezone field', () => {
   })
 
   it('still shows a saved value outside the curated list, rather than silently mismatching it', () => {
-    // A value set before this picker existed, or via some other path.
     seedConfig({ timezone: 'Pacific/Fiji' })
     render(<SettingsPage />)
 
@@ -87,9 +82,6 @@ describe('SettingsPage timezone field', () => {
     seedConfig({ timezone: 'Africa/Nairobi' })
     const updated = { ...BASE_CONFIG, timezone: 'Asia/Dubai' }
     vi.mocked(configApi.update).mockResolvedValue(updated)
-    // handleSubmit calls refresh() after a successful update, which
-    // itself calls configApi.get() -- needs a real resolved config or
-    // applyBranding() downstream throws on an undefined config.
     vi.mocked(configApi.get).mockResolvedValue(updated)
     const user = userEvent.setup()
     render(<SettingsPage />)

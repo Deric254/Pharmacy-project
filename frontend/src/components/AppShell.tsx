@@ -21,7 +21,7 @@ interface NavSection {
 
 const NAV_SECTIONS: NavSection[] = [
   {
-    label: null, // Dashboard sits alone, above any section label
+    label: null, 
     items: [{ to: '/', label: 'Dashboard', permission: null }],
   },
   {
@@ -68,10 +68,6 @@ export function AppShell() {
     ),
   })).filter((section) => section.items.length > 0)
 
-  // Reveal the section containing the current page once, on
-  // navigation -- not as a standing override. Otherwise, collapsing
-  // the section you're currently in would silently do nothing, since
-  // it would immediately be forced back open on the very next render.
   useEffect(() => {
     const activeSection = visibleSections.find((section) =>
       section.items.some(

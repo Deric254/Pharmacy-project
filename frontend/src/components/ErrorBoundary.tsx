@@ -17,9 +17,6 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    // Logged locally for anyone with dev tools open; never sent
-    // anywhere automatically -- the person chooses whether to report
-    // it, and only their own email client does the sending.
     console.error('Unhandled error caught by ErrorBoundary:', error, info.componentStack)
   }
 

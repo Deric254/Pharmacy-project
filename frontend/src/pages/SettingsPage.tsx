@@ -29,15 +29,14 @@ export function SettingsPage() {
 
   function previewTheme(themeName: string) {
     setSelectedTheme(themeName)
-    applyTheme(themeName) // live preview, before saving
+    applyTheme(themeName) 
   }
 
-  const MAX_LOGO_FILE_BYTES = 2 * 1024 * 1024 // 2MB raw -- comfortably under the
-  // backend's stored-string limit even after base64's ~33% size inflation
+  const MAX_LOGO_FILE_BYTES = 2 * 1024 * 1024 
 
   function handleLogoFileChange(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
-    e.target.value = '' // allow choosing the exact same file again later
+    e.target.value = '' 
     if (!file) return
 
     setLogoError(null)
@@ -82,7 +81,6 @@ export function SettingsPage() {
       setSaved(true)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not save settings.')
-      // Revert the live preview back to what's actually saved.
       applyTheme(savedConfig.theme_name)
       setSelectedTheme(savedConfig.theme_name)
     } finally {
@@ -175,14 +173,7 @@ export function SettingsPage() {
               required
               className="w-full border border-rule bg-paper px-3 py-2 outline-none focus-visible:border-brass"
             >
-              {/* If the currently saved value isn't one of the curated
-                  cities below (an older install, or set some other
-                  way), it still needs its own matching option here --
-                  otherwise the <select> would silently fall back to
-                  showing the first option as "selected" without that
-                  actually being true, and saving the form would quietly
-                  overwrite the real value with whatever that first
-                  option happens to be. */}
+              {}
               {!TIMEZONE_GROUPS.some((group) =>
                 group.options.some((opt) => opt.timezone === timezone),
               ) && <option value={timezone}>{timezoneLabel(timezone)}</option>}
@@ -296,16 +287,6 @@ function UpdateSection() {
       </div>
       <div className="flex gap-2">
         {info && info.downloadUrl && window.electronAPI?.downloadUpdateInstaller ? (
-          // Routed through Electron's own download manager rather than
-          // a plain link -- this is what lets main.js's will-download
-          // handler offer to install it automatically once the
-          // download finishes, instead of leaving the person to find
-          // the installer in their Downloads folder and run it
-          // themselves. Falls through to the plain link below whenever
-          // this isn't available (a plain browser during development,
-          // or no direct installer asset on the release), which is
-          // exactly the same fallback pattern already used for silent
-          // receipt printing.
           <button
             onClick={() => void window.electronAPI?.downloadUpdateInstaller(info.downloadUrl!)}
             className="border border-ink bg-ink px-3 py-1.5 text-paper"

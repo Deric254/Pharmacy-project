@@ -1,6 +1,3 @@
-// Mirrors backend/app/schemas/*.py exactly. Financial fields are
-// display-only here -- the frontend never recomputes totals; it shows
-// whatever the server returns, full stop.
 
 export interface UserOut {
   id: number
@@ -281,12 +278,6 @@ export interface QuickPurchaseLine {
   batch_number: string
   expiry_date: string
   unit_cost: number
-  // Optional and meaningfully so: omitted means "no opinion on price",
-  // distinct from any concrete number including 0. The backend applies
-  // it only when it's actually present -- sending it on every line
-  // regardless of whether the person touched it would tell the backend
-  // "explicitly sell this batch at this price" even for a routine
-  // restock where nobody looked at the price field.
   selling_price?: number
 }
 

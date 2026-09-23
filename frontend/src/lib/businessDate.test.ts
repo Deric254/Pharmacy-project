@@ -7,10 +7,6 @@ describe('businessToday', () => {
   })
 
   it('returns the calendar date in the business timezone, not the system timezone', () => {
-    // 2026-08-26T23:30:00Z: still Aug 26 in UTC, but already Aug 27
-    // in Nairobi (UTC+3) -- the exact daily boundary this utility
-    // exists to get right regardless of what timezone the browser
-    // or CI runner itself is set to.
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-08-26T23:30:00Z'))
 
@@ -40,10 +36,6 @@ describe('subtractDays', () => {
   })
 
   it('is correct across a DST transition in a DST-observing zone', () => {
-    // The function itself never looks at timezone, only calendar
-    // dates -- this documents that calendar-day arithmetic is
-    // deliberately independent of DST, which is the correct behavior
-    // (a "week ago" is 7 calendar days ago, not 168 hours ago).
     expect(subtractDays('2026-03-10', 7)).toBe('2026-03-03')
   })
 })

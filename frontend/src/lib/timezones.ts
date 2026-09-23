@@ -1,13 +1,3 @@
-/**
- * A curated city list, not the full ~400-zone IANA database -- nobody
- * picking a timezone for their pharmacy wants to scroll a list that
- * long, and most of those zones are uninhabited islands or historical
- * aliases. Each entry's `timezone` value is a real IANA name; the
- * `city` label is just what the person sees and searches by.
- *
- * Grouped by region for a readable dropdown, sorted with this app's
- * primary market (East/West/Southern Africa) first.
- */
 export interface TimezoneOption {
   city: string
   timezone: string
@@ -129,23 +119,14 @@ export const TIMEZONE_GROUPS: TimezoneGroup[] = [
   },
 ]
 
-/** Flat lookup, built once, for turning a stored IANA name back into its city label. */
 const CITY_BY_TIMEZONE: Record<string, string> = Object.fromEntries(
   TIMEZONE_GROUPS.flatMap((group) => group.options.map((opt) => [opt.timezone, opt.city])),
 )
 
-/**
- * Label for a stored IANA timezone value that isn't in the curated
- * list (a pre-existing value from before this picker existed, or one
- * set by some other path). Falls back to the raw IANA name itself
- * rather than hiding it -- the person should always be able to see
- * what's actually saved, even if it's not one of the common choices.
- */
 export function timezoneLabel(iana: string): string {
   return CITY_BY_TIMEZONE[iana] ?? iana
 }
 
-/** The browser's own detected IANA timezone, for defaulting a fresh setup sensibly. */
 export function detectBrowserTimezone(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone

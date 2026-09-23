@@ -346,6 +346,22 @@ class TestExpiredStockReport:
         assert r.json()["entries"] == []
         assert "No expired stock" in r.json()["recommendation"]
 
+    async def test_batch_expiring_today_is_already_flagged(self, client, owner_user):
+        """
+        Same boundary as the Inventory page's own EXPIRED badge
+        (days_remaining <= 0): a batch printed with today's date is
+        expired stock as of today, not one more still-good day.
+        """
+        today = (await _business_today()).isoformat()
+        await _make_product_with_batch(qty=20, cost=3.0, expiry=today)
+        token = await _login(client, "lucy", "S3curePass!")
+
+        r = await client.get(
+            "/api/v1/reports/expired-stock", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert len(r.json()["entries"]) == 1
+        assert r.json()["entries"][0]["days_expired"] == 0
+
 
 class TestFastSlowMovers:
     async def test_sold_product_appears_in_fast_movers(self, client, owner_user, employee_user):

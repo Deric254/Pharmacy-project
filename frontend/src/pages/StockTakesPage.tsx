@@ -29,7 +29,6 @@ export function StockTakesPage() {
       .then((list) => {
         if (cancelled) return
         setStockTakes(list)
-        // Keep the open detail view in sync with the freshly reloaded list.
         setSelected((prev) => (prev ? (list.find((s) => s.id === prev.id) ?? null) : null))
         setError(null)
       })

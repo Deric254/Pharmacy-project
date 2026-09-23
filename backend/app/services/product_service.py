@@ -165,7 +165,7 @@ class ProductService:
             )
             .where(
                 MedicineBatch.product_id.in_(product_ids),
-                MedicineBatch.expiry_date >= today,
+                MedicineBatch.expiry_date > today,
                 MedicineBatch.locked_by_stock_take_id.is_(None),
             )
             .group_by(MedicineBatch.product_id)
@@ -209,7 +209,7 @@ class ProductService:
             .where(
                 MedicineBatch.product_id.in_(product_ids),
                 MedicineBatch.qty_remaining > 0,
-                MedicineBatch.expiry_date >= await business_today(self.db),
+                MedicineBatch.expiry_date > await business_today(self.db),
                 MedicineBatch.locked_by_stock_take_id.is_(None),
             )
             .order_by(MedicineBatch.product_id, MedicineBatch.expiry_date.asc())
@@ -279,7 +279,7 @@ class ProductService:
         qty_result = await self.db.execute(
             select(func.coalesce(func.sum(MedicineBatch.qty_remaining), 0)).where(
                 MedicineBatch.product_id == product.id,
-                MedicineBatch.expiry_date >= await business_today(self.db),
+                MedicineBatch.expiry_date > await business_today(self.db),
                 MedicineBatch.locked_by_stock_take_id.is_(None),
             )
         )

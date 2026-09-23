@@ -79,7 +79,7 @@ class InventoryService:
                 MedicineBatch,
                 and_(
                     MedicineBatch.product_id == Product.id,
-                    MedicineBatch.expiry_date >= today,
+                    MedicineBatch.expiry_date > today,
                     MedicineBatch.locked_by_stock_take_id.is_(None),
                 ),
             )
@@ -138,7 +138,7 @@ class InventoryService:
                 MedicineBatch,
                 and_(
                     MedicineBatch.product_id == Product.id,
-                    MedicineBatch.expiry_date >= today,
+                    MedicineBatch.expiry_date > today,
                 ),
             )
             .where(Product.deleted_at.is_(None))
@@ -261,7 +261,7 @@ class InventoryService:
             raise HTTPException(status_code=404, detail="Batch not found")
 
         today = await business_today(self.db)
-        if batch.expiry_date >= today:
+        if batch.expiry_date > today:
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -283,7 +283,7 @@ class InventoryService:
                 update(MedicineBatch)
                 .where(
                     MedicineBatch.id == batch_id,
-                    MedicineBatch.expiry_date < today,
+                    MedicineBatch.expiry_date <= today,
                     MedicineBatch.locked_by_stock_take_id.is_(None),
                     MedicineBatch.qty_remaining == original_qty,
                 )
@@ -330,7 +330,7 @@ class InventoryService:
             (
                 await self.db.execute(
                     select(MedicineBatch).where(
-                        MedicineBatch.expiry_date < today,
+                        MedicineBatch.expiry_date <= today,
                         MedicineBatch.qty_remaining > 0,
                         MedicineBatch.locked_by_stock_take_id.is_(None),
                     )
@@ -349,7 +349,7 @@ class InventoryService:
                     update(MedicineBatch)
                     .where(
                         MedicineBatch.id == batch.id,
-                        MedicineBatch.expiry_date < today,
+                        MedicineBatch.expiry_date <= today,
                         MedicineBatch.locked_by_stock_take_id.is_(None),
                         MedicineBatch.qty_remaining == original_qty,
                     )
@@ -649,7 +649,7 @@ async def check_and_publish_low_stock(db: AsyncSession, product_ids: list[int]) 
             MedicineBatch,
             and_(
                 MedicineBatch.product_id == Product.id,
-                MedicineBatch.expiry_date >= today,
+                MedicineBatch.expiry_date > today,
                 MedicineBatch.locked_by_stock_take_id.is_(None),
             ),
         )

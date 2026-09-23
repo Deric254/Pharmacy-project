@@ -17,7 +17,6 @@ vi.mock('../api/reports', () => ({
   downloadReportExport: vi.fn(),
 }))
 
-// The real hook opens a WebSocket; irrelevant to what is rendered here.
 vi.mock('../lib/useSaleCompletedRefresh', () => ({
   useSaleCompletedRefresh: () => 0,
 }))
@@ -63,8 +62,6 @@ const BREAKDOWN: ProfitByProductEntry[] = [
   },
 ]
 
-// Testing Library collapses whitespace (Intl puts a non-breaking space in
-// currency output) in the text it matches against, so do the same here.
 const money = (value: number) => formatMoney(value, 'KES').replace(/\s+/g, ' ')
 
 function renderProfitTab() {

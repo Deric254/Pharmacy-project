@@ -80,3 +80,11 @@ class PurchaseOrderItem(Base):
         # purchasing_service.py) -- otherwise this would trigger a lazy
         # load outside the async session context and crash.
         return self.product.name
+
+    @property
+    def category_name(self) -> str | None:
+        # Same eager-load guarantee as product_name above -- .product
+        # is selectin-loaded here, and Product.category is itself
+        # selectin-loaded (see product.py), so this is never a lazy
+        # load outside the session either.
+        return self.product.category_name

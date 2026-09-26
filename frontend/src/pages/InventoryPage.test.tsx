@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { InventoryPage } from './InventoryPage'
 import { useAuthStore } from '../auth/store'
 import { useConfigStore } from '../config/store'
-import { inventoryApi } from '../api/domain'
-import type { ExpiringBatchOut, UserOut } from '../types/api'
+import { inventoryApi, productsApi, categoriesApi } from '../api/domain'
+import type { ExpiringBatchOut, ProductOut, UserOut } from '../types/api'
 import type { BusinessConfigOut } from '../types/config'
 
 vi.mock('../api/domain', () => ({
@@ -20,6 +20,12 @@ vi.mock('../api/domain', () => ({
   },
   productsApi: {
     list: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+  },
+  categoriesApi: {
+    list: vi.fn(),
+    create: vi.fn(),
   },
 }))
 
@@ -143,5 +149,136 @@ describe('InventoryPage expired-stock write-off', () => {
 
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
     expect(screen.getByText('Amoxicillin 500mg')).toBeInTheDocument()
+  })
+})
+
+const PRODUCT_MANAGER_USER: UserOut = {
+  id: 2,
+  full_name: 'Priya Shah',
+  username: 'priya',
+  role_name: 'ChemistOwner',
+  permissions: ['products.manage'],
+  is_active: true,
+  must_change_password: false,
+  terms_accepted: true,
+}
+
+const SAMPLE_PRODUCT: ProductOut = {
+  id: 1,
+  name: 'Amoxicillin 500mg',
+  barcode: null,
+  unit: 'unit',
+  category_id: null,
+  category_name: null,
+  reorder_point: 10,
+  is_active: true,
+  created_at: '2026-01-01T00:00:00Z',
+  total_qty_available: 0,
+  current_cost: null,
+  current_selling_price: null,
+  margin_amount: null,
+  margin_percent: null,
+  markup_percent: null,
+}
+
+describe('InventoryPage product category assignment', () => {
+  beforeEach(() => {
+    vi.mocked(inventoryApi.lowStock).mockResolvedValue([])
+    vi.mocked(inventoryApi.expiring).mockResolvedValue([])
+    vi.mocked(inventoryApi.valuation).mockResolvedValue({ total_value: 0, by_product: [] } as never)
+    vi.mocked(inventoryApi.reconcile).mockResolvedValue([])
+    vi.mocked(productsApi.list).mockResolvedValue([])
+    vi.mocked(productsApi.create).mockReset()
+    vi.mocked(categoriesApi.list).mockResolvedValue([
+      { id: 1, name: 'Antibiotics' },
+      { id: 2, name: 'Painkillers' },
+    ])
+    vi.mocked(categoriesApi.create).mockReset()
+    useAuthStore.setState({ user: PRODUCT_MANAGER_USER, status: 'authenticated' })
+    useConfigStore.setState({
+      config: { timezone: 'Africa/Nairobi' } as BusinessConfigOut,
+      status: 'ready',
+    })
+  })
+
+  it('lists existing categories in the new-product form', async () => {
+    const user = userEvent.setup()
+    render(<InventoryPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'New product' }))
+
+    const select = await screen.findByRole('combobox')
+    expect(within(select).getByRole('option', { name: 'Antibiotics' })).toBeInTheDocument()
+    expect(within(select).getByRole('option', { name: 'Painkillers' })).toBeInTheDocument()
+  })
+
+  it('creating a product sends the chosen category_id', async () => {
+    vi.mocked(productsApi.create).mockResolvedValue(SAMPLE_PRODUCT)
+    const user = userEvent.setup()
+    render(<InventoryPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'New product' }))
+    await user.type(screen.getByLabelText('Name'), 'Amoxicillin 500mg')
+    const select = await screen.findByRole('combobox')
+    await user.selectOptions(select, 'Antibiotics')
+    await user.click(screen.getByRole('button', { name: 'Create product' }))
+
+    await waitFor(() =>
+      expect(productsApi.create).toHaveBeenCalledWith(
+        expect.objectContaining({ category_id: 1 }),
+      ),
+    )
+  })
+
+  it('a product with no category selected is created with category_id null', async () => {
+    vi.mocked(productsApi.create).mockResolvedValue(SAMPLE_PRODUCT)
+    const user = userEvent.setup()
+    render(<InventoryPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'New product' }))
+    await user.type(screen.getByLabelText('Name'), 'Uncategorised Item')
+    await user.click(screen.getByRole('button', { name: 'Create product' }))
+
+    await waitFor(() =>
+      expect(productsApi.create).toHaveBeenCalledWith(
+        expect.objectContaining({ category_id: null }),
+      ),
+    )
+  })
+
+  it('adding a new category inline selects it and includes it in the next create call', async () => {
+    vi.mocked(categoriesApi.create).mockResolvedValue({ id: 3, name: 'Vitamins' })
+    vi.mocked(productsApi.create).mockResolvedValue(SAMPLE_PRODUCT)
+    const user = userEvent.setup()
+    render(<InventoryPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'New product' }))
+    await user.type(screen.getByLabelText('Name'), 'Vitamin C 500mg')
+    await user.click(screen.getByRole('button', { name: '+ New' }))
+    await user.type(screen.getByPlaceholderText('e.g. Antibiotics'), 'Vitamins')
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+
+    await waitFor(() => expect(categoriesApi.create).toHaveBeenCalledWith({ name: 'Vitamins' }))
+
+    await user.click(screen.getByRole('button', { name: 'Create product' }))
+
+    await waitFor(() =>
+      expect(productsApi.create).toHaveBeenCalledWith(
+        expect.objectContaining({ category_id: 3 }),
+      ),
+    )
+  })
+
+  it('shows an error when the category list fails to load, without breaking the form', async () => {
+    vi.mocked(categoriesApi.list).mockRejectedValue(new Error('network down'))
+    const user = userEvent.setup()
+    render(<InventoryPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'New product' }))
+
+    await waitFor(() =>
+      expect(screen.getByText('Could not load categories.')).toBeInTheDocument(),
+    )
+    expect(screen.getByLabelText('Name')).toBeInTheDocument()
   })
 })

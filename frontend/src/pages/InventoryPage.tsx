@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
-import { inventoryApi, productsApi } from '../api/domain'
+import { inventoryApi, productsApi, categoriesApi } from '../api/domain'
 import { useAuthStore } from '../auth/store'
 import { useConfigStore } from '../config/store'
 import { useCurrencyFormatter } from '../lib/currency'
@@ -9,6 +9,7 @@ import { Modal } from '../components/Modal'
 import type {
   AdjustmentReason,
   BatchOut,
+  CategoryOut,
   ExpiringBatchOut,
   ImportRowError,
   LowStockProductOut,
@@ -995,10 +996,42 @@ function ProductFormModal({
   const [barcode, setBarcode] = useState(product?.barcode ?? '')
   const [unit, setUnit] = useState(product?.unit ?? 'unit')
   const [reorderPoint, setReorderPoint] = useState(product?.reorder_point ?? 10)
+  const [categoryId, setCategoryId] = useState<number | null>(product?.category_id ?? null)
+  const [categories, setCategories] = useState<CategoryOut[] | null>(null)
+  const [categoriesError, setCategoriesError] = useState<string | null>(null)
+  const [showNewCategory, setShowNewCategory] = useState(false)
+  const [newCategoryName, setNewCategoryName] = useState('')
+  const [addingCategory, setAddingCategory] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [batches, setBatches] = useState<BatchOut[] | null>(null)
   const [batchesError, setBatchesError] = useState<string | null>(null)
+
+  useEffect(() => {
+    categoriesApi
+      .list()
+      .then(setCategories)
+      .catch((err) =>
+        setCategoriesError(err instanceof ApiError ? err.message : 'Could not load categories.'),
+      )
+  }, [])
+
+  async function handleAddCategory() {
+    if (!newCategoryName.trim()) return
+    setAddingCategory(true)
+    setCategoriesError(null)
+    try {
+      const created = await categoriesApi.create({ name: newCategoryName.trim() })
+      setCategories((prev) => [...(prev ?? []), created].sort((a, b) => a.name.localeCompare(b.name)))
+      setCategoryId(created.id)
+      setNewCategoryName('')
+      setShowNewCategory(false)
+    } catch (err) {
+      setCategoriesError(err instanceof ApiError ? err.message : 'Could not create category.')
+    } finally {
+      setAddingCategory(false)
+    }
+  }
 
   useEffect(() => {
     if (!isEdit) return
@@ -1068,6 +1101,7 @@ function ProductFormModal({
           barcode: barcode || null,
           unit,
           reorder_point: reorderPoint,
+          category_id: categoryId,
         }
         await productsApi.update(product.id, payload)
       } else {
@@ -1076,6 +1110,7 @@ function ProductFormModal({
           barcode: barcode || null,
           unit,
           reorder_point: reorderPoint,
+          category_id: categoryId,
         }
         await productsApi.create(payload)
       }
@@ -1131,6 +1166,51 @@ function ProductFormModal({
               className="figure mt-1 w-full border border-rule bg-paper px-3 py-2"
             />
           </label>
+        </div>
+        <div className="block">
+          <span className="block text-xs uppercase tracking-wide text-ink-soft">
+            Category (optional)
+          </span>
+          <div className="mt-1 flex gap-2">
+            <select
+              value={categoryId ?? ''}
+              onChange={(e) => setCategoryId(e.target.value ? Number(e.target.value) : null)}
+              className="w-full border border-rule bg-paper px-3 py-2"
+            >
+              <option value="">No category</option>
+              {categories?.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => setShowNewCategory((v) => !v)}
+              className="whitespace-nowrap border border-rule px-3 py-2 text-sm"
+            >
+              + New
+            </button>
+          </div>
+          {showNewCategory && (
+            <div className="mt-2 flex gap-2">
+              <input
+                value={newCategoryName}
+                onChange={(e) => setNewCategoryName(e.target.value)}
+                placeholder="e.g. Antibiotics"
+                className="w-full border border-rule bg-paper px-3 py-2 text-sm"
+              />
+              <button
+                type="button"
+                onClick={() => void handleAddCategory()}
+                disabled={addingCategory || !newCategoryName.trim()}
+                className="whitespace-nowrap border border-ink bg-ink px-3 py-2 text-sm text-paper disabled:opacity-50"
+              >
+                {addingCategory ? 'Adding…' : 'Add'}
+              </button>
+            </div>
+          )}
+          {categoriesError && <p className="mt-1 text-xs text-stamp-red">{categoriesError}</p>}
         </div>
         {isEdit && (currentCost !== null || currentSellingPrice !== null) && (
           <p className="text-xs text-ink-soft">

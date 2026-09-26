@@ -20,6 +20,7 @@ import pytest
 from sqlalchemy import select, text
 
 from app.core.database import AsyncSessionLocal
+from app.models.category import Category
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
 from app.models.stock_take import StockTake
@@ -46,6 +47,22 @@ async def _make_supplier(name: str = "Test Supplier") -> int:
 async def _make_product(name: str = "PO Test Product") -> int:
     async with AsyncSessionLocal() as db:
         product = Product(name=name)
+        db.add(product)
+        await db.commit()
+        return int(product.id)
+
+
+async def _make_category(name: str = "Antibiotics") -> int:
+    async with AsyncSessionLocal() as db:
+        category = Category(name=name)
+        db.add(category)
+        await db.commit()
+        return int(category.id)
+
+
+async def _make_product_with_category(name: str, category_id: int) -> int:
+    async with AsyncSessionLocal() as db:
+        product = Product(name=name, category_id=category_id)
         db.add(product)
         await db.commit()
         return int(product.id)
@@ -1019,3 +1036,116 @@ class TestBlendedCostStaysInWholeCents:
         storage_type, cost = await self._stored_cost()
         assert storage_type == "integer"
         assert cost == round(cost, 2)
+
+
+class TestCategoryOnPurchaseItems:
+    """
+    category_name on a purchase order item is what backs the Category
+    column in the Purchasing UI and the spend-by-category breakdown --
+    it's derived through item.product.category_name (both selectin-
+    loaded), never stored redundantly on the item itself.
+    """
+
+    async def test_quick_purchase_response_includes_the_products_category(
+        self, client, owner_user
+    ):
+        category_id = await _make_category("Antibiotics")
+        product_id = await _make_product_with_category("Categorised Product", category_id)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        supplier = await client.post(
+            "/api/v1/suppliers", json={"name": "Category Supplier"}, headers=headers
+        )
+        supplier_id = supplier.json()["id"]
+
+        r = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": supplier_id,
+                "lines": [
+                    {
+                        "product_id": product_id,
+                        "quantity": 10,
+                        "batch_number": "CAT-001",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 5.0,
+                        "selling_price": 9.0,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert r.status_code == 201, r.text
+        assert r.json()["items"][0]["category_name"] == "Antibiotics"
+
+    async def test_uncategorised_product_has_null_category_name_on_the_item(
+        self, client, owner_user
+    ):
+        product_id = await _make_product("Uncategorised Purchase Product")
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        supplier = await client.post(
+            "/api/v1/suppliers", json={"name": "No Category Supplier"}, headers=headers
+        )
+        supplier_id = supplier.json()["id"]
+
+        r = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": supplier_id,
+                "lines": [
+                    {
+                        "product_id": product_id,
+                        "quantity": 5,
+                        "batch_number": "NOCAT-001",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 3.0,
+                        "selling_price": 6.0,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert r.status_code == 201, r.text
+        assert r.json()["items"][0]["category_name"] is None
+
+    async def test_category_name_still_present_when_listing_and_fetching_the_order(
+        self, client, owner_user
+    ):
+        category_id = await _make_category("Painkillers")
+        product_id = await _make_product_with_category("Listed Category Product", category_id)
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        supplier = await client.post(
+            "/api/v1/suppliers", json={"name": "List Supplier"}, headers=headers
+        )
+        supplier_id = supplier.json()["id"]
+
+        created = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": supplier_id,
+                "lines": [
+                    {
+                        "product_id": product_id,
+                        "quantity": 4,
+                        "batch_number": "LIST-001",
+                        "expiry_date": "2027-06-30",
+                        "unit_cost": 2.0,
+                        "selling_price": 4.0,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        po_id = created.json()["id"]
+
+        listed = await client.get("/api/v1/purchase-orders", headers=headers)
+        this_po = next(po for po in listed.json() if po["id"] == po_id)
+        assert this_po["items"][0]["category_name"] == "Painkillers"
+
+        fetched = await client.get(f"/api/v1/purchase-orders/{po_id}", headers=headers)
+        assert fetched.json()["items"][0]["category_name"] == "Painkillers"

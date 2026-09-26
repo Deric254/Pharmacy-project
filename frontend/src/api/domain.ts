@@ -5,6 +5,8 @@ import type {
   BatchExpiryCorrection,
   BatchOut,
   BulkWriteOffResult,
+  CategoryCreate,
+  CategoryOut,
   CountSubmit,
   CustomerCreate,
   CustomerLifetimeValueOut,
@@ -102,6 +104,11 @@ export const suppliersApi = {
   create: (payload: SupplierCreate) => api.post<SupplierOut>('/suppliers', payload),
   recordPayment: (supplierId: number, payload: PaymentRecordRequest) =>
     api.post<SupplierOut>(`/suppliers/${supplierId}/payments`, payload),
+}
+
+export const categoriesApi = {
+  list: () => api.get<CategoryOut[]>('/categories'),
+  create: (payload: CategoryCreate) => api.post<CategoryOut>('/categories', payload),
 }
 
 export const purchaseOrdersApi = {

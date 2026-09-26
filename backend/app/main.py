@@ -38,6 +38,7 @@ from app.api.v1.audit_logs import router as audit_logs_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.backups import router as backups_router
 from app.api.v1.business_config import router as business_config_router
+from app.api.v1.categories import router as categories_router
 from app.api.v1.customers import router as customers_router
 from app.api.v1.inventory import router as inventory_router
 from app.api.v1.products import router as products_router
@@ -48,6 +49,7 @@ from app.api.v1.sales import router as sales_router
 from app.api.v1.setup import router as setup_router
 from app.api.v1.stock_takes import router as stock_takes_router
 from app.api.v1.suppliers import router as suppliers_router
+from app.api.v1.updates import router as updates_router
 from app.api.v1.users import router as users_router
 from app.api.v1.websocket import router as websocket_router
 from app.core.config import get_settings
@@ -242,6 +244,7 @@ async def _unhandled_error_handler(request: Request, exc: Exception) -> JSONResp
 
 app.include_router(auth_router, prefix=settings.api_v1_prefix)
 app.include_router(business_config_router, prefix=settings.api_v1_prefix)
+app.include_router(categories_router, prefix=settings.api_v1_prefix)
 app.include_router(products_router, prefix=settings.api_v1_prefix)
 app.include_router(sales_router, prefix=settings.api_v1_prefix)
 app.include_router(inventory_router, prefix=settings.api_v1_prefix)
@@ -257,6 +260,7 @@ app.include_router(roles_router, prefix=settings.api_v1_prefix)
 app.include_router(setup_router, prefix=settings.api_v1_prefix)
 app.include_router(audit_logs_router, prefix=settings.api_v1_prefix)
 app.include_router(websocket_router, prefix=settings.api_v1_prefix)
+app.include_router(updates_router, prefix=settings.api_v1_prefix)
 
 
 @app.get("/health", tags=["health"])

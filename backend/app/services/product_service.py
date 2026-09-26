@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.business_time import business_today
 from app.models.audit_log import AuditLog
+from app.models.category import Category
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
 from app.models.user import User
@@ -19,7 +20,15 @@ class ProductService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
+    async def _assert_category_exists(self, category_id: int | None) -> None:
+        if category_id is None:
+            return
+        result = await self.db.execute(select(Category.id).where(Category.id == category_id))
+        if result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="Category not found")
+
     async def create(self, payload: ProductCreate, created_by: User) -> ProductOut:
+        await self._assert_category_exists(payload.category_id)
         if payload.barcode:
             existing = await self.db.execute(
                 select(Product).where(
@@ -75,6 +84,8 @@ class ProductService:
         product = await self._get_or_404(product_id)
 
         update_data = payload.model_dump(exclude_unset=True)
+        if "category_id" in update_data:
+            await self._assert_category_exists(update_data["category_id"])
         if update_data.get("barcode"):
             existing = await self.db.execute(
                 select(Product).where(

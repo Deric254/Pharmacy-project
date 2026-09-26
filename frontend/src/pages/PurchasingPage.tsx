@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { productsApi, purchaseOrdersApi, suppliersApi } from '../api/domain'
 import { useAuthStore } from '../auth/store'
 import { useCurrencyFormatter } from '../lib/currency'
+import { categorySpendBreakdown } from '../lib/purchasingAnalytics'
 import { ApiError, downloadExport } from '../api/client'
 import { Modal } from '../components/Modal'
 import type {
@@ -95,6 +96,8 @@ export function PurchasingPage() {
           Add a supplier first (Suppliers button above) before creating a purchase order.
         </p>
       )}
+
+      <CategoryBreakdownPanel orders={allPurchases} />
 
       <div className="ledger-panel">
         <table className="w-full text-left text-sm">
@@ -190,6 +193,36 @@ export function PurchasingPage() {
 
 function supplierName(suppliers: SupplierOut[], id: number): string {
   return suppliers.find((s) => s.id === id)?.name ?? `Supplier #${id}`
+}
+
+function CategoryBreakdownPanel({ orders }: { orders: PurchaseOrderOut[] }) {
+  const formatCurrency = useCurrencyFormatter()
+  const breakdown = useMemo(() => categorySpendBreakdown(orders), [orders])
+
+  if (breakdown.length === 0) return null
+
+  return (
+    <div className="ledger-panel mb-4">
+      <h2 className="border-b border-rule px-3 py-2 text-xs uppercase tracking-wide text-ink-soft">
+        Spend by category
+      </h2>
+      <table className="w-full text-left text-sm">
+        <tbody className="divide-y divide-rule">
+          {breakdown.map((row) => (
+            <tr key={row.category}>
+              <td className="px-3 py-2">{row.category}</td>
+              <td className="figure px-3 py-2 text-ink-soft">
+                {row.itemCount} {row.itemCount === 1 ? 'item' : 'items'}
+              </td>
+              <td className="figure px-3 py-2 text-right font-medium">
+                {formatCurrency(row.total)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
 }
 
 function SuppliersModal({
@@ -329,7 +362,12 @@ function PODetailModal({
       <ul className="mb-4 divide-y divide-rule border border-rule">
         {po.items.map((item) => (
           <li key={item.id} className="flex justify-between px-3 py-2 text-sm">
-            <span>{item.product_name}</span>
+            <span>
+              {item.product_name}
+              <span className="ml-2 text-xs text-ink-soft">
+                {item.category_name ?? 'Uncategorised'}
+              </span>
+            </span>
             <span className="figure">
               {item.quantity_received ?? item.quantity_ordered} @{' '}
               {formatCurrency(item.unit_cost_actual ?? item.unit_cost_expected)}

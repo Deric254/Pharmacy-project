@@ -53,6 +53,14 @@ class Product(Base):
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), nullable=True)
     category: Mapped[Category | None] = relationship(lazy="selectin")
 
+    @property
+    def category_name(self) -> str | None:
+        # Safe without a lazy-load surprise for the same reason
+        # PurchaseOrderItem.product_name is: `category` above is
+        # eager-loaded (lazy="selectin") on every query that returns a
+        # Product, never fetched lazily outside the session.
+        return self.category.name if self.category is not None else None
+
     reorder_point: Mapped[int] = mapped_column(Integer, default=10)
     # default_selling_price column intentionally NOT mapped here any
     # more -- a Product carries no price at all now (see migration

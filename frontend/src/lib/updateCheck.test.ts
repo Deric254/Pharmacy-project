@@ -20,10 +20,15 @@ describe('useUpdateCheck', () => {
   beforeEach(() => {
     fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
+    // The automatic check now caches its result in localStorage so a
+    // fresh check isn't repeated on every mount -- each test needs to
+    // start from "no prior check" to exercise a real fetch.
+    window.localStorage.clear()
   })
 
   afterEach(() => {
     vi.unstubAllGlobals()
+    window.localStorage.clear()
   })
 
   it('correctly compares double-digit version segments, not string order', async () => {
@@ -94,6 +99,103 @@ describe('useUpdateCheck', () => {
 
     await waitFor(() => expect(result.current.info).not.toBeNull())
     expect(result.current.info?.downloadUrl).toBe('https://example.com/installer')
+  })
+
+  it('does not hit the network on mount when a check ran within the last 24h', async () => {
+    const cachedInfo = {
+      currentVersion: '1.0.0',
+      latestVersion: '1.1.0',
+      downloadUrl: 'https://example.com/installer',
+      releaseUrl: 'https://github.com/releases/v1.1.0',
+    }
+    window.localStorage.setItem(
+      'pharmacy-erp:update-check-cache',
+      JSON.stringify({ checkedAt: Date.now() - 1000, info: cachedInfo }),
+    )
+
+    const { result } = renderHook(() => useUpdateCheck())
+
+    await waitFor(() => expect(result.current.info).toEqual(cachedInfo))
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('checks the network again once the cached result is more than 24h old', async () => {
+    window.localStorage.setItem(
+      'pharmacy-erp:update-check-cache',
+      JSON.stringify({
+        checkedAt: Date.now() - 25 * 60 * 60 * 1000,
+        info: null,
+      }),
+    )
+    fetchMock.mockImplementation((url: string) => {
+      if (url === HEALTH_URL) return Promise.resolve(jsonResponse({ version: '2.0.0' }))
+      if (url === RELEASES_LATEST_URL) {
+        return Promise.resolve(
+          jsonResponse({
+            tag_name: 'v2.1.0',
+            html_url: 'https://github.com/releases/v2.1.0',
+            assets: installerAsset('Pharmacy-ERP-Setup-2.1.0.exe'),
+          }),
+        )
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+
+    const { result } = renderHook(() => useUpdateCheck())
+
+    await waitFor(() => expect(result.current.info).not.toBeNull())
+    expect(result.current.info?.latestVersion).toBe('2.1.0')
+    expect(fetchMock).toHaveBeenCalled()
+  })
+
+  it('caches a fresh automatic check so the next mount can skip the network', async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url === HEALTH_URL) return Promise.resolve(jsonResponse({ version: '3.0.0' }))
+      if (url === RELEASES_LATEST_URL) {
+        return Promise.resolve(jsonResponse({ tag_name: 'v3.0.0', html_url: '', assets: [] }))
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+
+    renderHook(() => useUpdateCheck())
+
+    await waitFor(() => {
+      const raw = window.localStorage.getItem('pharmacy-erp:update-check-cache')
+      expect(raw).not.toBeNull()
+    })
+    const cached = JSON.parse(window.localStorage.getItem('pharmacy-erp:update-check-cache')!)
+    expect(cached.info).toBeNull() // already on the latest version
+    expect(typeof cached.checkedAt).toBe('number')
+  })
+
+  it('checkNow always hits the network even when a fresh cache entry exists', async () => {
+    window.localStorage.setItem(
+      'pharmacy-erp:update-check-cache',
+      JSON.stringify({ checkedAt: Date.now(), info: null }),
+    )
+    fetchMock.mockImplementation((url: string) => {
+      if (url === HEALTH_URL) return Promise.resolve(jsonResponse({ version: '1.0.0' }))
+      if (url === RELEASES_LATEST_URL) {
+        return Promise.resolve(
+          jsonResponse({
+            tag_name: 'v1.2.0',
+            html_url: 'https://github.com/releases/v1.2.0',
+            assets: installerAsset('Pharmacy-ERP-Setup-1.2.0.exe'),
+          }),
+        )
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+
+    const { result } = renderHook(() => useUpdateCheck())
+    // Let the (cache-hit, no-fetch) mount effect settle first.
+    await waitFor(() => expect(result.current.info).toBeNull())
+    fetchMock.mockClear()
+
+    await result.current.checkNow()
+
+    expect(fetchMock).toHaveBeenCalled()
+    await waitFor(() => expect(result.current.info?.latestVersion).toBe('1.2.0'))
   })
 })
 

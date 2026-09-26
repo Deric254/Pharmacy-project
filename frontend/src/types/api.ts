@@ -21,6 +21,7 @@ export interface ProductOut {
   barcode: string | null
   unit: string
   category_id: number | null
+  category_name: string | null
   reorder_point: number
   is_active: boolean
   created_at: string
@@ -47,6 +48,15 @@ export interface ProductUpdate {
   category_id?: number | null
   reorder_point?: number
   is_active?: boolean
+}
+
+export interface CategoryOut {
+  id: number
+  name: string
+}
+
+export interface CategoryCreate {
+  name: string
 }
 
 export interface BatchOut {
@@ -291,6 +301,7 @@ export interface PurchaseOrderItemOut {
   id: number
   product_id: number
   product_name: string
+  category_name: string | null
   quantity_ordered: number
   unit_cost_expected: number
   quantity_received: number | null

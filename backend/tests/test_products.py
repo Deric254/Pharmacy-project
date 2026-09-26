@@ -1157,3 +1157,89 @@ class TestBatchExpiryCorrection:
         assert matching[0]["old_value"] == "2028-01-01"
         assert "2029-06-30" in matching[0]["new_value"]
         assert "supplier packaging showed 2029" in matching[0]["new_value"]
+
+
+class TestProductCategory:
+    async def _login(self, client, username: str, password: str) -> str:
+        r = await client.post(
+            "/api/v1/auth/login", json={"username": username, "password": password}
+        )
+        assert r.status_code == 200, r.text
+        return str(r.json()["access_token"])
+
+    async def test_create_with_unknown_category_id_is_rejected(self, client, owner_user):
+        token = await self._login(client, "lucy", "S3curePass!")
+        r = await client.post(
+            "/api/v1/products",
+            json={"name": "Amoxicillin 500mg", "category_id": 999},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 404
+
+    async def test_create_and_fetch_with_a_real_category(self, client, owner_user):
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        category = await client.post(
+            "/api/v1/categories", json={"name": "Antibiotics"}, headers=headers
+        )
+        category_id = category.json()["id"]
+
+        r = await client.post(
+            "/api/v1/products",
+            json={"name": "Amoxicillin 500mg", "category_id": category_id},
+            headers=headers,
+        )
+        assert r.status_code == 201, r.text
+        assert r.json()["category_id"] == category_id
+        assert r.json()["category_name"] == "Antibiotics"
+
+        r2 = await client.get(f"/api/v1/products/{r.json()['id']}", headers=headers)
+        assert r2.json()["category_name"] == "Antibiotics"
+
+    async def test_product_with_no_category_has_null_category_name(self, client, owner_user):
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        r = await client.post(
+            "/api/v1/products", json={"name": "Uncategorised Product"}, headers=headers
+        )
+        assert r.status_code == 201
+        assert r.json()["category_id"] is None
+        assert r.json()["category_name"] is None
+
+    async def test_update_to_unknown_category_id_is_rejected(self, client, owner_user):
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        r = await client.post(
+            "/api/v1/products", json={"name": "Product To Update"}, headers=headers
+        )
+        product_id = r.json()["id"]
+
+        r2 = await client.patch(
+            f"/api/v1/products/{product_id}", json={"category_id": 999}, headers=headers
+        )
+        assert r2.status_code == 404
+
+    async def test_update_can_assign_and_clear_category(self, client, owner_user):
+        token = await self._login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        category = await client.post(
+            "/api/v1/categories", json={"name": "Painkillers"}, headers=headers
+        )
+        category_id = category.json()["id"]
+        r = await client.post(
+            "/api/v1/products", json={"name": "Product To Recategorise"}, headers=headers
+        )
+        product_id = r.json()["id"]
+
+        r2 = await client.patch(
+            f"/api/v1/products/{product_id}",
+            json={"category_id": category_id},
+            headers=headers,
+        )
+        assert r2.json()["category_name"] == "Painkillers"
+
+        r3 = await client.patch(
+            f"/api/v1/products/{product_id}", json={"category_id": None}, headers=headers
+        )
+        assert r3.json()["category_id"] is None
+        assert r3.json()["category_name"] is None

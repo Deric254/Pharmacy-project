@@ -3,7 +3,25 @@ import { fetchWithTimeout } from '../api/client'
 
 const REPO = 'Deric254/Pharmacy-project'
 
-const UPDATE_CHECK_TIMEOUT_MS = 10_000
+// User-initiated ("Check for updates" button): the person is actively
+// waiting on this one, so it gets the generous timeout.
+const MANUAL_CHECK_TIMEOUT_MS = 10_000
+// Silent, automatic check fired on every mount of useUpdateCheck (the
+// app shell mounts it once per session; the settings page mounts a
+// second independent instance every time it's opened). This one must
+// never be allowed to compete for long with the app's own startup
+// traffic, so it gets a short leash.
+const AUTO_CHECK_TIMEOUT_MS = 4_000
+
+// The automatic check is throttled to once per this interval,
+// regardless of how many times useUpdateCheck() gets mounted (app
+// shell + settings page both mount it). Without this, every app
+// launch -- and every visit to Settings -- fired two more sequential
+// external HTTP requests, which is what made the app feel slow at
+// startup specifically when online (offline, the same fetch fails
+// instantly instead of waiting out a real network round trip).
+const AUTO_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
+const AUTO_CHECK_CACHE_KEY = 'pharmacy-erp:update-check-cache'
 
 export interface UpdateInfo {
   currentVersion: string
@@ -16,6 +34,11 @@ interface GithubRelease {
   tag_name: string
   html_url: string
   assets: { name: string; browser_download_url: string }[]
+}
+
+interface UpdateCheckCacheEntry {
+  checkedAt: number
+  info: UpdateInfo | null
 }
 
 function normalizeVersion(v: string): string {
@@ -32,22 +55,50 @@ function isNewer(latest: string, current: string): boolean {
   return false
 }
 
+// localStorage can throw (private browsing, storage disabled, quota) --
+// never let a caching optimization break the update check itself. On
+// any failure we simply behave as if there were no cache, which is
+// exactly the pre-existing behavior.
+function readAutoCheckCache(): UpdateCheckCacheEntry | null {
+  try {
+    const raw = window.localStorage.getItem(AUTO_CHECK_CACHE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<UpdateCheckCacheEntry>
+    if (typeof parsed.checkedAt !== 'number') return null
+    return { checkedAt: parsed.checkedAt, info: parsed.info ?? null }
+  } catch {
+    return null
+  }
+}
+
+function writeAutoCheckCache(info: UpdateInfo | null): void {
+  try {
+    const entry: UpdateCheckCacheEntry = { checkedAt: Date.now(), info }
+    window.localStorage.setItem(AUTO_CHECK_CACHE_KEY, JSON.stringify(entry))
+  } catch {
+    // Best-effort only -- a failed write just means the next mount
+    // checks again, which is the safe direction to fail in.
+  }
+}
+
 export interface UpdateCheckResult {
   info: UpdateInfo | null
   checking: boolean
   checkNow: () => Promise<void>
 }
-async function fetchLatestReleaseInfo(): Promise<UpdateInfo | null> {
-  const healthRes = await fetchWithTimeout('/health', {}, UPDATE_CHECK_TIMEOUT_MS)
-  if (!healthRes.ok) return null
-  const health = (await healthRes.json()) as { version: string }
 
-  const releaseRes = await fetchWithTimeout(
-    `https://api.github.com/repos/${REPO}/releases/latest`,
-    {},
-    UPDATE_CHECK_TIMEOUT_MS,
-  )
-  if (!releaseRes.ok) return null 
+async function fetchLatestReleaseInfo(timeoutMs: number): Promise<UpdateInfo | null> {
+  // These two requests don't depend on each other -- the health call
+  // only supplies the locally-installed version, which isNewer() needs
+  // but which the release request doesn't. Running them in parallel
+  // instead of one after another halves the worst-case wall-clock cost
+  // of this check.
+  const [healthRes, releaseRes] = await Promise.all([
+    fetchWithTimeout('/health', {}, timeoutMs),
+    fetchWithTimeout(`https://api.github.com/repos/${REPO}/releases/latest`, {}, timeoutMs),
+  ])
+  if (!healthRes.ok || !releaseRes.ok) return null
+  const health = (await healthRes.json()) as { version: string }
   const release = (await releaseRes.json()) as GithubRelease
 
   if (!isNewer(release.tag_name, health.version)) return null
@@ -70,8 +121,9 @@ export function useUpdateCheck(): UpdateCheckResult {
   async function checkNow() {
     setChecking(true)
     try {
-      const result = await fetchLatestReleaseInfo()
+      const result = await fetchLatestReleaseInfo(MANUAL_CHECK_TIMEOUT_MS)
       setInfo(result)
+      writeAutoCheckCache(result)
     } catch {} finally {
       setChecking(false)
     }
@@ -79,8 +131,16 @@ export function useUpdateCheck(): UpdateCheckResult {
 
   useEffect(() => {
     let cancelled = false
-    fetchLatestReleaseInfo()
+
+    const cached = readAutoCheckCache()
+    if (cached && Date.now() - cached.checkedAt < AUTO_CHECK_INTERVAL_MS) {
+      setInfo(cached.info)
+      return
+    }
+
+    fetchLatestReleaseInfo(AUTO_CHECK_TIMEOUT_MS)
       .then((result) => {
+        writeAutoCheckCache(result)
         if (!cancelled) setInfo(result)
       })
       .catch(() => {})
@@ -113,15 +173,13 @@ export function useReleaseHistory(): {
     setLoading(true)
     setError(false)
     try {
-      const healthRes = await fetchWithTimeout('/health', {}, UPDATE_CHECK_TIMEOUT_MS)
+      const [healthRes, releasesRes] = await Promise.all([
+        fetchWithTimeout('/health', {}, MANUAL_CHECK_TIMEOUT_MS),
+        fetchWithTimeout(`https://api.github.com/repos/${REPO}/releases`, {}, MANUAL_CHECK_TIMEOUT_MS),
+      ])
       const health = healthRes.ok ? ((await healthRes.json()) as { version: string }) : null
       const currentVersion = health ? normalizeVersion(health.version) : null
 
-      const releasesRes = await fetchWithTimeout(
-        `https://api.github.com/repos/${REPO}/releases`,
-        {},
-        UPDATE_CHECK_TIMEOUT_MS,
-      )
       if (!releasesRes.ok) {
         setError(true)
         return

@@ -10,6 +10,7 @@ class PurchaseOrderItemOut(BaseModel):
     id: int
     product_id: int
     product_name: str
+    category_name: str | None = None
     quantity_ordered: int
     unit_cost_expected: float
     quantity_received: int | None

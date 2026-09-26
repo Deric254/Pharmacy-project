@@ -29,6 +29,7 @@ class ProductOut(BaseModel):
     barcode: str | None
     unit: str
     category_id: int | None
+    category_name: str | None = None
     reorder_point: int
     is_active: bool
     created_at: datetime

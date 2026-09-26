@@ -73,6 +73,16 @@ class Settings(BaseSettings):
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = ""
 
+    # Optional. A GitHub personal access token (repo scope not required --
+    # this only reads public release metadata) used by
+    # update_check_service.py when asking GitHub for the latest release.
+    # Blank by default: the request still works unauthenticated, just
+    # subject to GitHub's much lower 60-requests/hour-per-IP limit rather
+    # than the ~5000/hour authenticated limit. That matters here
+    # specifically because every desktop install behind the same
+    # hospital/office NAT shares one public IP against that limit.
+    github_update_token: str = ""
+
     @property
     def local_backup_dir(self) -> Path:
         """

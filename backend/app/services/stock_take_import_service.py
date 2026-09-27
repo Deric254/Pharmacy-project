@@ -3,7 +3,6 @@ from typing import Any
 
 from fastapi import HTTPException
 from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +11,7 @@ from app.models.stock_take import StockTake, StockTakeItem, StockTakeStatus
 from app.models.user import User
 from app.schemas.inventory import AdjustmentReason
 from app.schemas.stock_take import CountSubmit, StockTakeOut
+from app.services.import_common import write_header_row
 from app.services.spreadsheet_reader import read_data_rows
 from app.services.stock_take_service import StockTakeService
 
@@ -45,14 +45,8 @@ async def generate_count_template(db: AsyncSession, stock_take_id: int) -> bytes
     assert ws is not None
     ws.title = "Stock Count"
 
-    header_font = Font(name="Arial", bold=True, color="FFFFFF")
-    header_fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
-    for col, header in enumerate(_HEADERS, start=1):
-        cell = ws.cell(row=1, column=col, value=header)
-        cell.font = header_font
-        cell.fill = header_fill
+    write_header_row(ws, _HEADERS)
     ws.cell(row=1, column=_ID_COLUMN, value="Item ID")
-    ws.freeze_panes = "A2"
 
     for row_num, item in enumerate(items, start=2):
         ws.cell(row=row_num, column=1, value=item.product_name)

@@ -137,9 +137,7 @@ class TestRevenueByCategory:
         total = (
             await client.get("/api/v1/reports/kpi-dashboard", params=params, headers=headers)
         ).json()["revenue"]
-        r = await client.get(
-            "/api/v1/reports/revenue-by-category", params=params, headers=headers
-        )
+        r = await client.get("/api/v1/reports/revenue-by-category", params=params, headers=headers)
         assert r.status_code == 200, r.text
         body = r.json()
 
@@ -154,9 +152,7 @@ class TestRevenueByCategory:
         # Highest revenue first.
         assert [c["category_name"] for c in body["categories"]] == ["Painkillers", "Antibiotics"]
 
-    async def test_products_with_no_category_are_grouped_as_uncategorised(
-        self, client, owner_user
-    ):
+    async def test_products_with_no_category_are_grouped_as_uncategorised(self, client, owner_user):
         loose_id = await _make_product_with_batch("Loose Item", category_id=None)
         headers = await _owner_headers(client)
         await _sell(client, headers, [(loose_id, 1)], total=10.0)
@@ -275,9 +271,7 @@ class TestTopProductsInCategory:
     async def test_ranks_by_revenue_within_the_category(self, client, owner_user):
         antibiotics = await _make_category("Antibiotics")
         big_id = await _make_product_with_batch("Big Seller", antibiotics, price=100.0, qty=5)
-        small_id = await _make_product_with_batch(
-            "Small Seller", antibiotics, price=10.0, qty=5
-        )
+        small_id = await _make_product_with_batch("Small Seller", antibiotics, price=10.0, qty=5)
         headers = await _owner_headers(client)
         await _sell(client, headers, [(small_id, 1)], total=10.0)
         await _sell(client, headers, [(big_id, 1)], total=100.0)

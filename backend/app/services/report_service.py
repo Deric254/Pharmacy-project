@@ -91,9 +91,7 @@ def _apportion_cents(exact_cents: dict[int, float], total_cents: int) -> dict[in
     return floors
 
 
-def _discount_ratio_and_sale_totals(
-    utc_start: datetime, utc_end: datetime
-) -> tuple[Any, Any]:
+def _discount_ratio_and_sale_totals(utc_start: datetime, utc_end: datetime) -> tuple[Any, Any]:
     """
     The one place the "prorate a sale's discount across its line
     items" math is expressed as SQL -- shared by every revenue report

@@ -19,7 +19,6 @@ from typing import Any
 
 from fastapi import HTTPException
 from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 from pydantic import ValidationError
 from sqlalchemy import func, select
@@ -33,6 +32,14 @@ from app.schemas.purchase_order import (
     PurchaseOrderOut,
     QuickPurchaseLine,
     QuickPurchaseRequest,
+)
+from app.services.import_common import (
+    check_duplicate_in_file,
+    clean_str,
+    raise_if_errors,
+    write_example_row,
+    write_header_row,
+    write_instructions,
 )
 from app.services.purchasing_service import PurchasingService
 from app.services.spreadsheet_reader import read_data_rows
@@ -55,18 +62,8 @@ def generate_purchase_order_import_template() -> bytes:
     assert ws is not None
     ws.title = "Received Stock"
 
-    header_font = Font(name="Arial", bold=True, color="FFFFFF")
-    header_fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
-    for col, header in enumerate(_HEADERS, start=1):
-        cell = ws.cell(row=1, column=col, value=header)
-        cell.font = header_font
-        cell.fill = header_fill
-    ws.freeze_panes = "A2"
-
-    example_font = Font(name="Arial", italic=True, color="6B7280")
-    for col, value in enumerate(_EXAMPLE_ROW, start=1):
-        cell = ws.cell(row=2, column=col, value=value)
-        cell.font = example_font
+    write_header_row(ws, _HEADERS)
+    write_example_row(ws, _EXAMPLE_ROW)
 
     ws.column_dimensions["A"].width = 32
     ws.column_dimensions["B"].width = 12
@@ -121,31 +118,27 @@ def generate_purchase_order_import_template() -> bytes:
     ws.add_data_validation(selling_price_validation)
     selling_price_validation.add(f"F2:F{_MAX_ROWS}")
 
-    instructions = ws.cell(
+    write_instructions(
+        ws,
         row=1,
         column=7,
-        value=(
+        text=(
             "Product names must match your catalog exactly. Expiry date as YYYY-MM-DD. "
             "Selling price is optional -- leave it blank to keep the existing batch's "
             "price on a restock (same batch number + expiry as one already on file). "
             "Required for a genuinely new batch number."
         ),
     )
-    instructions.font = Font(name="Arial", italic=True, size=9, color="991B1B")
 
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
 
 
-def _clean_str(value: Any) -> str:
-    return str(value).strip() if value is not None else ""
-
-
 def _parse_date(value: Any) -> date_type | None:
     if isinstance(value, date_type):
         return value
-    text = _clean_str(value)
+    text = clean_str(value)
     if not text:
         return None
     try:
@@ -167,7 +160,7 @@ async def _parse_and_validate(
         row_num = offset + 2
         row_values: list[Any] = list(row)
         name_raw, qty_raw, batch_raw, expiry_raw, cost_raw, selling_raw = row_values
-        name = _clean_str(name_raw)
+        name = clean_str(name_raw)
 
         if not name:
             continue
@@ -189,23 +182,16 @@ async def _parse_and_validate(
             row_ok = False
             qty = 0
 
-        batch_number = _clean_str(batch_raw)
+        batch_number = clean_str(batch_raw)
         if not batch_number:
             errors.append(
                 ImportRowError(row=row_num, field="Batch number", message="Cannot be empty.")
             )
             row_ok = False
-        elif batch_number in seen_batch_numbers:
-            errors.append(
-                ImportRowError(
-                    row=row_num,
-                    field="Batch number",
-                    message=f"Duplicate of row {seen_batch_numbers[batch_number]} in this file.",
-                )
-            )
+        elif check_duplicate_in_file(
+            seen_batch_numbers, batch_number, row_num, "Batch number", errors
+        ):
             row_ok = False
-        else:
-            seen_batch_numbers[batch_number] = row_num
 
         expiry = _parse_date(expiry_raw)
         if expiry is None:
@@ -229,7 +215,7 @@ async def _parse_and_validate(
             row_ok = False
             cost = 0.0
 
-        if selling_raw is None or _clean_str(selling_raw) == "":
+        if selling_raw is None or clean_str(selling_raw) == "":
             selling_price = None
         else:
             try:
@@ -311,14 +297,7 @@ async def bulk_import_purchase_order(
 
     lines, errors = await _parse_and_validate(db, file_bytes)
 
-    if errors:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": f"{len(errors)} problem(s) found. Nothing was received.",
-                "errors": [e.model_dump() for e in errors],
-            },
-        )
+    raise_if_errors(errors, "received")
 
     payload = QuickPurchaseRequest(supplier_id=supplier_id, lines=lines)
     return await PurchasingService(db).quick_purchase(payload, user)

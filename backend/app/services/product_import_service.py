@@ -20,7 +20,6 @@ from typing import Any
 
 from fastapi import HTTPException
 from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 from pydantic import ValidationError
 from sqlalchemy import func, select
@@ -31,6 +30,14 @@ from app.models.audit_log import AuditLog
 from app.models.product import Product
 from app.models.user import User
 from app.schemas.product import BulkImportResult, ImportRowError, ProductCreate
+from app.services.import_common import (
+    check_duplicate_in_file,
+    clean_str,
+    raise_if_errors,
+    write_example_row,
+    write_header_row,
+    write_instructions,
+)
 from app.services.spreadsheet_reader import read_data_rows
 
 _COMMON_UNITS = [
@@ -59,18 +66,8 @@ def generate_import_template() -> bytes:
     assert ws is not None  # a freshly created Workbook always has an active sheet
     ws.title = "Products"
 
-    header_font = Font(name="Arial", bold=True, color="FFFFFF")
-    header_fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
-    for col, header in enumerate(_HEADERS, start=1):
-        cell = ws.cell(row=1, column=col, value=header)
-        cell.font = header_font
-        cell.fill = header_fill
-    ws.freeze_panes = "A2"
-
-    example_font = Font(name="Arial", italic=True, color="6B7280")
-    for col, value in enumerate(_EXAMPLE_ROW, start=1):
-        cell = ws.cell(row=2, column=col, value=value)
-        cell.font = example_font
+    write_header_row(ws, _HEADERS)
+    write_example_row(ws, _EXAMPLE_ROW)
 
     ws.column_dimensions["A"].width = 32
     ws.column_dimensions["B"].width = 18
@@ -103,16 +100,11 @@ def generate_import_template() -> bytes:
     ws.add_data_validation(reorder_validation)
     reorder_validation.add(f"D2:D{_MAX_ROWS}")
 
-    instructions = ws.cell(row=1, column=6, value="Delete the EXAMPLE row before importing.")
-    instructions.font = Font(name="Arial", italic=True, size=9, color="991B1B")
+    write_instructions(ws, row=1, column=6, text="Delete the EXAMPLE row before importing.")
 
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
-
-
-def _clean_str(value: Any) -> str:
-    return str(value).strip() if value is not None else ""
 
 
 async def _parse_and_validate(
@@ -129,15 +121,15 @@ async def _parse_and_validate(
         row_num = offset + 2  # 1-indexed, header is row 1
         row_values: list[Any] = list(row)
         name_raw, barcode_raw, unit_raw, reorder_raw = row_values
-        name = _clean_str(name_raw)
+        name = clean_str(name_raw)
 
         if not name:
             continue  # a genuinely blank row (trailing empty rows are common) -- not an error
         if name.upper().startswith("EXAMPLE"):
             continue  # the template's own example row, left in by mistake -- silently skip
 
-        barcode = _clean_str(barcode_raw) or None
-        unit = _clean_str(unit_raw) or "unit"
+        barcode = clean_str(barcode_raw) or None
+        unit = clean_str(unit_raw) or "unit"
 
         if unit not in _COMMON_UNITS:
             errors.append(
@@ -160,17 +152,7 @@ async def _parse_and_validate(
             )
             reorder_point = 0
 
-        name_key = name.lower()
-        if name_key in seen_names:
-            errors.append(
-                ImportRowError(
-                    row=row_num,
-                    field="Name",
-                    message=f"Duplicate of row {seen_names[name_key]} in this same file.",
-                )
-            )
-        else:
-            seen_names[name_key] = row_num
+        check_duplicate_in_file(seen_names, name.lower(), row_num, "Name", errors)
 
         row_already_invalid = False
         if len(name) > 150:
@@ -189,16 +171,7 @@ async def _parse_and_validate(
             row_already_invalid = True
 
         if barcode:
-            if barcode in seen_barcodes:
-                errors.append(
-                    ImportRowError(
-                        row=row_num,
-                        field="Barcode",
-                        message=f"Duplicate of row {seen_barcodes[barcode]} in this same file.",
-                    )
-                )
-            else:
-                seen_barcodes[barcode] = row_num
+            check_duplicate_in_file(seen_barcodes, barcode, row_num, "Barcode", errors)
 
         # Defensive backstop: even with every check above, construct
         # via try/except rather than trust that this list of checks is
@@ -275,19 +248,12 @@ async def _parse_and_validate(
 async def bulk_import(db: AsyncSession, file_bytes: bytes, user: User) -> BulkImportResult:
     candidates, errors = await _parse_and_validate(db, file_bytes)
 
-    if errors:
-        # All-or-nothing: a rejected file imports exactly zero rows,
-        # regardless of how many were individually clean. Reporting
-        # every problem at once (not just the first) is what lets one
-        # correction pass fix the whole file instead of a slow back-
-        # and-forth discovering one bad row per re-upload.
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": f"{len(errors)} problem(s) found. Nothing was imported.",
-                "errors": [e.model_dump() for e in errors],
-            },
-        )
+    # All-or-nothing: a rejected file imports exactly zero rows,
+    # regardless of how many were individually clean. Reporting every
+    # problem at once (not just the first) is what lets one correction
+    # pass fix the whole file instead of a slow back-and-forth
+    # discovering one bad row per re-upload.
+    raise_if_errors(errors, "imported")
 
     for candidate in candidates:
         db.add(Product(**candidate.model_dump()))

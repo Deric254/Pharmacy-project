@@ -1046,9 +1046,7 @@ class TestCategoryOnPurchaseItems:
     loaded), never stored redundantly on the item itself.
     """
 
-    async def test_quick_purchase_response_includes_the_products_category(
-        self, client, owner_user
-    ):
+    async def test_quick_purchase_response_includes_the_products_category(self, client, owner_user):
         category_id = await _make_category("Antibiotics")
         product_id = await _make_product_with_category("Categorised Product", category_id)
         token = await _login(client, "lucy", "S3curePass!")

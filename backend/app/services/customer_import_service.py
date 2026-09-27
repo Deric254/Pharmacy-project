@@ -10,7 +10,6 @@ from typing import Any
 
 from fastapi import HTTPException
 from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -21,6 +20,14 @@ from app.models.customer import Customer
 from app.models.user import User
 from app.schemas.customer import CustomerCreate
 from app.schemas.product import BulkImportResult, ImportRowError
+from app.services.import_common import (
+    check_duplicate_in_file,
+    clean_str,
+    raise_if_errors,
+    write_example_row,
+    write_header_row,
+    write_instructions,
+)
 from app.services.spreadsheet_reader import read_data_rows
 
 _HEADERS = ["Name", "Phone", "Email"]
@@ -34,33 +41,18 @@ def generate_customer_import_template() -> bytes:
     assert ws is not None
     ws.title = "Customers"
 
-    header_font = Font(name="Arial", bold=True, color="FFFFFF")
-    header_fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
-    for col, header in enumerate(_HEADERS, start=1):
-        cell = ws.cell(row=1, column=col, value=header)
-        cell.font = header_font
-        cell.fill = header_fill
-    ws.freeze_panes = "A2"
-
-    example_font = Font(name="Arial", italic=True, color="6B7280")
-    for col, value in enumerate(_EXAMPLE_ROW, start=1):
-        cell = ws.cell(row=2, column=col, value=value)
-        cell.font = example_font
+    write_header_row(ws, _HEADERS)
+    write_example_row(ws, _EXAMPLE_ROW)
 
     ws.column_dimensions["A"].width = 28
     ws.column_dimensions["B"].width = 18
     ws.column_dimensions["C"].width = 28
 
-    instructions = ws.cell(row=1, column=5, value="Delete the EXAMPLE row before importing.")
-    instructions.font = Font(name="Arial", italic=True, size=9, color="991B1B")
+    write_instructions(ws, row=1, column=5, text="Delete the EXAMPLE row before importing.")
 
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
-
-
-def _clean_str(value: Any) -> str:
-    return str(value).strip() if value is not None else ""
 
 
 async def _parse_and_validate(
@@ -77,15 +69,15 @@ async def _parse_and_validate(
         row_num = offset + 2
         row_values: list[Any] = list(row)
         name_raw, phone_raw, email_raw = row_values
-        name = _clean_str(name_raw)
+        name = clean_str(name_raw)
 
         if not name:
             continue
         if name.upper().startswith("EXAMPLE"):
             continue
 
-        phone = _clean_str(phone_raw) or None
-        email = _clean_str(email_raw) or None
+        phone = clean_str(phone_raw) or None
+        email = clean_str(email_raw) or None
 
         row_already_invalid = False
         if len(name) > 150:
@@ -110,29 +102,10 @@ async def _parse_and_validate(
             )
             row_already_invalid = True
 
-        name_key = name.lower()
-        if name_key in seen_names:
-            errors.append(
-                ImportRowError(
-                    row=row_num,
-                    field="Name",
-                    message=f"Duplicate of row {seen_names[name_key]} in this same file.",
-                )
-            )
-        else:
-            seen_names[name_key] = row_num
+        check_duplicate_in_file(seen_names, name.lower(), row_num, "Name", errors)
 
         if phone:
-            if phone in seen_phones:
-                errors.append(
-                    ImportRowError(
-                        row=row_num,
-                        field="Phone",
-                        message=f"Duplicate of row {seen_phones[phone]} in this same file.",
-                    )
-                )
-            else:
-                seen_phones[phone] = row_num
+            check_duplicate_in_file(seen_phones, phone, row_num, "Phone", errors)
 
         if row_already_invalid:
             continue
@@ -178,14 +151,7 @@ async def bulk_import_customers(
 ) -> BulkImportResult:
     candidates, errors = await _parse_and_validate(db, file_bytes)
 
-    if errors:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": f"{len(errors)} problem(s) found. Nothing was imported.",
-                "errors": [e.model_dump() for e in errors],
-            },
-        )
+    raise_if_errors(errors, "imported")
 
     for candidate in candidates:
         db.add(Customer(**candidate.model_dump()))

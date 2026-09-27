@@ -15,6 +15,7 @@ sales have accumulated, rather than loading every row into Python.
 
 import math
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal
 
@@ -27,6 +28,7 @@ from app.core.business_time import (
     local_offset_segments,
 )
 from app.core.money_types import from_cents, to_cents
+from app.models.category import Category
 from app.models.customer import Customer
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
@@ -38,6 +40,8 @@ from app.models.user import User
 from app.schemas.reports import (
     CashierSalesEntry,
     CashierSalesOut,
+    CategoryRevenueEntry,
+    CategoryRevenueReportOut,
     ExpiredStockEntry,
     ExpiredStockReportOut,
     FastSlowMoversOut,
@@ -85,6 +89,57 @@ def _apportion_cents(exact_cents: dict[int, float], total_cents: int) -> dict[in
     for key in largest_remainder_first[: max(leftover, 0)]:
         floors[key] += 1
     return floors
+
+
+def _discount_ratio_and_sale_totals(
+    utc_start: datetime, utc_end: datetime
+) -> tuple[Any, Any]:
+    """
+    The one place the "prorate a sale's discount across its line
+    items" math is expressed as SQL -- shared by every revenue report
+    in this file that needs it (per-product and per-category) so none
+    of them can ever compute it differently. See
+    ReportService._gross_product_revenue for the full reasoning and
+    the tests that pin this exact formula.
+    """
+    sale_totals = (
+        select(Sale.id, Sale.subtotal, Sale.total_amount)
+        .where(Sale.created_at >= utc_start, Sale.created_at < utc_end)
+        .subquery()
+    )
+    # A sale with a zero subtotal (every line free) has nothing to
+    # prorate a discount against -- keep that line at face value
+    # (ratio 1.0) rather than dividing by zero.
+    discount_ratio = case(
+        (cast(sale_totals.c.subtotal, Float) == 0, 1.0),
+        else_=cast(sale_totals.c.total_amount, Float) / cast(sale_totals.c.subtotal, Float),
+    )
+    return sale_totals, discount_ratio
+
+
+UNCATEGORISED = "Uncategorised"
+
+
+def _category_condition(category_id: int | None) -> Any:
+    """SQLAlchemy WHERE condition for "products in exactly this category" --
+    category_id=None means the Uncategorised bucket (IS NULL), not "no filter"."""
+    if category_id is None:
+        return Product.category_id.is_(None)
+    return Product.category_id == category_id
+
+
+@dataclass(frozen=True)
+class _CategoryFilter:
+    """
+    Disambiguates "no category filter at all" (the Python default,
+    None, used by every existing caller) from "filter to exactly this
+    category" where that category may itself be the Uncategorised
+    bucket (category_id=None means products with no category
+    assigned, not "don't filter"). Wrapping the real filter value in
+    this small type is what makes that distinction expressible.
+    """
+
+    category_id: int | None
 
 
 class ReportService:
@@ -841,7 +896,10 @@ class ReportService:
         return net_revenue, int(count)
 
     async def _gross_product_revenue(
-        self, utc_start: datetime, utc_end: datetime
+        self,
+        utc_start: datetime,
+        utc_end: datetime,
+        category_filter: _CategoryFilter | None = None,
     ) -> list[tuple[int, str, int, float]]:
         """
         Per product with sales in [utc_start, utc_end): (id, name,
@@ -849,24 +907,17 @@ class ReportService:
         before refunds). The one place that proration lives, shared by
         top_products_by_revenue and profit_by_product so the two can
         never disagree -- see top_products_by_revenue for why and how.
+
+        category_filter is an additive, optional restriction (used by
+        top_products_in_category's drill-down) -- omitted, the query
+        and result are identical to before it existed.
         """
-        sale_totals = (
-            select(Sale.id, Sale.subtotal, Sale.total_amount)
-            .where(Sale.created_at >= utc_start, Sale.created_at < utc_end)
-            .subquery()
-        )
-        # A sale with a zero subtotal (every line free) has nothing to
-        # prorate a discount against -- keep that line at face value
-        # (ratio 1.0) rather than dividing by zero.
-        discount_ratio = case(
-            (cast(sale_totals.c.subtotal, Float) == 0, 1.0),
-            else_=cast(sale_totals.c.total_amount, Float) / cast(sale_totals.c.subtotal, Float),
-        )
+        sale_totals, discount_ratio = _discount_ratio_and_sale_totals(utc_start, utc_end)
         revenue_cents_expr = cast(
             func.sum(SaleItem.quantity * cast(SaleItem.unit_price, Float) * discount_ratio),
             Float,
         )
-        result = await self.db.execute(
+        query = (
             select(
                 Product.id,
                 Product.name,
@@ -875,12 +926,46 @@ class ReportService:
             )
             .join(SaleItem, SaleItem.product_id == Product.id)
             .join(sale_totals, sale_totals.c.id == SaleItem.sale_id)
-            .group_by(Product.id, Product.name)
         )
+        if category_filter is not None:
+            query = query.where(_category_condition(category_filter.category_id))
+        query = query.group_by(Product.id, Product.name)
+        result = await self.db.execute(query)
         return [
             (product_id, name, int(quantity_sold), float(revenue_cents))
             for product_id, name, quantity_sold, revenue_cents in result.all()
         ]
+
+    async def _refund_revenue_by_product(
+        self,
+        utc_start: datetime,
+        utc_end: datetime,
+        category_filter: _CategoryFilter | None = None,
+    ) -> list[tuple[int, str, float]]:
+        """
+        Per product refunded in [utc_start, utc_end): (id, name,
+        refunded revenue in dollars). RefundItem.line_total is already
+        the real, discount-prorated money handed back on that line
+        (see refund_service.py) -- no re-derivation needed here, just
+        summed per product. Shared by top_products_by_revenue and
+        top_products_in_category so the two never disagree, the same
+        reason _gross_product_revenue is shared.
+        """
+        query = (
+            select(
+                RefundItem.product_id,
+                Product.name,
+                func.coalesce(func.sum(RefundItem.line_total), 0.0),
+            )
+            .join(Refund, Refund.id == RefundItem.refund_id)
+            .join(Product, Product.id == RefundItem.product_id)
+            .where(Refund.created_at >= utc_start, Refund.created_at < utc_end)
+        )
+        if category_filter is not None:
+            query = query.where(_category_condition(category_filter.category_id))
+        query = query.group_by(RefundItem.product_id, Product.name)
+        result = await self.db.execute(query)
+        return [(product_id, name, float(total)) for product_id, name, total in result.all()]
 
     async def top_products_by_revenue(
         self, start_date: date, end_date: date, limit: int
@@ -939,30 +1024,14 @@ class ReportService:
             qty_by_product[product_id] = quantity_sold
             revenue_by_product[product_id] = revenue_cents / 100.0
 
-        # RefundItem.line_total is already the real, discount-prorated
-        # money handed back on that line (see refund_service.py) -- no
-        # re-derivation needed here, just netted against this same
-        # product's revenue for the period the refund happened in, same
-        # "refund counts against its own date" rule as every other
-        # report in this file. This is a plain SUM of a single
-        # MoneyCents column with no multiplication or cast involved,
-        # so its automatic dollar decode is exact -- the same pattern
-        # used safely elsewhere in this file (e.g.
-        # _revenue_and_count_in_range).
-        refund_result = await self.db.execute(
-            select(
-                RefundItem.product_id,
-                Product.name,
-                func.coalesce(func.sum(RefundItem.line_total), 0.0),
-            )
-            .join(Refund, Refund.id == RefundItem.refund_id)
-            .join(Product, Product.id == RefundItem.product_id)
-            .where(Refund.created_at >= utc_start, Refund.created_at < utc_end)
-            .group_by(RefundItem.product_id)
-        )
-        for product_id, name, refund_total in refund_result.all():
+        # Refund revenue is netted against the period the refund
+        # itself happened in, same "refund counts against its own
+        # date" rule as every other report in this file.
+        for product_id, name, refund_total in await self._refund_revenue_by_product(
+            utc_start, utc_end
+        ):
             name_by_product.setdefault(product_id, name)
-            revenue_by_product[product_id] -= float(refund_total)
+            revenue_by_product[product_id] -= refund_total
 
         ranked = sorted(revenue_by_product.items(), key=lambda pair: pair[1], reverse=True)
         return [
@@ -974,6 +1043,155 @@ class ReportService:
             )
             for product_id, revenue in ranked[:limit]
         ]
+
+    async def top_products_in_category(
+        self, start_date: date, end_date: date, category_id: int | None, limit: int = 10
+    ) -> list[TopProductEntry]:
+        """
+        Drill-down for revenue_by_category(): exactly
+        top_products_by_revenue's computation (same discount proration,
+        same refund netting, same ranking), restricted to one category.
+
+        category_id=None means the Uncategorised bucket (products with
+        no category assigned) -- this method always filters, it never
+        means "every product regardless of category"; that's what
+        top_products_by_revenue is for.
+        """
+        utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
+        category_filter = _CategoryFilter(category_id=category_id)
+
+        name_by_product: dict[int, str] = {}
+        qty_by_product: dict[int, int] = {}
+        revenue_by_product: dict[int, float] = defaultdict(float)
+        for product_id, name, quantity_sold, revenue_cents in await self._gross_product_revenue(
+            utc_start, utc_end, category_filter
+        ):
+            name_by_product[product_id] = name
+            qty_by_product[product_id] = quantity_sold
+            revenue_by_product[product_id] = revenue_cents / 100.0
+
+        for product_id, name, refund_total in await self._refund_revenue_by_product(
+            utc_start, utc_end, category_filter
+        ):
+            name_by_product.setdefault(product_id, name)
+            revenue_by_product[product_id] -= refund_total
+
+        ranked = sorted(revenue_by_product.items(), key=lambda pair: pair[1], reverse=True)
+        return [
+            TopProductEntry(
+                product_id=product_id,
+                name=name_by_product[product_id],
+                quantity_sold=qty_by_product.get(product_id, 0),
+                revenue=round(revenue, 2),
+            )
+            for product_id, revenue in ranked[:limit]
+        ]
+
+    async def _gross_category_revenue(
+        self, utc_start: datetime, utc_end: datetime
+    ) -> list[tuple[int | None, str, int, float]]:
+        """
+        Same discount-prorated revenue math as _gross_product_revenue
+        (see there for the full reasoning), grouped by category
+        instead of product. category_id is None and category_name is
+        "Uncategorised" for products with no category assigned -- that
+        bucket is real spend/revenue and is never silently dropped.
+        """
+        sale_totals, discount_ratio = _discount_ratio_and_sale_totals(utc_start, utc_end)
+        revenue_cents_expr = cast(
+            func.sum(SaleItem.quantity * cast(SaleItem.unit_price, Float) * discount_ratio),
+            Float,
+        )
+        category_name_expr = func.coalesce(Category.name, UNCATEGORISED)
+        result = await self.db.execute(
+            select(
+                Product.category_id,
+                category_name_expr.label("category_name"),
+                func.sum(SaleItem.quantity).label("quantity_sold"),
+                revenue_cents_expr.label("revenue_cents"),
+            )
+            .join(SaleItem, SaleItem.product_id == Product.id)
+            .join(sale_totals, sale_totals.c.id == SaleItem.sale_id)
+            .outerjoin(Category, Category.id == Product.category_id)
+            .group_by(Product.category_id, category_name_expr)
+        )
+        return [
+            (category_id, name, int(quantity_sold), float(revenue_cents))
+            for category_id, name, quantity_sold, revenue_cents in result.all()
+        ]
+
+    async def _refund_revenue_by_category(
+        self, utc_start: datetime, utc_end: datetime
+    ) -> list[tuple[int | None, str, float]]:
+        """Same as _refund_revenue_by_product, grouped by category instead of product."""
+        category_name_expr = func.coalesce(Category.name, UNCATEGORISED)
+        result = await self.db.execute(
+            select(
+                Product.category_id,
+                category_name_expr.label("category_name"),
+                func.coalesce(func.sum(RefundItem.line_total), 0.0),
+            )
+            .join(Refund, Refund.id == RefundItem.refund_id)
+            .join(Product, Product.id == RefundItem.product_id)
+            .outerjoin(Category, Category.id == Product.category_id)
+            .where(Refund.created_at >= utc_start, Refund.created_at < utc_end)
+            .group_by(Product.category_id, category_name_expr)
+        )
+        return [(category_id, name, float(total)) for category_id, name, total in result.all()]
+
+    async def revenue_by_category(
+        self, start_date: date, end_date: date
+    ) -> CategoryRevenueReportOut:
+        """
+        Revenue broken down by category, net of refunds, each entry's
+        share of the real period total -- "which categories are
+        actually driving revenue, and by how much" as a real number,
+        not something eyeballed off a bar chart. total_revenue is the
+        same authoritative net-of-refunds figure every other report in
+        this file agrees on (_revenue_and_count_in_range), not a sum
+        of the category rows themselves, so percent_of_total is always
+        correct relative to the real total even in the (should never
+        happen) case of any drift between the two computations.
+        """
+        total_revenue, _ = await self._revenue_and_count_in_range(start_date, end_date)
+        utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
+
+        name_by_category: dict[int | None, str] = {}
+        qty_by_category: dict[int | None, int] = defaultdict(int)
+        revenue_by_category: dict[int | None, float] = defaultdict(float)
+        for category_id, name, quantity_sold, revenue_cents in await self._gross_category_revenue(
+            utc_start, utc_end
+        ):
+            name_by_category[category_id] = name
+            qty_by_category[category_id] += quantity_sold
+            revenue_by_category[category_id] += revenue_cents / 100.0
+
+        for category_id, name, refund_total in await self._refund_revenue_by_category(
+            utc_start, utc_end
+        ):
+            name_by_category.setdefault(category_id, name)
+            revenue_by_category[category_id] -= refund_total
+
+        entries = [
+            CategoryRevenueEntry(
+                category_id=category_id,
+                category_name=name_by_category[category_id],
+                quantity_sold=qty_by_category.get(category_id, 0),
+                revenue=round(revenue, 2),
+                percent_of_total=(
+                    round(revenue / total_revenue * 100, 1) if total_revenue > 0 else 0.0
+                ),
+            )
+            for category_id, revenue in revenue_by_category.items()
+        ]
+        entries.sort(key=lambda entry: entry.revenue, reverse=True)
+
+        return CategoryRevenueReportOut(
+            start_date=start_date,
+            end_date=end_date,
+            total_revenue=total_revenue,
+            categories=entries,
+        )
 
     async def top_customers(
         self, start_date: date, end_date: date, limit: int = 20

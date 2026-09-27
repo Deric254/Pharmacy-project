@@ -5,7 +5,7 @@ import { PurchasingPage } from './PurchasingPage'
 import { useAuthStore } from '../auth/store'
 import { useConfigStore } from '../config/store'
 import { purchaseOrdersApi, suppliersApi } from '../api/domain'
-import type { PurchaseOrderOut, SupplierOut, UserOut } from '../types/api'
+import type { PurchaseOrderOut, SupplierKpiOut, SupplierOut, UserOut } from '../types/api'
 import type { BusinessConfigOut } from '../types/config'
 
 vi.mock('../api/domain', () => ({
@@ -21,6 +21,7 @@ vi.mock('../api/domain', () => ({
     get: vi.fn(),
     create: vi.fn(),
     recordPayment: vi.fn(),
+    kpis: vi.fn(),
   },
   productsApi: {
     list: vi.fn(),
@@ -47,6 +48,15 @@ const SUPPLIER: SupplierOut = {
   notes: null,
   created_at: '2026-01-01T00:00:00Z',
   balance_owed: 0,
+}
+
+const ZERO_KPIS: SupplierKpiOut = {
+  start_date: '2026-01-01',
+  end_date: '2026-01-31',
+  total_purchased: 0,
+  total_paid: 0,
+  net_due: 0,
+  active_supplier_count: 0,
 }
 
 function poWithItems(
@@ -81,6 +91,7 @@ function seedStores() {
 describe('PurchasingPage category display', () => {
   beforeEach(() => {
     vi.mocked(suppliersApi.list).mockResolvedValue([SUPPLIER])
+    vi.mocked(suppliersApi.kpis).mockResolvedValue(ZERO_KPIS)
     seedStores()
   })
 
@@ -138,6 +149,7 @@ describe('PurchasingPage category display', () => {
 describe('PurchasingPage spend-by-category breakdown', () => {
   beforeEach(() => {
     vi.mocked(suppliersApi.list).mockResolvedValue([SUPPLIER])
+    vi.mocked(suppliersApi.kpis).mockResolvedValue(ZERO_KPIS)
     seedStores()
   })
 
@@ -175,6 +187,7 @@ describe('PurchasingPage spend-by-category breakdown', () => {
     await screen.findByText('Spend by category')
     const row = screen.getByText('Antibiotics').closest('tr')!
     expect(within(row).getByText('2 items')).toBeInTheDocument()
+    expect(within(row).getByText('100%')).toBeInTheDocument()
     expect(within(row).getByText('$60.00')).toBeInTheDocument()
   })
 
@@ -184,5 +197,90 @@ describe('PurchasingPage spend-by-category breakdown', () => {
 
     await waitFor(() => expect(purchaseOrdersApi.list).toHaveBeenCalled())
     expect(screen.queryByText('Spend by category')).not.toBeInTheDocument()
+  })
+})
+
+describe('PurchasingPage supplier KPIs', () => {
+  beforeEach(() => {
+    vi.mocked(suppliersApi.list).mockResolvedValue([SUPPLIER])
+    vi.mocked(suppliersApi.kpis).mockReset()
+    vi.mocked(purchaseOrdersApi.list).mockResolvedValue([])
+    seedStores()
+  })
+
+  it('shows purchased, paid and net due from the KPI endpoint', async () => {
+    vi.mocked(suppliersApi.kpis).mockResolvedValue({
+      start_date: '2026-09-01',
+      end_date: '2026-09-30',
+      total_purchased: 5000,
+      total_paid: 3000,
+      net_due: 2000,
+      active_supplier_count: 2,
+    })
+    render(<PurchasingPage />)
+
+    await screen.findByText('$5,000.00')
+    expect(screen.getByText('$3,000.00')).toBeInTheDocument()
+    expect(screen.getByText('$2,000.00')).toBeInTheDocument()
+  })
+
+  it('re-fetches KPIs when the date range preset changes', async () => {
+    vi.mocked(suppliersApi.kpis).mockResolvedValue(ZERO_KPIS)
+    const user = userEvent.setup()
+    render(<PurchasingPage />)
+
+    await waitFor(() => expect(suppliersApi.kpis).toHaveBeenCalledTimes(1))
+
+    await user.click(screen.getByRole('button', { name: 'Today' }))
+
+    await waitFor(() => expect(suppliersApi.kpis).toHaveBeenCalledTimes(2))
+  })
+
+  it('shows an error without crashing the page when the KPI request fails', async () => {
+    vi.mocked(suppliersApi.kpis).mockRejectedValue(new Error('network down'))
+    render(<PurchasingPage />)
+
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
+  })
+})
+
+describe('PurchasingPage Excel import category summary', () => {
+  beforeEach(() => {
+    vi.mocked(suppliersApi.list).mockResolvedValue([SUPPLIER])
+    vi.mocked(suppliersApi.kpis).mockResolvedValue(ZERO_KPIS)
+    vi.mocked(purchaseOrdersApi.list).mockResolvedValue([])
+    seedStores()
+  })
+
+  it('shows a per-category breakdown of what was just imported', async () => {
+    vi.mocked(purchaseOrdersApi.importFromExcel).mockResolvedValue(
+      poWithItems(1, [
+        {
+          id: 1,
+          product_id: 1,
+          product_name: 'Amoxicillin 500mg',
+          category_name: 'Antibiotics',
+          quantity_ordered: 10,
+          unit_cost_expected: 5,
+          quantity_received: 10,
+          unit_cost_actual: 5,
+          batch_id: 1,
+        },
+      ]),
+    )
+    const user = userEvent.setup()
+    render(<PurchasingPage />)
+
+    await user.click(await screen.findByRole('button', { name: 'Import from Excel' }))
+    const file = new File(['dummy'], 'purchase.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })
+    const fileInput = screen.getByLabelText('Choose file')
+    await user.upload(fileInput, file)
+    await user.click(screen.getByRole('button', { name: 'Import' }))
+
+    await screen.findByText('Stock received')
+    const row = screen.getByText('Antibiotics').closest('li')!
+    expect(within(row).getByText('100% · $50.00')).toBeInTheDocument()
   })
 })

@@ -35,7 +35,9 @@ def _mock_service(handler) -> UpdateCheckService:
 
 
 async def _login(client, username: str, password: str) -> str:
-    r = await client.post("/api/v1/auth/login", json={"username": username, "password": password})
+    r = await client.post(
+        "/api/v1/auth/login", json={"username": username, "password": password}
+    )
     assert r.status_code == 200, r.text
     return str(r.json()["access_token"])
 
@@ -244,7 +246,9 @@ class TestUpdatesApi:
         )
 
         token = await _login(client, "lucy", "S3curePass!")
-        r = await client.get("/api/v1/updates/latest", headers={"Authorization": f"Bearer {token}"})
+        r = await client.get(
+            "/api/v1/updates/latest", headers={"Authorization": f"Bearer {token}"}
+        )
 
         assert r.status_code == 200
         assert r.json() == {
@@ -265,7 +269,9 @@ class TestUpdatesApi:
         )
 
         token = await _login(client, "lucy", "S3curePass!")
-        r = await client.get("/api/v1/updates/latest", headers={"Authorization": f"Bearer {token}"})
+        r = await client.get(
+            "/api/v1/updates/latest", headers={"Authorization": f"Bearer {token}"}
+        )
 
         assert r.status_code == 200
         assert r.json() is None

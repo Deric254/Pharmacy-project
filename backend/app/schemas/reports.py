@@ -108,6 +108,24 @@ class TopProductEntry(BaseModel):
     revenue: float
 
 
+class CategoryRevenueEntry(BaseModel):
+    category_id: int | None  # None is the "Uncategorised" bucket, not "no category filter"
+    category_name: str
+    quantity_sold: int
+    revenue: float
+    # This category's share of total_revenue below -- "if I invest in
+    # category X, what percentage of my revenue does it actually
+    # bring back", answered directly rather than eyeballed off a chart.
+    percent_of_total: float
+
+
+class CategoryRevenueReportOut(BaseModel):
+    start_date: date
+    end_date: date
+    total_revenue: float
+    categories: list[CategoryRevenueEntry]
+
+
 class TopCustomerEntry(BaseModel):
     customer_id: int
     name: str

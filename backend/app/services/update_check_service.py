@@ -129,12 +129,13 @@ class UpdateCheckService:
             download_url = _installer_download_url(release.get("assets", []))
             if download_url is None:
                 continue
+            version = _normalize_version(release.get("tag_name", ""))
             options.append(
                 {
-                    "version": _normalize_version(release.get("tag_name", "")),
+                    "version": version,
                     "download_url": download_url,
                     "release_url": release.get("html_url", ""),
-                    "is_current": _normalize_version(release.get("tag_name", "")) == __version__,
+                    "is_current": version == __version__,
                 }
             )
 

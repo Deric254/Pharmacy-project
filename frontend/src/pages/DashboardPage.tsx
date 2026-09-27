@@ -6,11 +6,15 @@ import { reportsApi } from '../api/reports'
 import { useAuthStore } from '../auth/store'
 import { useConfigStore } from '../config/store'
 import { useCurrencyFormatter } from '../lib/currency'
-import { businessToday, fallbackTimezone, startOfMonth, subtractDays } from '../lib/businessDate'
+import { fallbackTimezone } from '../lib/businessDate'
+import { presetRange, type DateRangePreset as Preset } from '../lib/dateRangePresets'
+import { DateRangePicker } from '../components/DateRangePicker'
 import { useViewedRangeStore } from '../lib/viewedRangeStore'
 import { useSaleCompletedRefresh } from '../lib/useSaleCompletedRefresh'
 import type {
   CashierSalesEntry,
+  CategoryRevenueEntry,
+  CategoryRevenueReportOut,
   ExpiredStockReportOut,
   ExpiringBatchOut,
   FastSlowMoversOut,
@@ -23,6 +27,7 @@ import type {
   StockRunwayOut,
   StockValuationOut,
   TopCustomerEntry,
+  TopProductEntry,
 } from '../types/api'
 import { ApiError } from '../api/client'
 
@@ -32,6 +37,11 @@ const RevenueTrendChart = lazy(() =>
 const ProductRevenueChart = lazy(() =>
   import('../components/charts/ProductRevenueChart').then((m) => ({
     default: m.ProductRevenueChart,
+  })),
+)
+const CategoryRevenueChart = lazy(() =>
+  import('../components/charts/CategoryRevenueChart').then((m) => ({
+    default: m.CategoryRevenueChart,
   })),
 )
 const CustomerParetoChart = lazy(() =>
@@ -57,19 +67,6 @@ const MONTH_NAMES = [
 
 function topSeasonalEntries(seasonal: SeasonalTrendsOut, count = 5) {
   return seasonal.entries.slice(0, count)
-}
-
-type Preset = 'today' | 'week' | 'month' | 'custom'
-
-function presetRange(preset: Preset, timezone: string): { start: string; end: string } {
-  const end = businessToday(timezone)
-  if (preset === 'week') {
-    return { start: subtractDays(end, 6), end }
-  }
-  if (preset === 'month') {
-    return { start: startOfMonth(end), end }
-  }
-  return { start: end, end } 
 }
 
 export function DashboardPage() {
@@ -103,6 +100,10 @@ export function DashboardPage() {
   const [seasonalTrends, setSeasonalTrends] = useState<SeasonalTrendsOut | null>(null)
   const [expiredStock, setExpiredStock] = useState<ExpiredStockReportOut | null>(null)
   const [cashierSales, setCashierSales] = useState<CashierSalesEntry[] | null>(null)
+  const [categoryRevenue, setCategoryRevenue] = useState<CategoryRevenueReportOut | null>(null)
+  const [selectedCategory, setSelectedCategory] = useState<CategoryRevenueEntry | null>(null)
+  const [categoryProducts, setCategoryProducts] = useState<TopProductEntry[] | null>(null)
+  const [categoryProductsError, setCategoryProductsError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const salesVersion = useSaleCompletedRefresh(canSeeReports)
 
@@ -145,6 +146,41 @@ export function DashboardPage() {
       cancelled = true
     }
   }, [canSeeReports, range, salesVersion])
+
+  useEffect(() => {
+    if (!canSeeReports) return
+    let cancelled = false
+    // A drill-down from a previous range no longer applies once the
+    // range itself changes -- clear it rather than silently showing
+    // stale products under the newly-selected category.
+    setSelectedCategory(null)
+    setCategoryProducts(null)
+    setCategoryProductsError(null)
+    reportsApi
+      .revenueByCategory(range.start, range.end)
+      .then((data) => {
+        if (!cancelled) setCategoryRevenue(data)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [canSeeReports, range, salesVersion])
+
+  function handleSelectCategory(entry: CategoryRevenueEntry) {
+    setSelectedCategory(entry)
+    setCategoryProducts(null)
+    setCategoryProductsError(null)
+    const category = entry.category_id === null ? { uncategorised: true as const } : { id: entry.category_id }
+    reportsApi
+      .topProductsInCategory(range.start, range.end, category, 10)
+      .then(setCategoryProducts)
+      .catch((err: unknown) => {
+        setCategoryProductsError(
+          err instanceof ApiError ? err.message : 'Could not load products for this category.',
+        )
+      })
+  }
 
   useEffect(() => {
     if (!canSeeProfit) return
@@ -245,40 +281,15 @@ export function DashboardPage() {
         </div>
 
         {canSeeReports && (
-          <div className="flex items-center gap-2">
-            {(['today', 'week', 'month'] as const).map((p) => (
-              <button
-                key={p}
-                onClick={() => applyPreset(p)}
-                className={`border px-3 py-1.5 text-xs uppercase tracking-wide ${
-                  preset === p
-                    ? 'border-ink bg-ink text-paper'
-                    : 'border-rule text-ink-soft hover:border-brass'
-                }`}
-              >
-                {p === 'today' ? 'Today' : p === 'week' ? 'Last 7 days' : 'This month'}
-              </button>
-            ))}
-            <input
-              type="date"
-              value={range.start}
-              onChange={(e) => {
-                setPreset('custom')
-                setRange((r) => ({ ...r, start: e.target.value }))
-              }}
-              className="border border-rule bg-paper px-2 py-1.5 text-xs"
-            />
-            <span className="text-xs text-ink-soft">to</span>
-            <input
-              type="date"
-              value={range.end}
-              onChange={(e) => {
-                setPreset('custom')
-                setRange((r) => ({ ...r, end: e.target.value }))
-              }}
-              className="border border-rule bg-paper px-2 py-1.5 text-xs"
-            />
-          </div>
+          <DateRangePicker
+            preset={preset}
+            range={range}
+            onPresetChange={applyPreset}
+            onRangeChange={(next) => {
+              setPreset('custom')
+              setRange(next)
+            }}
+          />
         )}
       </header>
 
@@ -365,6 +376,62 @@ export function DashboardPage() {
           <Suspense fallback={<p className="text-sm text-ink-soft">Loading chart…</p>}>
             <ProductRevenueChart data={kpi.top_products} />
           </Suspense>
+        </div>
+      )}
+
+      {canSeeReports && categoryRevenue && categoryRevenue.categories.length > 0 && (
+        <div className="mb-6 ledger-panel p-4">
+          <h2 className="mb-2 text-xs uppercase tracking-wide text-ink-soft">
+            Revenue by category
+          </h2>
+          <p className="mb-2 text-xs text-ink-soft">Click a bar to see which products drive it.</p>
+          <Suspense fallback={<p className="text-sm text-ink-soft">Loading chart…</p>}>
+            <CategoryRevenueChart
+              data={categoryRevenue.categories}
+              onSelectCategory={handleSelectCategory}
+            />
+          </Suspense>
+          {selectedCategory && (
+            <div className="mt-4 border-t border-rule pt-3">
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-xs uppercase tracking-wide text-ink-soft">
+                  Top products in {selectedCategory.category_name}
+                </h3>
+                <button
+                  onClick={() => setSelectedCategory(null)}
+                  className="text-xs text-ink-soft underline hover:text-ink"
+                >
+                  Clear
+                </button>
+              </div>
+              {categoryProductsError && (
+                <p role="alert" className="text-sm text-stamp-red">
+                  {categoryProductsError}
+                </p>
+              )}
+              {!categoryProductsError && categoryProducts === null && (
+                <p className="text-sm text-ink-soft">Loading…</p>
+              )}
+              {categoryProducts && categoryProducts.length === 0 && (
+                <p className="text-sm text-ink-soft">No product-level sales in this range.</p>
+              )}
+              {categoryProducts && categoryProducts.length > 0 && (
+                <ul className="divide-y divide-rule border border-rule">
+                  {categoryProducts.map((product) => (
+                    <li
+                      key={product.product_id}
+                      className="flex justify-between px-3 py-2 text-sm"
+                    >
+                      <span>{product.name}</span>
+                      <span className="figure text-ink-soft">
+                        {product.quantity_sold} units · {formatCurrency(product.revenue)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </div>
       )}
 

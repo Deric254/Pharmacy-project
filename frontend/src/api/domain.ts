@@ -34,6 +34,7 @@ import type {
   StockTakeOut,
   StockValuationOut,
   SupplierCreate,
+  SupplierKpiOut,
   SupplierOut,
   WriteOffResult,
 } from '../types/api'
@@ -104,6 +105,8 @@ export const suppliersApi = {
   create: (payload: SupplierCreate) => api.post<SupplierOut>('/suppliers', payload),
   recordPayment: (supplierId: number, payload: PaymentRecordRequest) =>
     api.post<SupplierOut>(`/suppliers/${supplierId}/payments`, payload),
+  kpis: (startDate: string, endDate: string) =>
+    api.get<SupplierKpiOut>('/suppliers/kpis', { start_date: startDate, end_date: endDate }),
 }
 
 export const categoriesApi = {

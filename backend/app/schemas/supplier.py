@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
@@ -30,3 +30,20 @@ class SupplierOut(BaseModel):
 class PaymentRecordRequest(BaseModel):
     amount: PositiveMoney
     notes: str | None = Field(default=None, max_length=255)
+
+
+class SupplierKpiOut(BaseModel):
+    start_date: date
+    end_date: date
+    # Charged (goods received) and paid within [start_date, end_date] --
+    # flows, not a balance.
+    total_purchased: float
+    total_paid: float
+    # The running balance across every supplier, as of the end of the
+    # selected period -- a balance is a point-in-time fact, not
+    # something scoped to a range, so this is "what's owed as of
+    # end_date" rather than "movement of debt during the period".
+    net_due: float
+    # Suppliers with at least one transaction in the period -- lets a
+    # KPI card read "3 suppliers" rather than just a currency figure.
+    active_supplier_count: int

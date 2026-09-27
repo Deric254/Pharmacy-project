@@ -269,6 +269,15 @@ export interface SupplierOut {
   balance_owed: number
 }
 
+export interface SupplierKpiOut {
+  start_date: string
+  end_date: string
+  total_purchased: number
+  total_paid: number
+  net_due: number
+  active_supplier_count: number
+}
+
 export interface SupplierCreate {
   name: string
   contact_phone?: string | null
@@ -408,6 +417,21 @@ export interface TopProductEntry {
   name: string
   quantity_sold: number
   revenue: number
+}
+
+export interface CategoryRevenueEntry {
+  category_id: number | null
+  category_name: string
+  quantity_sold: number
+  revenue: number
+  percent_of_total: number
+}
+
+export interface CategoryRevenueReportOut {
+  start_date: string
+  end_date: string
+  total_revenue: number
+  categories: CategoryRevenueEntry[]
 }
 
 export interface RevenuePotentialEntry {

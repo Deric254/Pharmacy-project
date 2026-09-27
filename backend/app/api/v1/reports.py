@@ -11,6 +11,7 @@ from app.core.rbac import get_current_user, require_permission
 from app.models.user import User
 from app.schemas.reports import (
     CashierSalesOut,
+    CategoryRevenueReportOut,
     FastSlowMoversOut,
     KpiDashboardOut,
     ProductCoOccurrenceOut,
@@ -23,6 +24,7 @@ from app.schemas.reports import (
     StockRunwayOut,
     StockTakeHistoryOut,
     TopCustomersOut,
+    TopProductEntry,
 )
 from app.services.report_export_service import (
     ExportFormat,
@@ -193,6 +195,49 @@ async def top_customers(
     limit: int = Query(default=20, ge=1, le=100),
 ) -> TopCustomersOut:
     return await ReportService(db).top_customers(start_date, end_date, limit)
+
+
+@router.get(
+    "/revenue-by-category",
+    response_model=CategoryRevenueReportOut,
+    dependencies=[Depends(require_permission("reports.view"))],
+)
+async def revenue_by_category(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    start_date: date,
+    end_date: date,
+) -> CategoryRevenueReportOut:
+    return await ReportService(db).revenue_by_category(start_date, end_date)
+
+
+@router.get(
+    "/revenue-by-category/products",
+    response_model=list[TopProductEntry],
+    dependencies=[Depends(require_permission("reports.view"))],
+)
+async def top_products_in_category(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    start_date: date,
+    end_date: date,
+    category_id: Annotated[
+        int | None, Query(description="A real category's id. Omit only for uncategorised=true.")
+    ] = None,
+    uncategorised: Annotated[
+        bool, Query(description="True to drill into the Uncategorised bucket instead.")
+    ] = False,
+    limit: int = Query(default=10, ge=1, le=100),
+) -> list[TopProductEntry]:
+    if category_id is None and not uncategorised:
+        raise HTTPException(
+            status_code=422, detail="Provide category_id, or set uncategorised=true."
+        )
+    if category_id is not None and uncategorised:
+        raise HTTPException(
+            status_code=422, detail="Provide either category_id or uncategorised=true, not both."
+        )
+    return await ReportService(db).top_products_in_category(
+        start_date, end_date, category_id, limit
+    )
 
 
 @router.get(

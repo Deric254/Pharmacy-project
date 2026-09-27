@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.rbac import get_current_user, require_permission
 from app.models.user import User
-from app.schemas.supplier import PaymentRecordRequest, SupplierCreate, SupplierOut
+from app.schemas.supplier import PaymentRecordRequest, SupplierCreate, SupplierKpiOut, SupplierOut
 from app.services.report_export_service import ExportFormat, build_export_response
 from app.services.supplier_service import SupplierService
 
@@ -61,6 +62,19 @@ async def create_supplier(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SupplierOut:
     return await SupplierService(db).create(payload, user)
+
+
+@router.get(
+    "/kpis",
+    response_model=SupplierKpiOut,
+    dependencies=[Depends(_require_purchasing_access)],
+)
+async def supplier_kpis(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    start_date: date,
+    end_date: date,
+) -> SupplierKpiOut:
+    return await SupplierService(db).kpis(start_date, end_date)
 
 
 @router.get(

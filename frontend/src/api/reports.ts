@@ -1,6 +1,7 @@
 import { api, downloadExport, downloadFile } from './client'
 import type {
   CashierSalesOut,
+  CategoryRevenueReportOut,
   ExpiredStockReportOut,
   FastSlowMoversOut,
   KpiDashboardOut,
@@ -15,6 +16,7 @@ import type {
   StockRunwayOut,
   StockTakeHistoryOut,
   TopCustomersOut,
+  TopProductEntry,
 } from '../types/api'
 
 export const reportsApi = {
@@ -23,6 +25,25 @@ export const reportsApi = {
     api.get<RevenueTrendOut>('/reports/revenue-trend', {
       start_date: startDate,
       end_date: endDate,
+    }),
+  revenueByCategory: (startDate: string, endDate: string) =>
+    api.get<CategoryRevenueReportOut>('/reports/revenue-by-category', {
+      start_date: startDate,
+      end_date: endDate,
+    }),
+  topProductsInCategory: (
+    startDate: string,
+    endDate: string,
+    category: { id: number } | { uncategorised: true },
+    limit = 10,
+  ) =>
+    api.get<TopProductEntry[]>('/reports/revenue-by-category/products', {
+      start_date: startDate,
+      end_date: endDate,
+      limit,
+      ...('uncategorised' in category
+        ? { uncategorised: true }
+        : { category_id: category.id }),
     }),
   topCustomers: (startDate: string, endDate: string, limit = 20) =>
     api.get<TopCustomersOut>('/reports/top-customers', {

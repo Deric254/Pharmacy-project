@@ -48,7 +48,9 @@ describe('categorySpendBreakdown', () => {
 
     const result = categorySpendBreakdown(orders)
 
-    expect(result).toEqual([{ category: 'Antibiotics', total: 60, itemCount: 2 }])
+    expect(result).toEqual([
+      { category: 'Antibiotics', total: 60, itemCount: 2, percentOfTotal: 100 },
+    ])
   })
 
   it('falls back to ordered quantity and expected cost when not yet received', () => {
@@ -57,7 +59,7 @@ describe('categorySpendBreakdown', () => {
     ]
 
     expect(categorySpendBreakdown(orders)).toEqual([
-      { category: 'Painkillers', total: 12, itemCount: 1 },
+      { category: 'Painkillers', total: 12, itemCount: 1, percentOfTotal: 100 },
     ])
   })
 
@@ -67,7 +69,7 @@ describe('categorySpendBreakdown', () => {
     ]
 
     expect(categorySpendBreakdown(orders)).toEqual([
-      { category: 'Uncategorised', total: 9, itemCount: 1 },
+      { category: 'Uncategorised', total: 9, itemCount: 1, percentOfTotal: 100 },
     ])
   })
 
@@ -78,7 +80,7 @@ describe('categorySpendBreakdown', () => {
     ]
 
     expect(categorySpendBreakdown(orders)).toEqual([
-      { category: 'Antibiotics', total: 25, itemCount: 2 },
+      { category: 'Antibiotics', total: 25, itemCount: 2, percentOfTotal: 100 },
     ])
   })
 
@@ -94,5 +96,20 @@ describe('categorySpendBreakdown', () => {
       'Antibiotics',
       'Painkillers',
     ])
+  })
+
+  it('computes each category\'s percent share of the grand total, one decimal place', () => {
+    const orders = [
+      po([
+        item({ category_name: 'Antibiotics', quantity_received: 1, unit_cost_actual: 20 }),
+        item({ category_name: 'Painkillers', quantity_received: 1, unit_cost_actual: 10 }),
+      ]),
+    ]
+
+    const result = categorySpendBreakdown(orders)
+
+    // 20 of 30 total -> 66.7%, 10 of 30 -> 33.3%
+    expect(result.find((r) => r.category === 'Antibiotics')?.percentOfTotal).toBe(66.7)
+    expect(result.find((r) => r.category === 'Painkillers')?.percentOfTotal).toBe(33.3)
   })
 })

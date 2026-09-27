@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { productsApi, purchaseOrdersApi, suppliersApi } from '../api/domain'
 import { useAuthStore } from '../auth/store'
+import { useConfigStore } from '../config/store'
 import { useCurrencyFormatter } from '../lib/currency'
+import { fallbackTimezone } from '../lib/businessDate'
+import { presetRange, type DateRangePreset } from '../lib/dateRangePresets'
+import { DateRangePicker } from '../components/DateRangePicker'
 import { categorySpendBreakdown } from '../lib/purchasingAnalytics'
 import { ApiError, downloadExport } from '../api/client'
 import { Modal } from '../components/Modal'
@@ -9,6 +13,7 @@ import type {
   ImportRowError,
   ProductOut,
   PurchaseOrderOut,
+  SupplierKpiOut,
   SupplierOut,
 } from '../types/api'
 
@@ -96,6 +101,8 @@ export function PurchasingPage() {
           Add a supplier first (Suppliers button above) before creating a purchase order.
         </p>
       )}
+
+      <SupplierKpiPanel />
 
       <CategoryBreakdownPanel orders={allPurchases} />
 
@@ -195,6 +202,73 @@ function supplierName(suppliers: SupplierOut[], id: number): string {
   return suppliers.find((s) => s.id === id)?.name ?? `Supplier #${id}`
 }
 
+function SupplierKpiPanel() {
+  const formatCurrency = useCurrencyFormatter()
+  const timezone = useConfigStore((s) => s.config?.timezone) ?? fallbackTimezone()
+  const [preset, setPreset] = useState<DateRangePreset>('month')
+  const [range, setRange] = useState(() => presetRange('month', timezone))
+  const [kpis, setKpis] = useState<SupplierKpiOut | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  function applyPreset(next: DateRangePreset) {
+    setPreset(next)
+    if (next !== 'custom') setRange(presetRange(next, timezone))
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    setError(null)
+    suppliersApi
+      .kpis(range.start, range.end)
+      .then((data) => {
+        if (!cancelled) setKpis(data)
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setError(err instanceof ApiError ? err.message : 'Could not load supplier KPIs.')
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [range])
+
+  return (
+    <div className="mb-4 ledger-panel p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-xs uppercase tracking-wide text-ink-soft">Suppliers</h2>
+        <DateRangePicker
+          preset={preset}
+          range={range}
+          onPresetChange={applyPreset}
+          onRangeChange={setRange}
+        />
+      </div>
+      {error && (
+        <p role="alert" className="text-sm text-stamp-red">
+          {error}
+        </p>
+      )}
+      {!error && kpis && (
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div>
+            <p className="text-xs uppercase tracking-wide text-ink-soft">Purchased</p>
+            <p className="figure text-xl text-ink">{formatCurrency(kpis.total_purchased)}</p>
+          </div>
+          <div>
+            <p className="text-xs uppercase tracking-wide text-ink-soft">Paid</p>
+            <p className="figure text-xl text-ink">{formatCurrency(kpis.total_paid)}</p>
+          </div>
+          <div>
+            <p className="text-xs uppercase tracking-wide text-ink-soft">Net due</p>
+            <p className="figure text-xl text-ink">{formatCurrency(kpis.net_due)}</p>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function CategoryBreakdownPanel({ orders }: { orders: PurchaseOrderOut[] }) {
   const formatCurrency = useCurrencyFormatter()
   const breakdown = useMemo(() => categorySpendBreakdown(orders), [orders])
@@ -213,6 +287,9 @@ function CategoryBreakdownPanel({ orders }: { orders: PurchaseOrderOut[] }) {
               <td className="px-3 py-2">{row.category}</td>
               <td className="figure px-3 py-2 text-ink-soft">
                 {row.itemCount} {row.itemCount === 1 ? 'item' : 'items'}
+              </td>
+              <td className="figure px-3 py-2 text-right text-ink-soft">
+                {row.percentOfTotal}%
               </td>
               <td className="figure px-3 py-2 text-right font-medium">
                 {formatCurrency(row.total)}
@@ -401,6 +478,7 @@ function ImportPOModal({
   const [genericError, setGenericError] = useState<string | null>(null)
   const [imported, setImported] = useState<PurchaseOrderOut | null>(null)
   const submittingRef = useRef(false)
+  const formatCurrency = useCurrencyFormatter()
 
   async function handleImport() {
     if (!file || !supplierId) return
@@ -431,12 +509,25 @@ function ImportPOModal({
   }
 
   if (imported) {
+    const breakdown = categorySpendBreakdown([imported])
     return (
       <Modal title="Stock received" onClose={onImported}>
         <p className="text-sm text-ink-soft">
           Received {imported.items.length} line item
           {imported.items.length === 1 ? '' : 's'} — already in your inventory.
         </p>
+        {breakdown.length > 0 && (
+          <ul className="mt-3 divide-y divide-rule border border-rule">
+            {breakdown.map((row) => (
+              <li key={row.category} className="flex justify-between px-3 py-2 text-sm">
+                <span>{row.category}</span>
+                <span className="figure text-ink-soft">
+                  {row.percentOfTotal}% · {formatCurrency(row.total)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
         <div className="mt-4 flex justify-end">
           <button
             onClick={onImported}

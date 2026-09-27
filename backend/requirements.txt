@@ -1,18 +1,37 @@
-fastapi==0.115.*
+fastapi==0.141.*
 uvicorn[standard]==0.32.*
 sqlalchemy[asyncio]==2.0.*
 aiosqlite==0.22.*
 alembic==1.13.*
 pydantic==2.13.*
 pydantic-settings==2.14.*
-python-jose[cryptography]==3.3.*
+# Replaces python-jose[cryptography]: jose is unmaintained upstream
+# with multiple unpatched CVEs (PYSEC-2024-232, PYSEC-2024-233,
+# PYSEC-2025-185 -- no fixed jose release exists for any of them).
+# PyJWT is the maintained, community-recommended replacement and was
+# already a dev/test-only dependency in this project (test_audit_
+# security.py used it to forge tokens for exactly the attacks this
+# migration closes off). See app/core/security.py for the isolated,
+# single-file migration.
+pyjwt==2.13.*
 argon2-cffi==23.1.*
 redis[hiredis]==5.1.*
-cryptography==43.0.*
+# 43.0.* had multiple disclosed CVEs by the time of this audit
+# (PYSEC-2026-35, PYSEC-2026-1284, PYSEC-2026-2141, GHSA-537c-gmf6-
+# 5ccf, PYSEC-2026-3552/3553/3554); 50.* is the earliest line with
+# every one of them fixed at the time of writing. Re-check pip-audit
+# before every release -- cryptography ships security fixes often.
+cryptography==50.*
 reportlab==4.2.*
 openpyxl==3.1.*
 websockets==13.1.*
-python-multipart==0.0.12
+# 0.0.12 has several disclosed DoS/parsing CVEs (PYSEC-2026-1851/1852/
+# 3036-3040); 0.0.32 is the latest release and carries every fix.
+# Pulled in transitively by FastAPI/Starlette for multipart form/
+# file-upload parsing -- pinned explicitly here (rather than left to
+# whatever fastapi resolves) so a future fastapi bump can never
+# silently drag this back down.
+python-multipart==0.0.32
 tzdata==2025.2
 # Runtime dependency, not dev/test-only -- app/services/ai/adapters.py
 # and app/services/backup/google_drive.py both import this directly,

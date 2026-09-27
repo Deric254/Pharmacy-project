@@ -1,28 +1,81 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { useAuthStore } from './auth/store'
 import { useConfigStore } from './config/store'
 import { setupApi } from './api/setup'
 import { RequireAuth, RequirePermission } from './auth/guards'
 import { AppShell } from './components/AppShell'
+// LoginPage and SetupPage are the very first thing an unauthenticated
+// user sees, so they stay eager -- lazy-loading them would trade one
+// network-free local import for a guaranteed Suspense flash on the
+// one screen where that's most visible. Every page behind AppShell
+// (reachable only after auth) is lazy: none of it is needed until the
+// user actually navigates there, and bundling it all eagerly was
+// putting every page's code -- including rarely-opened ones like
+// Roles, Backups, and the AI assistant -- into the single JS chunk
+// parsed and evaluated before the app can render anything, on every
+// single launch of the desktop app.
 import { LoginPage } from './pages/LoginPage'
 import { SetupPage } from './pages/SetupPage'
-import { DashboardPage } from './pages/DashboardPage'
-import { PosPage } from './pages/PosPage'
-import { SalesPage } from './pages/SalesPage'
-import { InventoryPage } from './pages/InventoryPage'
-import { StockMovementsPage } from './pages/StockMovementsPage'
-import { PurchasingPage } from './pages/PurchasingPage'
-import { StockTakesPage } from './pages/StockTakesPage'
-import { CustomersPage } from './pages/CustomersPage'
-import { ReportsPage } from './pages/ReportsPage'
-import { RolesPage } from './pages/RolesPage'
-import { AuditLogPage } from './pages/AuditLogPage'
-import { SettingsPage } from './pages/SettingsPage'
-import { UsersPage } from './pages/UsersPage'
-import { BackupsPage } from './pages/BackupsPage'
-import { HelpPage } from './pages/HelpPage'
-import { AiAssistantPage } from './pages/AiAssistantPage'
+
+const DashboardPage = lazy(() =>
+  import('./pages/DashboardPage').then((m) => ({ default: m.DashboardPage })),
+)
+const PosPage = lazy(() => import('./pages/PosPage').then((m) => ({ default: m.PosPage })))
+const SalesPage = lazy(() => import('./pages/SalesPage').then((m) => ({ default: m.SalesPage })))
+const InventoryPage = lazy(() =>
+  import('./pages/InventoryPage').then((m) => ({ default: m.InventoryPage })),
+)
+const StockMovementsPage = lazy(() =>
+  import('./pages/StockMovementsPage').then((m) => ({ default: m.StockMovementsPage })),
+)
+const PurchasingPage = lazy(() =>
+  import('./pages/PurchasingPage').then((m) => ({ default: m.PurchasingPage })),
+)
+const StockTakesPage = lazy(() =>
+  import('./pages/StockTakesPage').then((m) => ({ default: m.StockTakesPage })),
+)
+const CustomersPage = lazy(() =>
+  import('./pages/CustomersPage').then((m) => ({ default: m.CustomersPage })),
+)
+const ReportsPage = lazy(() =>
+  import('./pages/ReportsPage').then((m) => ({ default: m.ReportsPage })),
+)
+const RolesPage = lazy(() => import('./pages/RolesPage').then((m) => ({ default: m.RolesPage })))
+const AuditLogPage = lazy(() =>
+  import('./pages/AuditLogPage').then((m) => ({ default: m.AuditLogPage })),
+)
+const SettingsPage = lazy(() =>
+  import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })),
+)
+const UsersPage = lazy(() => import('./pages/UsersPage').then((m) => ({ default: m.UsersPage })))
+const BackupsPage = lazy(() =>
+  import('./pages/BackupsPage').then((m) => ({ default: m.BackupsPage })),
+)
+const HelpPage = lazy(() => import('./pages/HelpPage').then((m) => ({ default: m.HelpPage })))
+const AiAssistantPage = lazy(() =>
+  import('./pages/AiAssistantPage').then((m) => ({ default: m.AiAssistantPage })),
+)
+
+// Same visual language as the "Starting up…" bootstrap screen below,
+// so a lazy page chunk loading (near-instant from local disk in the
+// desktop app, briefly visible on a cold cache in the browser) reads
+// as a continuation of the same app rather than a different spinner.
+function PageLoadingFallback() {
+  return (
+    <div className="grid min-h-[50vh] place-items-center">
+      <span className="flex gap-1">
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            className="inline-block h-2 w-2 animate-bounce rounded-full bg-brass"
+            style={{ animationDelay: `${i * 0.15}s` }}
+          />
+        ))}
+      </span>
+    </div>
+  )
+}
 
 const BOOTSTRAP_TIMEOUT_MS = 8000
 
@@ -109,7 +162,9 @@ export function App() {
         <Route
           element={
             <RequireAuth>
-              <AppShell />
+              <Suspense fallback={<PageLoadingFallback />}>
+                <AppShell />
+              </Suspense>
             </RequireAuth>
           }
         >

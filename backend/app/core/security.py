@@ -5,7 +5,7 @@ Security primitives shared by every module:
   - AES-256 encryption for anything stored at rest that must never be
     plaintext (AI provider API keys, backup OAuth tokens)
 
-Nothing outside this file should call jose/argon2/cryptography directly —
+Nothing outside this file should call jwt/argon2/cryptography directly —
 one place to audit, one place to rotate algorithms later without hunting
 through every module.
 """
@@ -17,11 +17,20 @@ import os
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
+import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from jose import JWTError, jwt
+from jwt import PyJWTError as JWTError
 
+# Migrated off python-jose (unmaintained upstream, several unpatched
+# CVEs -- see pip-audit) onto PyJWT, already used elsewhere in this
+# codebase for exactly this format. Everything outside this file only
+# ever imports the re-exported `JWTError` name and the create_token/
+# decode_token functions below (never jwt.* directly, per this
+# module's own "one place to audit" rule at the top), so this swap is
+# contained entirely to these two functions -- every caller's except
+# JWTError clause, token shape, and algorithm pinning is unchanged.
 from app.core.config import get_settings
 
 settings = get_settings()

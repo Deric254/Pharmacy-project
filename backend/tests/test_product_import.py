@@ -276,9 +276,7 @@ class TestCategoryColumn:
     async def test_a_new_category_name_creates_the_category(self, client, owner_user):
         token = await _login(client, "lucy", "S3curePass!")
         headers = {"Authorization": f"Bearer {token}"}
-        content = _build_workbook(
-            [["Amoxicillin 500mg", "", "capsule", 15, "Antibiotics"]]
-        )
+        content = _build_workbook([["Amoxicillin 500mg", "", "capsule", 15, "Antibiotics"]])
         r = await client.post(
             "/api/v1/products/import",
             headers=headers,

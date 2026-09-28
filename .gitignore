@@ -34,6 +34,10 @@ Thumbs.db
 *.db
 *.db-shm
 *.db-wal
+# Redis dump files (redis-server writes one to its working directory on
+# save/shutdown; two -- ./dump.rdb and electron/dump.rdb -- had already
+# been committed before this rule existed).
+dump.rdb
 backups/
 logs/
 

@@ -57,7 +57,7 @@ export const productsApi = {
   downloadImportTemplate: () =>
     downloadFile('/products/import-template', 'product-import-template.xlsx'),
   importFromExcel: (file: File) =>
-    uploadFile<{ created: number }>('/products/import', file),
+    uploadFile<{ created: number; categories_created: string[] }>('/products/import', file),
 }
 
 export const salesApi = {
@@ -89,7 +89,7 @@ export const inventoryApi = {
     ),
 }
 
-export interface StockMovementFilters {
+interface StockMovementFilters {
   product_id?: number
   batch_id?: number
   movement_type?: string

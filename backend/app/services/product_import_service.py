@@ -27,6 +27,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit_log import AuditLog
+from app.models.category import Category
 from app.models.product import Product
 from app.models.user import User
 from app.schemas.product import BulkImportResult, ImportRowError, ProductCreate
@@ -55,9 +56,16 @@ _COMMON_UNITS = [
     "pack",
 ]
 
-_HEADERS = ["Name", "Barcode", "Unit", "Reorder point"]
-_EXAMPLE_ROW: list[str | int | float] = ["EXAMPLE - Paracetamol 500mg", "", "tablet", 20]
+_HEADERS = ["Name", "Barcode", "Unit", "Reorder point", "Category"]
+_EXAMPLE_ROW: list[str | int | float] = [
+    "EXAMPLE - Paracetamol 500mg",
+    "",
+    "tablet",
+    20,
+    "Painkillers",
+]
 _MAX_ROWS = 2000  # generous for a small pharmacy's catalog; guards against an accidental huge file
+_MAX_CATEGORY_NAME_LENGTH = 80  # matches Category.name's column length exactly
 
 
 def generate_import_template() -> bytes:
@@ -73,6 +81,7 @@ def generate_import_template() -> bytes:
     ws.column_dimensions["B"].width = 18
     ws.column_dimensions["C"].width = 14
     ws.column_dimensions["D"].width = 16
+    ws.column_dimensions["E"].width = 20
 
     # Unit: a dropdown, not free text -- the actual mechanism that makes
     # "Tabs" / "tabs " / "Tablet " typo variants structurally impossible
@@ -100,27 +109,101 @@ def generate_import_template() -> bytes:
     ws.add_data_validation(reorder_validation)
     reorder_validation.add(f"D2:D{_MAX_ROWS}")
 
-    write_instructions(ws, row=1, column=6, text="Delete the EXAMPLE row before importing.")
+    # Category is deliberately free text, not a dropdown like Unit above:
+    # the category list is open-ended and grows as a pharmacy's owner
+    # defines new ones, unlike Unit's small fixed vocabulary. A dropdown
+    # built from the live category list would also risk silently
+    # breaking -- Excel's inline list-validation formula has an ~255
+    # character limit, easy to exceed once a real pharmacy has more than
+    # a handful of categories. Leaving it blank is fine (product stays
+    # uncategorised); typing a name that doesn't exist yet creates it,
+    # same "it just works" behaviour as the product form's own
+    # "+ New category" control.
+    write_instructions(
+        ws, row=1, column=7, text="Category is optional. A new name creates that category."
+    )
+    write_instructions(ws, row=2, column=7, text="Delete the EXAMPLE row before importing.")
 
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
 
 
+async def _resolve_categories(
+    db: AsyncSession, category_names: list[str | None]
+) -> tuple[dict[str, int], list[str]]:
+    """
+    Maps each distinct category name referenced in the file (lowercased)
+    to a real category id, creating any that don't exist yet -- same
+    "type a new name, it just works" behaviour as the product form's
+    inline "+ New category" control, so a bulk import never requires a
+    separate trip to set categories up first. Matching is case-
+    insensitive, same rule CategoryService.create enforces, so "Antibiotics"
+    and "antibiotics" in the same file resolve to one category, not two.
+    Also returns the names actually created, so the caller can report
+    that back to whoever ran the import.
+    """
+    first_original_by_lower: dict[str, str] = {}
+    for name in category_names:
+        if name is not None and name.lower() not in first_original_by_lower:
+            first_original_by_lower[name.lower()] = name
+    if not first_original_by_lower:
+        return {}, []
+
+    existing = await db.execute(
+        select(Category.id, Category.name).where(
+            func.lower(Category.name).in_(first_original_by_lower.keys())
+        )
+    )
+    category_id_by_lower: dict[str, int] = {
+        name.lower(): category_id for category_id, name in existing.all()
+    }
+
+    new_names = [
+        original
+        for lower, original in first_original_by_lower.items()
+        if lower not in category_id_by_lower
+    ]
+    if new_names:
+        new_categories = [Category(name=name) for name in new_names]
+        for category in new_categories:
+            db.add(category)
+        try:
+            await db.flush()
+        except IntegrityError as exc:
+            # Same theoretical race as the whole-file IntegrityError
+            # handler in bulk_import below: two overlapping imports (or
+            # an import racing a single category creation) could both
+            # pass the pre-flush SELECT above before either commits.
+            await db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "One or more categories in this file were just created by "
+                    "someone else. Please re-check the file and try again."
+                ),
+            ) from exc
+        for category in new_categories:
+            category_id_by_lower[category.name.lower()] = category.id
+
+    return category_id_by_lower, new_names
+
+
 async def _parse_and_validate(
     db: AsyncSession, file_bytes: bytes
-) -> tuple[list[ProductCreate], list[ImportRowError]]:
+) -> tuple[list[ProductCreate], list[ImportRowError], list[str]]:
     rows = await read_data_rows(file_bytes, columns=len(_HEADERS), max_rows=_MAX_ROWS)
 
     errors: list[ImportRowError] = []
     candidates: list[ProductCreate] = []
+    category_names: list[str | None] = []  # aligned by index with candidates
     seen_names: dict[str, int] = {}  # lowercased name -> first row it appeared on
     seen_barcodes: dict[str, int] = {}
 
     for offset, row in enumerate(rows):
         row_num = offset + 2  # 1-indexed, header is row 1
         row_values: list[Any] = list(row)
-        name_raw, barcode_raw, unit_raw, reorder_raw = row_values
+        name_raw, barcode_raw, unit_raw, reorder_raw, category_raw = row_values
         name = clean_str(name_raw)
 
         if not name:
@@ -130,6 +213,7 @@ async def _parse_and_validate(
 
         barcode = clean_str(barcode_raw) or None
         unit = clean_str(unit_raw) or "unit"
+        category_name = clean_str(category_raw) or None
 
         if unit not in _COMMON_UNITS:
             errors.append(
@@ -169,6 +253,15 @@ async def _parse_and_validate(
                 )
             )
             row_already_invalid = True
+        if category_name and len(category_name) > _MAX_CATEGORY_NAME_LENGTH:
+            errors.append(
+                ImportRowError(
+                    row=row_num,
+                    field="Category",
+                    message=f"Must be {_MAX_CATEGORY_NAME_LENGTH} characters or fewer.",
+                )
+            )
+            row_already_invalid = True
 
         if barcode:
             check_duplicate_in_file(seen_barcodes, barcode, row_num, "Barcode", errors)
@@ -190,6 +283,7 @@ async def _parse_and_validate(
                     reorder_point=reorder_point,
                 )
             )
+            category_names.append(category_name)
         except ValidationError as exc:
             errors.append(
                 ImportRowError(
@@ -201,7 +295,7 @@ async def _parse_and_validate(
         errors.append(
             ImportRowError(row=0, field="File", message="No product rows found in this file.")
         )
-        return candidates, errors
+        return candidates, errors, []
 
     # Duplicate check against the EXISTING catalog -- same case-
     # insensitive, active-only rule as single product creation.
@@ -242,11 +336,25 @@ async def _parse_and_validate(
                 )
             )
 
-    return candidates, errors
+    if errors:
+        return candidates, errors, []
+
+    # Only resolved once every other check has passed -- no point
+    # creating a brand new category for a row that's about to be
+    # rejected anyway (raise_if_errors below still imports nothing in
+    # that case, but this avoids an uncommitted, orphaned Category
+    # object with no product ever pointing at it in the common case of
+    # a file needing one more correction pass).
+    category_id_by_lower, categories_created = await _resolve_categories(db, category_names)
+    for candidate, category_name in zip(candidates, category_names, strict=True):
+        if category_name is not None:
+            candidate.category_id = category_id_by_lower[category_name.lower()]
+
+    return candidates, errors, categories_created
 
 
 async def bulk_import(db: AsyncSession, file_bytes: bytes, user: User) -> BulkImportResult:
-    candidates, errors = await _parse_and_validate(db, file_bytes)
+    candidates, errors, categories_created = await _parse_and_validate(db, file_bytes)
 
     # All-or-nothing: a rejected file imports exactly zero rows,
     # regardless of how many were individually clean. Reporting every
@@ -294,4 +402,4 @@ async def bulk_import(db: AsyncSession, file_bytes: bytes, user: User) -> BulkIm
             ),
         ) from exc
 
-    return BulkImportResult(created=len(candidates))
+    return BulkImportResult(created=len(candidates), categories_created=categories_created)

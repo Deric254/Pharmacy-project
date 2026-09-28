@@ -55,3 +55,8 @@ class ImportRowError(BaseModel):
 
 class BulkImportResult(BaseModel):
     created: int
+    # Names of any categories this import created along the way (typing
+    # a name that didn't exist yet in the file's Category column) --
+    # surfaced so the person importing can see at a glance that their
+    # spreadsheet's category names actually landed, not just guess.
+    categories_created: list[str] = Field(default_factory=list)

@@ -1,6 +1,6 @@
 import type { PurchaseOrderOut } from '../types/api'
 
-export interface CategorySpend {
+interface CategorySpend {
   category: string
   total: number
   itemCount: number

@@ -1,4 +1,4 @@
-export interface ThemeDefinition {
+interface ThemeDefinition {
   name: string
   label: string
   description: string
@@ -108,7 +108,7 @@ export const THEMES: Record<string, ThemeDefinition> = {
   },
 }
 
-export const DEFAULT_THEME = 'ledger'
+const DEFAULT_THEME = 'ledger'
 
 export function applyTheme(themeName: string): void {
   const theme = THEMES[themeName] ?? THEMES[DEFAULT_THEME]

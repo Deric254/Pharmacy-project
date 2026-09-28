@@ -1,9 +1,9 @@
-export interface TimezoneOption {
+interface TimezoneOption {
   city: string
   timezone: string
 }
 
-export interface TimezoneGroup {
+interface TimezoneGroup {
   region: string
   options: TimezoneOption[]
 }

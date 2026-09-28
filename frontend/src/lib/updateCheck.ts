@@ -81,7 +81,7 @@ function writeAutoCheckCache(info: UpdateInfo | null): void {
   }
 }
 
-export interface UpdateCheckResult {
+interface UpdateCheckResult {
   info: UpdateInfo | null
   checking: boolean
   checkNow: () => Promise<void>
@@ -152,7 +152,7 @@ export function useUpdateCheck(): UpdateCheckResult {
   return { info, checking, checkNow }
 }
 
-export interface ReleaseOption {
+interface ReleaseOption {
   version: string
   downloadUrl: string
   releaseUrl: string

@@ -1327,6 +1327,7 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
   const [rowErrors, setRowErrors] = useState<ImportRowError[] | null>(null)
   const [genericError, setGenericError] = useState<string | null>(null)
   const [successCount, setSuccessCount] = useState<number | null>(null)
+  const [categoriesCreated, setCategoriesCreated] = useState<string[]>([])
 
   async function handleImport() {
     if (!file) return
@@ -1336,6 +1337,7 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
     try {
       const result = await productsApi.importFromExcel(file)
       setSuccessCount(result.created)
+      setCategoriesCreated(result.categories_created)
     } catch (err) {
       if (err instanceof ApiError && err.body?.detail && typeof err.body.detail === 'object' && !Array.isArray(err.body.detail)) {
         setRowErrors(err.body.detail.errors ?? null)
@@ -1354,6 +1356,12 @@ function ImportModal({ onClose, onImported }: { onClose: () => void; onImported:
         <p className="text-sm text-ink-soft">
           {successCount} product{successCount === 1 ? '' : 's'} imported successfully.
         </p>
+        {categoriesCreated.length > 0 && (
+          <p className="mt-2 text-sm text-ink-soft">
+            New categor{categoriesCreated.length === 1 ? 'y' : 'ies'} created:{' '}
+            {categoriesCreated.join(', ')}.
+          </p>
+        )}
         <div className="mt-4 flex justify-end">
           <button
             onClick={onImported}

@@ -22,6 +22,8 @@ vi.mock('../api/domain', () => ({
     list: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
+    importFromExcel: vi.fn(),
+    downloadImportTemplate: vi.fn(),
   },
   categoriesApi: {
     list: vi.fn(),
@@ -280,5 +282,73 @@ describe('InventoryPage product category assignment', () => {
       expect(screen.getByText('Could not load categories.')).toBeInTheDocument(),
     )
     expect(screen.getByLabelText('Name')).toBeInTheDocument()
+  })
+})
+
+describe('InventoryPage bulk import from Excel', () => {
+  beforeEach(() => {
+    vi.mocked(inventoryApi.lowStock).mockResolvedValue([])
+    vi.mocked(inventoryApi.expiring).mockResolvedValue([])
+    vi.mocked(inventoryApi.valuation).mockResolvedValue({ total_value: 0, by_product: [] } as never)
+    vi.mocked(inventoryApi.reconcile).mockResolvedValue([])
+    vi.mocked(productsApi.list).mockResolvedValue([])
+    vi.mocked(categoriesApi.list).mockResolvedValue([])
+    useAuthStore.setState({ user: PRODUCT_MANAGER_USER, status: 'authenticated' })
+    useConfigStore.setState({
+      config: { timezone: 'Africa/Nairobi' } as BusinessConfigOut,
+      status: 'ready',
+    })
+  })
+
+  async function openImportModalWithFile(user: ReturnType<typeof userEvent.setup>) {
+    render(<InventoryPage />)
+    await user.click(await screen.findByRole('button', { name: 'Import from Excel' }))
+    const file = new File(['dummy'], 'products.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })
+    await user.upload(screen.getByLabelText('Choose file'), file)
+  }
+
+  it('shows how many new categories the import created', async () => {
+    vi.mocked(productsApi.importFromExcel).mockResolvedValue({
+      created: 3,
+      categories_created: ['Antibiotics', 'Painkillers'],
+    })
+    const user = userEvent.setup()
+    await openImportModalWithFile(user)
+
+    await user.click(screen.getByRole('button', { name: 'Import' }))
+
+    await screen.findByText('Import complete')
+    expect(
+      screen.getByText('New categories created: Antibiotics, Painkillers.'),
+    ).toBeInTheDocument()
+  })
+
+  it('does not mention categories when the import created none', async () => {
+    vi.mocked(productsApi.importFromExcel).mockResolvedValue({
+      created: 2,
+      categories_created: [],
+    })
+    const user = userEvent.setup()
+    await openImportModalWithFile(user)
+
+    await user.click(screen.getByRole('button', { name: 'Import' }))
+
+    await screen.findByText('Import complete')
+    expect(screen.queryByText(/categor/i)).not.toBeInTheDocument()
+  })
+
+  it('uses singular wording for exactly one new category', async () => {
+    vi.mocked(productsApi.importFromExcel).mockResolvedValue({
+      created: 1,
+      categories_created: ['Antibiotics'],
+    })
+    const user = userEvent.setup()
+    await openImportModalWithFile(user)
+
+    await user.click(screen.getByRole('button', { name: 'Import' }))
+
+    await screen.findByText('New category created: Antibiotics.')
   })
 })

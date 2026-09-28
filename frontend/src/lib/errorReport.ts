@@ -1,7 +1,7 @@
 const SUPPORT_EMAIL = 'dericmarangu@gmail.com'
 const MAX_STACK_CHARS = 1500
 
-export interface ErrorReportDetails {
+interface ErrorReportDetails {
   message: string
   stack?: string
   pageUrl: string

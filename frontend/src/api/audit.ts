@@ -1,7 +1,7 @@
 import { api } from './client'
 import type { AuditLogFilterOptionsOut, AuditLogPage } from '../types/api'
 
-export interface AuditLogFilters {
+interface AuditLogFilters {
   entity_type?: string
   action?: string
   start_date?: string

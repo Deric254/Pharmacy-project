@@ -377,3 +377,42 @@ class TestCategoryColumn:
 
         categories = await client.get("/api/v1/categories", headers=headers)
         assert categories.json() == []
+
+
+class TestCategoryResolutionRace:
+    """
+    The all-or-nothing guarantee must hold even when creating a new
+    category during the import loses a race to a concurrent request:
+    a clean 409, and neither the category nor ANY product from the file
+    is persisted.
+    """
+
+    async def test_a_lost_category_race_imports_nothing(self, client, owner_user, monkeypatch):
+        from sqlalchemy.exc import IntegrityError
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        from app.models.category import Category
+
+        token = await _login(client, "lucy", "S3curePass!")
+        headers = {"Authorization": f"Bearer {token}"}
+        real_flush = AsyncSession.flush
+
+        async def flush_that_loses_the_race(self, *args, **kwargs):
+            if any(isinstance(obj, Category) for obj in self.new):
+                raise IntegrityError("INSERT", {}, Exception("UNIQUE constraint failed"))
+            return await real_flush(self, *args, **kwargs)
+
+        content = _build_workbook([["Raced Product", "", "tablet", 10, "Raced Category"]])
+        with monkeypatch.context() as patched:
+            patched.setattr(AsyncSession, "flush", flush_that_loses_the_race)
+            r = await client.post(
+                "/api/v1/products/import",
+                headers=headers,
+                files={"file": ("import.xlsx", content, "application/octet-stream")},
+            )
+
+        assert r.status_code == 409
+        assert "just created by someone else" in r.json()["detail"]
+        assert (await client.get("/api/v1/categories", headers=headers)).json() == []
+        products = await client.get("/api/v1/products", headers=headers)
+        assert [p["name"] for p in products.json()] == []

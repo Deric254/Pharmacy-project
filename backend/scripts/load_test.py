@@ -37,13 +37,22 @@ async def main(num_sales: int) -> None:
     from app.core.database import AsyncSessionLocal, Base, engine
     from app.core.security import hash_password
     from app.models.business_config import BusinessConfig
+    from app.models.category import Category
     from app.models.medicine_batch import MedicineBatch
     from app.models.product import Product
     from app.models.role import Role
     from app.models.sale import Payment, PaymentMethod, Sale, SaleItem
+    from app.models.supplier import Supplier, SupplierTransaction
     from app.models.user import User
 
     print(f"Seeding {num_sales:,} sales directly into a fresh SQLite database...")
+
+    # Spread sales across 3 real years, at random times of day, so
+    # date-range queries (today / this month / this year) all have to
+    # do real filtering work, not just "return everything".
+    start = datetime(2023, 1, 1)
+    end = datetime(2026, 8, 9)
+    span_seconds = int((end - start).total_seconds())
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -62,9 +71,53 @@ async def main(num_sales: int) -> None:
         )
         db.add(user)
 
-        products = [Product(name=f"Load Test Product {i}") for i in range(50)]
+        # 8 real categories, but the first 5 products deliberately stay
+        # uncategorised -- revenue_by_category's "Uncategorised" bucket
+        # and top_products_in_category(category_id=None) need to be
+        # exercised at real volume too, not just the happy path.
+        categories = [Category(name=f"Load Test Category {i}") for i in range(8)]
+        db.add_all(categories)
+        await db.flush()
+        category_ids = [c.id for c in categories]
+
+        products = [
+            Product(
+                name=f"Load Test Product {i}",
+                category_id=None if i < 5 else category_ids[i % len(category_ids)],
+            )
+            for i in range(50)
+        ]
         db.add_all(products)
         await db.flush()
+
+        # A handful of suppliers with a realistic charge/payment history,
+        # for the supplier-KPI endpoint's own timing below. Small volume
+        # on purpose -- purchase-order activity is inherently much lower
+        # frequency than retail sales for a real pharmacy.
+        suppliers = [Supplier(name=f"Load Test Supplier {i}") for i in range(20)]
+        db.add_all(suppliers)
+        await db.flush()
+        for s_idx, supplier in enumerate(suppliers):
+            for t in range(50):
+                charge_date = start + timedelta(days=random.randint(0, 1300))
+                db.add(
+                    SupplierTransaction(
+                        supplier_id=supplier.id,
+                        amount=round(random.uniform(50, 5000), 2),
+                        created_at=charge_date,
+                        reference=f"LT-PO-{s_idx}-{t}",
+                    )
+                )
+                if t % 3 == 0:
+                    db.add(
+                        SupplierTransaction(
+                            supplier_id=supplier.id,
+                            amount=-round(random.uniform(50, 5000), 2),
+                            created_at=charge_date + timedelta(days=random.randint(1, 30)),
+                            reference=f"LT-PAY-{s_idx}-{t}",
+                        )
+                    )
+        await db.commit()
 
         batches = []
         for p in products:
@@ -84,14 +137,8 @@ async def main(num_sales: int) -> None:
         await db.commit()
         product_ids = [p.id for p in products]
         batch_by_product = {p.id: b.id for p, b in zip(products, batches, strict=True)}
+        cost_by_product = {p.id: b.cost_price for p, b in zip(products, batches, strict=True)}
         user_id = user.id
-
-    # Spread sales across 3 real years, at random times of day, so
-    # date-range queries (today / this month / this year) all have to
-    # do real filtering work, not just "return everything".
-    start = datetime(2023, 1, 1)
-    end = datetime(2026, 8, 9)
-    span_seconds = int((end - start).total_seconds())
 
     BATCH_SIZE = 2000
     seeded = 0
@@ -121,6 +168,7 @@ async def main(num_sales: int) -> None:
                         batch_id=batch_by_product[product_id],
                         quantity=qty,
                         unit_price=unit_price,
+                        unit_cost=cost_by_product[product_id],
                         line_total=line_total,
                     )
                 )
@@ -140,6 +188,7 @@ async def main(num_sales: int) -> None:
 
     from app.services.report_service import ReportService
     from app.services.sale_service import SaleService
+    from app.services.supplier_service import SupplierService
 
     async def timed(label: str, coro: Any) -> None:
         t0 = time.monotonic()
@@ -193,6 +242,30 @@ async def main(num_sales: int) -> None:
         await timed(
             "Profit report, full 3.5 years",
             reports.profit_report(date(2023, 1, 1), date(2026, 8, 9)),
+        )
+        await timed(
+            "Revenue by category, full 3.5 years (heaviest possible case: "
+            "same multi-join discount-proration as top_products_by_revenue, "
+            "plus a Category outer join and a GROUP BY)",
+            reports.revenue_by_category(date(2023, 1, 1), date(2026, 8, 9)),
+        )
+        await timed(
+            "Revenue-by-category drill-down, one real category, full history",
+            reports.top_products_in_category(
+                date(2023, 1, 1), date(2026, 8, 9), category_id=category_ids[0], limit=20
+            ),
+        )
+        await timed(
+            "Revenue-by-category drill-down, Uncategorised bucket, full history",
+            reports.top_products_in_category(
+                date(2023, 1, 1), date(2026, 8, 9), category_id=None, limit=20
+            ),
+        )
+
+        suppliers_svc = SupplierService(db)
+        await timed(
+            "Supplier KPIs, full 3.5 years (20 suppliers, ~1,000 transactions)",
+            suppliers_svc.kpis(date(2023, 1, 1), date(2026, 8, 9)),
         )
 
     print("\nDone.")

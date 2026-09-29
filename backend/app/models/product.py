@@ -50,7 +50,9 @@ class Product(Base):
     name: Mapped[str] = mapped_column(String(150))
     barcode: Mapped[str | None] = mapped_column(String(64), nullable=True)
     unit: Mapped[str] = mapped_column(String(30), default="unit")  # e.g. tablet, bottle, box
-    category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), nullable=True)
+    category_id: Mapped[int | None] = mapped_column(
+        ForeignKey("categories.id"), nullable=True, index=True
+    )
     category: Mapped[Category | None] = relationship(lazy="selectin")
 
     @property

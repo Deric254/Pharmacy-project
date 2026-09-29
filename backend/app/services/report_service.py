@@ -118,6 +118,20 @@ def _discount_ratio_and_sale_totals(utc_start: datetime, utc_end: datetime) -> t
 UNCATEGORISED = "Uncategorised"
 
 
+def _category_key(category_id: int | None) -> int:
+    """
+    Dict key for a category: the Uncategorised bucket (category_id None)
+    is 0. Real category ids are auto-increment from 1, so 0 can never
+    collide -- and, unlike None, it sorts against ints, which
+    _apportion_cents' tie-break needs.
+    """
+    return 0 if category_id is None else category_id
+
+
+def _category_id(key: int) -> int | None:
+    return None if key == 0 else key
+
+
 def _category_condition(category_id: int | None) -> Any:
     """SQLAlchemy WHERE condition for "products in exactly this category" --
     category_id=None means the Uncategorised bucket (IS NULL), not "no filter"."""
@@ -319,14 +333,9 @@ class ReportService:
         net_units: defaultdict[int, int] = defaultdict(
             int, {product_id: units for product_id, _, units, _ in gross_rows}
         )
-        sales_total_result = await self.db.execute(
-            select(func.coalesce(func.sum(Sale.total_amount), 0.0)).where(
-                Sale.created_at >= utc_start, Sale.created_at < utc_end
-            )
-        )
         sales_cents = _apportion_cents(
             {product_id: cents for product_id, _, _, cents in gross_rows},
-            to_cents(sales_total_result.scalar_one()),
+            await self._gross_sales_total_cents(utc_start, utc_end),
         )
         revenue_cents: defaultdict[int, int] = defaultdict(int, sales_cents)
         for product_id, name, refunded_units, refunded_cents in await self._refunds_by_product(
@@ -1042,48 +1051,42 @@ class ReportService:
             for product_id, revenue in ranked[:limit]
         ]
 
-    async def top_products_in_category(
-        self, start_date: date, end_date: date, category_id: int | None, limit: int = 10
-    ) -> list[TopProductEntry]:
+    async def _gross_sales_total_cents(self, utc_start: datetime, utc_end: datetime) -> int:
         """
-        Drill-down for revenue_by_category(): exactly
-        top_products_by_revenue's computation (same discount proration,
-        same refund netting, same ranking), restricted to one category.
-
-        category_id=None means the Uncategorised bucket (products with
-        no category assigned) -- this method always filters, it never
-        means "every product regardless of category"; that's what
-        top_products_by_revenue is for.
+        The period's real gross sales amount (before refunds) in whole
+        cents -- the exact figure every per-product / per-category
+        revenue table is apportioned to, so no table can be a cent or
+        two off the total it claims to break down.
         """
-        utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
-        category_filter = _CategoryFilter(category_id=category_id)
-
-        name_by_product: dict[int, str] = {}
-        qty_by_product: dict[int, int] = {}
-        revenue_by_product: dict[int, float] = defaultdict(float)
-        for product_id, name, quantity_sold, revenue_cents in await self._gross_product_revenue(
-            utc_start, utc_end, category_filter
-        ):
-            name_by_product[product_id] = name
-            qty_by_product[product_id] = quantity_sold
-            revenue_by_product[product_id] = revenue_cents / 100.0
-
-        for product_id, name, refund_total in await self._refund_revenue_by_product(
-            utc_start, utc_end, category_filter
-        ):
-            name_by_product.setdefault(product_id, name)
-            revenue_by_product[product_id] -= refund_total
-
-        ranked = sorted(revenue_by_product.items(), key=lambda pair: pair[1], reverse=True)
-        return [
-            TopProductEntry(
-                product_id=product_id,
-                name=name_by_product[product_id],
-                quantity_sold=qty_by_product.get(product_id, 0),
-                revenue=round(revenue, 2),
+        result = await self.db.execute(
+            select(func.coalesce(func.sum(Sale.total_amount), 0.0)).where(
+                Sale.created_at >= utc_start, Sale.created_at < utc_end
             )
-            for product_id, revenue in ranked[:limit]
-        ]
+        )
+        return to_cents(result.scalar_one())
+
+    async def _gross_category_cents(
+        self, utc_start: datetime, utc_end: datetime
+    ) -> tuple[dict[int, int], dict[int, str], dict[int, int]]:
+        """
+        Gross (before refunds) revenue per category in whole cents,
+        apportioned to the period's real gross sales total, plus each
+        category's name and units sold. Keyed by _category_key (0 is
+        the Uncategorised bucket).
+
+        Single source for both revenue_by_category and the
+        top_products_in_category drill-down, so a category's bar and
+        the product rows beneath it are derived from the same cents and
+        can never disagree.
+        """
+        rows = await self._gross_category_revenue(utc_start, utc_end)
+        gross_cents = _apportion_cents(
+            {_category_key(category_id): cents for category_id, _, _, cents in rows},
+            await self._gross_sales_total_cents(utc_start, utc_end),
+        )
+        names = {_category_key(category_id): name for category_id, name, _, _ in rows}
+        units = {_category_key(category_id): qty for category_id, _, qty, _ in rows}
+        return gross_cents, names, units
 
     async def _gross_category_revenue(
         self, utc_start: datetime, utc_end: datetime
@@ -1093,7 +1096,7 @@ class ReportService:
         (see there for the full reasoning), grouped by category
         instead of product. category_id is None and category_name is
         "Uncategorised" for products with no category assigned -- that
-        bucket is real spend/revenue and is never silently dropped.
+        bucket is real revenue and is never silently dropped.
         """
         sale_totals, discount_ratio = _discount_ratio_and_sale_totals(utc_start, utc_end)
         revenue_cents_expr = cast(
@@ -1144,43 +1147,36 @@ class ReportService:
         Revenue broken down by category, net of refunds, each entry's
         share of the real period total -- "which categories are
         actually driving revenue, and by how much" as a real number,
-        not something eyeballed off a bar chart. total_revenue is the
-        same authoritative net-of-refunds figure every other report in
-        this file agrees on (_revenue_and_count_in_range), not a sum
-        of the category rows themselves, so percent_of_total is always
-        correct relative to the real total even in the (should never
-        happen) case of any drift between the two computations.
+        not something eyeballed off a bar chart.
+
+        Same cent-exact method as profit_by_product: gross revenue is
+        apportioned to the period's real gross sales total, then each
+        category's refunds (already whole cents) are subtracted, so the
+        entries add up to total_revenue exactly, to the cent, and
+        percent_of_total is measured against that same real total.
         """
         total_revenue, _ = await self._revenue_and_count_in_range(start_date, end_date)
         utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
 
-        name_by_category: dict[int | None, str] = {}
-        qty_by_category: dict[int | None, int] = defaultdict(int)
-        revenue_by_category: dict[int | None, float] = defaultdict(float)
-        for category_id, name, quantity_sold, revenue_cents in await self._gross_category_revenue(
-            utc_start, utc_end
-        ):
-            name_by_category[category_id] = name
-            qty_by_category[category_id] += quantity_sold
-            revenue_by_category[category_id] += revenue_cents / 100.0
-
+        gross_cents, names, units = await self._gross_category_cents(utc_start, utc_end)
+        net_cents: defaultdict[int, int] = defaultdict(int, gross_cents)
         for category_id, name, refund_total in await self._refund_revenue_by_category(
             utc_start, utc_end
         ):
-            name_by_category.setdefault(category_id, name)
-            revenue_by_category[category_id] -= refund_total
+            key = _category_key(category_id)
+            names.setdefault(key, name)
+            net_cents[key] -= to_cents(refund_total)
 
+        total_cents = to_cents(total_revenue)
         entries = [
             CategoryRevenueEntry(
-                category_id=category_id,
-                category_name=name_by_category[category_id],
-                quantity_sold=qty_by_category.get(category_id, 0),
-                revenue=round(revenue, 2),
-                percent_of_total=(
-                    round(revenue / total_revenue * 100, 1) if total_revenue > 0 else 0.0
-                ),
+                category_id=_category_id(key),
+                category_name=names[key],
+                quantity_sold=units.get(key, 0),
+                revenue=from_cents(cents),
+                percent_of_total=(round(cents / total_cents * 100, 1) if total_cents > 0 else 0.0),
             )
-            for category_id, revenue in revenue_by_category.items()
+            for key, cents in net_cents.items()
         ]
         entries.sort(key=lambda entry: entry.revenue, reverse=True)
 
@@ -1190,6 +1186,54 @@ class ReportService:
             total_revenue=total_revenue,
             categories=entries,
         )
+
+    async def top_products_in_category(
+        self, start_date: date, end_date: date, category_id: int | None, limit: int = 10
+    ) -> list[TopProductEntry]:
+        """
+        Drill-down for revenue_by_category(): the same discount proration
+        and refund netting as top_products_by_revenue, restricted to one
+        category -- and apportioned to that category's own gross cents
+        (from _gross_category_cents), so the products in a category add
+        up to that category's bar exactly, to the cent.
+
+        category_id=None means the Uncategorised bucket (products with
+        no category assigned) -- this method always filters, it never
+        means "every product regardless of category"; that's what
+        top_products_by_revenue is for.
+        """
+        utc_start, utc_end = await local_day_bounds_utc(self.db, start_date, end_date)
+        category_filter = _CategoryFilter(category_id=category_id)
+        category_gross_cents = (await self._gross_category_cents(utc_start, utc_end))[0].get(
+            _category_key(category_id), 0
+        )
+
+        gross_rows = await self._gross_product_revenue(utc_start, utc_end, category_filter)
+        name_by_product = {product_id: name for product_id, name, _, _ in gross_rows}
+        qty_by_product = {product_id: qty for product_id, _, qty, _ in gross_rows}
+        net_cents: defaultdict[int, int] = defaultdict(
+            int,
+            _apportion_cents(
+                {product_id: cents for product_id, _, _, cents in gross_rows},
+                category_gross_cents,
+            ),
+        )
+        for product_id, name, refund_total in await self._refund_revenue_by_product(
+            utc_start, utc_end, category_filter
+        ):
+            name_by_product.setdefault(product_id, name)
+            net_cents[product_id] -= to_cents(refund_total)
+
+        ranked = sorted(net_cents.items(), key=lambda pair: pair[1], reverse=True)
+        return [
+            TopProductEntry(
+                product_id=product_id,
+                name=name_by_product[product_id],
+                quantity_sold=qty_by_product.get(product_id, 0),
+                revenue=from_cents(cents),
+            )
+            for product_id, cents in ranked[:limit]
+        ]
 
     async def top_customers(
         self, start_date: date, end_date: date, limit: int = 20

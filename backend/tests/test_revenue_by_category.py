@@ -11,7 +11,10 @@ test_reports.py's TestProfitByProduct and TestTopCustomers:
      product from a different category into the ranking.
 """
 
+import random
 from datetime import date
+
+import pytest
 
 from app.core.business_time import business_today
 from app.core.database import AsyncSessionLocal
@@ -302,3 +305,76 @@ class TestTopProductsInCategory:
         assert r.status_code == 200, r.text
         names = [entry["name"] for entry in r.json()]
         assert names == ["Loose Item"]
+
+
+class TestCategoryRevenueReconciliation:
+    """
+    The category breakdown -- and every category's drill-down -- must add
+    up to the real total, to the cent, on messy real-world data: awkward
+    prices, discounts that don't divide evenly across lines, refunds,
+    and an Uncategorised bucket. Rounding each row on its own can leave
+    a table a cent or two off the total it claims to break down (the
+    exact failure profit_by_product's largest-remainder apportionment
+    exists to prevent). Seed 1 is the dataset that first exposed exactly
+    that here, kept as a permanent regression case; fixed seeds keep the
+    whole thing deterministic, not flaky.
+    """
+
+    @pytest.mark.parametrize("seed", [1, 2, 3, 7, 11, 20260928])
+    async def test_categories_and_their_drilldowns_sum_to_the_cent(self, client, owner_user, seed):
+        rng = random.Random(seed)
+        category_ids = [await _make_category(n) for n in ("Antibiotics", "Painkillers", "Vitamins")]
+        # Awkward prices on purpose: thirds and sevenths of a dollar
+        # produce fractional-cent shares once a discount is prorated.
+        prices = [3.33, 7.77, 12.49, 0.99, 5.67, 9.13, 4.01, 2.29]
+        product_ids: list[int] = []
+        for index, price in enumerate(prices):
+            category = category_ids[index % 3] if index < 6 else None  # last two: Uncategorised
+            product_ids.append(
+                await _make_product_with_batch(
+                    f"Recon {index}", category, price=price, cost=0.5, qty=500
+                )
+            )
+        price_cents = {pid: round(p * 100) for pid, p in zip(product_ids, prices, strict=True)}
+
+        headers = await _owner_headers(client)
+        sales = []
+        for _ in range(40):
+            chosen = rng.sample(product_ids, rng.randint(1, 4))
+            lines = [(pid, rng.randint(1, 5)) for pid in chosen]
+            subtotal = sum(price_cents[pid] * qty for pid, qty in lines)
+            discount = rng.randint(0, subtotal * 4 // 10)
+            total = (subtotal - discount) / 100
+            sales.append(await _sell(client, headers, lines, total=total, discount=discount / 100))
+        for sale in rng.sample(sales, 10):
+            await _refund(client, headers, sale, quantity=1)
+
+        today = (await _business_today()).isoformat()
+        params = {"start_date": today, "end_date": today}
+        kpi_revenue = (
+            await client.get("/api/v1/reports/kpi-dashboard", params=params, headers=headers)
+        ).json()["revenue"]
+        report = (
+            await client.get("/api/v1/reports/revenue-by-category", params=params, headers=headers)
+        ).json()
+
+        assert len(report["categories"]) == 4  # 3 real + Uncategorised: nothing dropped
+        assert _cents(report["total_revenue"]) == _cents(kpi_revenue)
+        assert sum(_cents(c["revenue"]) for c in report["categories"]) == _cents(kpi_revenue)
+
+        # Each category's drill-down (limit high enough to include every
+        # product) adds up to that category's bar exactly.
+        for category in report["categories"]:
+            drill = {**params, "limit": 100}
+            if category["category_id"] is None:
+                drill["uncategorised"] = True
+            else:
+                drill["category_id"] = category["category_id"]
+            products = (
+                await client.get(
+                    "/api/v1/reports/revenue-by-category/products", params=drill, headers=headers
+                )
+            ).json()
+            assert sum(_cents(p["revenue"]) for p in products) == _cents(
+                category["revenue"]
+            ), f"drill-down for {category['category_name']} does not match its bar"

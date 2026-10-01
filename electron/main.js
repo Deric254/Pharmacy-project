@@ -494,7 +494,7 @@ function createWindow() {
         'Pharmacy ERP could not load',
         `The app window failed to load (${errorDescription}).\n\n` +
           'Try closing and reopening the app. If this keeps happening, ' +
-          'contact whoever set this up for you with this exact message.',
+          'contact dericmarangu@gmail.com you with this exact message.',
       )
     },
   )

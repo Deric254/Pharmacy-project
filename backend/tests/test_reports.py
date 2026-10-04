@@ -46,7 +46,7 @@ async def _make_product_with_batch(
     price: float = 10.0,
     cost: float = 4.0,
     qty: int = 50,
-    expiry: str = "2027-01-01",
+    expiry: str = "2097-01-01",
     name: str = "Report Test Product",
 ) -> tuple[int, int]:
     async with AsyncSessionLocal() as db:
@@ -337,7 +337,7 @@ class TestExpiredStockReport:
         assert "write these off" in r.json()["recommendation"]
 
     async def test_future_expiry_not_flagged(self, client, owner_user):
-        await _make_product_with_batch(qty=20, expiry="2027-01-01")
+        await _make_product_with_batch(qty=20, expiry="2097-01-01")
         token = await _login(client, "lucy", "S3curePass!")
 
         r = await client.get(
@@ -466,7 +466,7 @@ class TestProductCoOccurrence:
             batch1 = MedicineBatch(
                 product_id=product.id,
                 batch_number="FEFO-1",
-                expiry_date=date(2027, 1, 1),
+                expiry_date=date(2097, 1, 1),
                 qty_received=10,
                 qty_remaining=10,
                 cost_price=2.0,
@@ -475,7 +475,7 @@ class TestProductCoOccurrence:
             batch2 = MedicineBatch(
                 product_id=product.id,
                 batch_number="FEFO-2",
-                expiry_date=date(2027, 6, 1),
+                expiry_date=date(2097, 6, 1),
                 qty_received=10,
                 qty_remaining=10,
                 cost_price=2.0,
@@ -632,7 +632,7 @@ class TestReceivingDiscrepancies:
                         "product_id": product_id,
                         "quantity": 90,
                         "batch_number": "SHORT",
-                        "expiry_date": "2027-01-01",
+                        "expiry_date": "2097-01-01",
                         "unit_cost": 5.0,
                         "selling_price": 9.0,
                     }
@@ -941,7 +941,7 @@ class TestKpiDashboard:
                 MedicineBatch(
                     product_id=expensive.id,
                     batch_number="E1",
-                    expiry_date=date(2027, 1, 1),
+                    expiry_date=date(2097, 1, 1),
                     qty_received=10,
                     qty_remaining=10,
                     cost_price=50.0,
@@ -1104,7 +1104,7 @@ class TestKpiDashboard:
                 MedicineBatch(
                     product_id=product.id,
                     batch_number="LOW1",
-                    expiry_date=date(2027, 1, 1),
+                    expiry_date=date(2097, 1, 1),
                     qty_received=3,
                     qty_remaining=3,
                     cost_price=1.0,
@@ -1488,7 +1488,7 @@ class TestRevenuePotential:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "RP1",
-                "expiry_date": "2027-06-30",
+                "expiry_date": "2097-06-30",
                 "qty_received": 50,
                 "cost_price": 8.0,
                 "selling_price": 20.0,
@@ -1637,7 +1637,7 @@ class TestStockRunway:
             f"/api/v1/products/{slow_id}/batches",
             json={
                 "batch_number": "SLOW1",
-                "expiry_date": "2027-06-30",
+                "expiry_date": "2097-06-30",
                 "qty_received": 1000,
                 "cost_price": 4.0,
                 "selling_price": 10.0,

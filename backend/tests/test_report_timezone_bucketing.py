@@ -40,7 +40,7 @@ async def _make_product_with_batch(qty: int = 20) -> int:
             MedicineBatch(
                 product_id=product.id,
                 batch_number="B1",
-                expiry_date=date.fromisoformat("2027-01-01"),
+                expiry_date=date.fromisoformat("2097-01-01"),
                 qty_received=qty,
                 qty_remaining=qty,
                 cost_price=5.0,

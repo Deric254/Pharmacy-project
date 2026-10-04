@@ -50,7 +50,7 @@ async def _business_today() -> date:
 
 
 async def _make_product_with_batch(
-    price: float = 10.0, qty: int = 20, expiry: str = "2027-01-01", cost: float | None = None
+    price: float = 10.0, qty: int = 20, expiry: str = "2097-01-01", cost: float | None = None
 ) -> int:
     async with AsyncSessionLocal() as db:
         product = Product(name="Amoxicillin 500mg")
@@ -929,7 +929,7 @@ class TestExpiredStockNeverSold:
                 MedicineBatch(
                     product_id=product_id,
                     batch_number="VALID1",
-                    expiry_date=date(2027, 1, 1),
+                    expiry_date=date(2097, 1, 1),
                     qty_received=20,
                     qty_remaining=20,
                     cost_price=5.0,

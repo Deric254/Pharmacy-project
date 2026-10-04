@@ -390,7 +390,7 @@ class TestMigrationExportAndRestore:
                 text(
                     "INSERT INTO medicine_batches (product_id, batch_number, expiry_date, "
                     "qty_received, qty_remaining, cost_price, selling_price) "
-                    "VALUES (:pid, 'XDEV1', '2027-06-30', 77, 77, 15.0, 42.0)"
+                    "VALUES (:pid, 'XDEV1', '2097-06-30', 77, 77, 15.0, 42.0)"
                 ),
                 {"pid": product_id},
             )
@@ -467,7 +467,7 @@ class TestMigrationExportAndRestore:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "MIGRT1",
-                "expiry_date": "2027-06-30",
+                "expiry_date": "2097-06-30",
                 "qty_received": 77,
                 "cost_price": 15.0,
                 "selling_price": 42.0,

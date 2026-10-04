@@ -94,7 +94,7 @@ class TestBatchCreation:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "IBU-001",
-                "expiry_date": "2027-01-01",
+                "expiry_date": "2097-01-01",
                 "qty_received": 100,
                 "cost_price": 5.0,
                 "selling_price": 10.0,
@@ -116,7 +116,7 @@ class TestBatchCreation:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "IBU-001",
-                "expiry_date": "2027-01-01",
+                "expiry_date": "2097-01-01",
                 "qty_received": 50,
                 "cost_price": 5.0,
                 "selling_price": 10.0,
@@ -127,7 +127,7 @@ class TestBatchCreation:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "IBU-002",
-                "expiry_date": "2027-06-01",
+                "expiry_date": "2097-06-01",
                 "qty_received": 30,
                 "cost_price": 5.5,
                 "selling_price": 11.0,
@@ -149,7 +149,7 @@ class TestBatchCreation:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "X",
-                "expiry_date": "2027-01-01",
+                "expiry_date": "2097-01-01",
                 "qty_received": 10,
                 "cost_price": 1.0,
                 "selling_price": 2.0,
@@ -167,7 +167,7 @@ class TestBatchCreation:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "LOSS-1",
-                "expiry_date": "2027-01-01",
+                "expiry_date": "2097-01-01",
                 "qty_received": 10,
                 "cost_price": 50.0,
                 "selling_price": 30.0,
@@ -189,7 +189,7 @@ class TestBatchCreation:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "BREAKEVEN-1",
-                "expiry_date": "2027-01-01",
+                "expiry_date": "2097-01-01",
                 "qty_received": 10,
                 "cost_price": 50.0,
                 "selling_price": 50.0,
@@ -221,7 +221,7 @@ class TestBatchCreation:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "STALE-1",
-                "expiry_date": "2027-01-01",
+                "expiry_date": "2097-01-01",
                 "qty_received": 10,
                 "cost_price": 5.0,
                 # selling_price omitted on purpose -- there is no
@@ -240,7 +240,7 @@ class TestBatchCreation:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "REPRICE-1",
-                "expiry_date": "2027-01-01",
+                "expiry_date": "2097-01-01",
                 "qty_received": 10,
                 "cost_price": 50.0,
                 "selling_price": 80.0,
@@ -455,7 +455,7 @@ class TestMarginAndMarkup:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "M1",
-                "expiry_date": "2027-01-01",
+                "expiry_date": "2097-01-01",
                 "qty_received": 10,
                 "cost_price": 12.0,
                 "selling_price": 20.0,
@@ -494,7 +494,7 @@ class TestMarginAndMarkup:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "LATER",
-                "expiry_date": "2028-01-01",
+                "expiry_date": "2098-01-01",
                 "qty_received": 10,
                 "cost_price": 5.0,
                 "selling_price": 10.0,
@@ -506,7 +506,7 @@ class TestMarginAndMarkup:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "SOONER",
-                "expiry_date": "2027-01-01",
+                "expiry_date": "2097-01-01",
                 "qty_received": 10,
                 "cost_price": 15.0,
                 "selling_price": 30.0,
@@ -530,7 +530,7 @@ class TestMarginAndMarkup:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "L1",
-                "expiry_date": "2027-01-01",
+                "expiry_date": "2097-01-01",
                 "qty_received": 10,
                 "cost_price": 12.0,
                 "selling_price": 20.0,
@@ -572,7 +572,7 @@ class TestMarginAndMarkup:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "SOON",
-                "expiry_date": "2027-01-01",
+                "expiry_date": "2097-01-01",
                 "qty_received": 10,
                 "cost_price": 10.0,
                 "selling_price": 25.0,
@@ -583,7 +583,7 @@ class TestMarginAndMarkup:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "LATER",
-                "expiry_date": "2028-01-01",
+                "expiry_date": "2098-01-01",
                 "qty_received": 10,
                 "cost_price": 10.0,
                 "selling_price": 30.0,
@@ -752,7 +752,7 @@ class TestProductListOrdering:
                     f"/api/v1/products/{pid}/batches",
                     json={
                         "batch_number": f"B-{name}",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "qty_received": qty,
                         "cost_price": 1.0,
                         "selling_price": 2.0,
@@ -801,7 +801,7 @@ class TestBatchCostCorrection:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": batch_number,
-                "expiry_date": "2028-01-01",
+                "expiry_date": "2098-01-01",
                 "qty_received": 10,
                 "cost_price": cost_price,
                 "selling_price": 30.0,
@@ -1030,7 +1030,7 @@ class TestBatchExpiryCorrection:
         self,
         client,
         headers,
-        expiry_date: str = "2028-01-01",
+        expiry_date: str = "2098-01-01",
         batch_number: str = "EXP1",
         qty: int = 10,
     ) -> tuple[int, int]:
@@ -1062,14 +1062,14 @@ class TestBatchExpiryCorrection:
 
         r = await client.patch(
             f"/api/v1/products/{product_id}/batches/{batch_id}/expiry",
-            json={"new_expiry_date": "2029-06-30", "reason": "mistyped year on receiving"},
+            json={"new_expiry_date": "2099-06-30", "reason": "mistyped year on receiving"},
             headers=headers,
         )
         assert r.status_code == 200, r.text
-        assert r.json()["expiry_date"] == "2029-06-30"
+        assert r.json()["expiry_date"] == "2099-06-30"
 
         batches = await client.get(f"/api/v1/products/{product_id}/batches", headers=headers)
-        assert batches.json()[0]["expiry_date"] == "2029-06-30"
+        assert batches.json()[0]["expiry_date"] == "2099-06-30"
 
     async def test_correcting_an_expired_batch_to_the_future_makes_it_sellable_again(
         self, client, owner_user
@@ -1093,7 +1093,7 @@ class TestBatchExpiryCorrection:
 
         corrected = await client.patch(
             f"/api/v1/products/{product_id}/batches/{batch_id}/expiry",
-            json={"new_expiry_date": "2029-01-01", "reason": "expiry was entered incorrectly"},
+            json={"new_expiry_date": "2099-01-01", "reason": "expiry was entered incorrectly"},
             headers=headers,
         )
         assert corrected.status_code == 200, corrected.text
@@ -1118,7 +1118,7 @@ class TestBatchExpiryCorrection:
         employee_token = await self._login(client, "joe", "pass1234")
         r = await client.patch(
             f"/api/v1/products/{product_id}/batches/{batch_id}/expiry",
-            json={"new_expiry_date": "2029-01-01", "reason": "should not be allowed"},
+            json={"new_expiry_date": "2099-01-01", "reason": "should not be allowed"},
             headers={"Authorization": f"Bearer {employee_token}"},
         )
         assert r.status_code == 403
@@ -1130,7 +1130,7 @@ class TestBatchExpiryCorrection:
 
         r = await client.patch(
             f"/api/v1/products/{product_id}/batches/{batch_id}/expiry",
-            json={"new_expiry_date": "2029-01-01", "reason": ""},
+            json={"new_expiry_date": "2099-01-01", "reason": ""},
             headers=headers,
         )
         assert r.status_code == 422
@@ -1142,7 +1142,7 @@ class TestBatchExpiryCorrection:
 
         r = await client.patch(
             f"/api/v1/products/{product_id}/batches/{batch_id}/expiry",
-            json={"new_expiry_date": "2029-06-30", "reason": "supplier packaging showed 2029"},
+            json={"new_expiry_date": "2099-06-30", "reason": "supplier packaging showed 2029"},
             headers=headers,
         )
         assert r.status_code == 200, r.text
@@ -1154,8 +1154,8 @@ class TestBatchExpiryCorrection:
         entries = logs.json()["entries"]
         matching = [e for e in entries if e["entity_id"] == str(batch_id)]
         assert len(matching) == 1
-        assert matching[0]["old_value"] == "2028-01-01"
-        assert "2029-06-30" in matching[0]["new_value"]
+        assert matching[0]["old_value"] == "2098-01-01"
+        assert "2099-06-30" in matching[0]["new_value"]
         assert "supplier packaging showed 2029" in matching[0]["new_value"]
 
 

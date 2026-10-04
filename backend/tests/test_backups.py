@@ -255,7 +255,7 @@ class TestRestoreBackup:
             batch = MedicineBatch(
                 product_id=product.id,
                 batch_number="DR-1",
-                expiry_date=date(2027, 1, 1),
+                expiry_date=date(2097, 1, 1),
                 qty_received=10,
                 qty_remaining=10,
                 cost_price=17.5,

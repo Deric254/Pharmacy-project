@@ -101,7 +101,7 @@ class TestQueryCountRegressionGuard:
                     MedicineBatch(
                         product_id=product.id,
                         batch_number="B1",
-                        expiry_date=date(2027, 1, 1),
+                        expiry_date=date(2097, 1, 1),
                         qty_received=1,
                         qty_remaining=1,
                         cost_price=1.0,
@@ -150,7 +150,7 @@ class TestBasicLatencySanity:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "LATENCY-1",
-                "expiry_date": "2027-01-01",
+                "expiry_date": "2097-01-01",
                 "qty_received": 1000,
                 "cost_price": 2.0,
                 "selling_price": 5.0,

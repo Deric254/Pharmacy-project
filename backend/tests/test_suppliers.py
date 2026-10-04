@@ -188,7 +188,7 @@ class TestSupplierKpis:
                         "product_id": product_id,
                         "quantity": 10,
                         "batch_number": "KPI-001",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 5.0,
                         "selling_price": 9.0,
                     }

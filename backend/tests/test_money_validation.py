@@ -94,7 +94,7 @@ class TestBatchCreationRejectsGarbageMoney:
         r = await client.post(
             f"/api/v1/products/{product_id}/batches",
             content=(
-                '{"batch_number":"BAD-MONEY-1","expiry_date":"2027-01-01",'
+                '{"batch_number":"BAD-MONEY-1","expiry_date":"2097-01-01",'
                 '"qty_received":10,"cost_price":5.0,"selling_price":Infinity}'
             ),
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
@@ -120,7 +120,7 @@ class TestBatchCreationRejectsGarbageMoney:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "BAD-MONEY-2",
-                "expiry_date": "2027-01-01",
+                "expiry_date": "2097-01-01",
                 "qty_received": 10,
                 "cost_price": 5.0,
                 "selling_price": 999999999999999999999999999.99,

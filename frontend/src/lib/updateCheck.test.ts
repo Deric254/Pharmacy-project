@@ -2,6 +2,15 @@ import { renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useReleaseHistory, useUpdateCheck } from './updateCheck'
 
+// The startup delay has its own tests (startupSettled.test.ts); here the
+// task runs immediately so these tests exercise the check itself.
+vi.mock('./startupSettled', () => ({
+  runAfterStartup: (task: () => void) => {
+    task()
+    return () => {}
+  },
+}))
+
 const HEALTH_URL = '/health'
 const RELEASES_LATEST_URL = 'https://api.github.com/repos/Deric254/Pharmacy-project/releases/latest'
 const RELEASES_URL = 'https://api.github.com/repos/Deric254/Pharmacy-project/releases'

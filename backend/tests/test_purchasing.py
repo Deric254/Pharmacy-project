@@ -187,7 +187,7 @@ class TestRecordPayment:
                         "product_id": product_id,
                         "quantity": 10,
                         "batch_number": "PAY-BAL-1",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 20.0,
                         "selling_price": 30.0,
                     }
@@ -263,7 +263,7 @@ class TestQuickPurchase:
                         "product_id": product_id,
                         "quantity": 50,
                         "batch_number": "QP-001",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 8.0,
                         "selling_price": 15.0,
                     }
@@ -302,7 +302,7 @@ class TestQuickPurchase:
                         "product_id": product1,
                         "quantity": 30,
                         "batch_number": "MULTI-A",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 5.0,
                         "selling_price": 10.0,
                     },
@@ -310,7 +310,7 @@ class TestQuickPurchase:
                         "product_id": product2,
                         "quantity": 20,
                         "batch_number": "MULTI-B",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 12.0,
                         "selling_price": 20.0,
                     },
@@ -345,7 +345,7 @@ class TestQuickPurchase:
                         "product_id": product_id,
                         "quantity": 10,
                         "batch_number": "DEBT-001",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 15.0,
                         "selling_price": 25.0,
                     }
@@ -371,7 +371,7 @@ class TestQuickPurchase:
                         "product_id": product_id,
                         "quantity": 10,
                         "batch_number": "B1",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 5.0,
                     }
                 ],
@@ -391,7 +391,7 @@ class TestQuickPurchase:
                         "product_id": 1,
                         "quantity": 10,
                         "batch_number": "B1",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 5.0,
                     }
                 ],
@@ -422,7 +422,7 @@ class TestQuickPurchase:
             "product_id": product_id,
             "quantity": 100,
             "batch_number": "MERGE-001",
-            "expiry_date": "2027-06-30",
+            "expiry_date": "2097-06-30",
             "unit_cost": 10.0,
             "selling_price": 20.0,
         }
@@ -439,7 +439,7 @@ class TestQuickPurchase:
             "product_id": product_id,
             "quantity": 50,
             "batch_number": "MERGE-001",
-            "expiry_date": "2027-06-30",
+            "expiry_date": "2097-06-30",
             "unit_cost": 16.0,
         }
         r2 = await client.post(
@@ -476,7 +476,7 @@ class TestQuickPurchase:
         )
         supplier_id = supplier.json()["id"]
 
-        for expiry in ["2027-06-30", "2028-01-15"]:
+        for expiry in ["2097-06-30", "2098-01-15"]:
             await client.post(
                 "/api/v1/purchase-orders/quick-purchase",
                 json={
@@ -526,7 +526,7 @@ class TestQuickPurchase:
                         "product_id": product_id,
                         "quantity": 100,
                         "batch_number": "NEW-NO-PRICE",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 10.0,
                         # no selling_price -- this batch doesn't exist yet,
                         # so there's nothing to fall back to.
@@ -559,7 +559,7 @@ class TestQuickPurchase:
             batch = MedicineBatch(
                 product_id=product_id,
                 batch_number="NULL-ATTEMPT",
-                expiry_date=date(2027, 6, 30),
+                expiry_date=date(2097, 6, 30),
                 qty_received=10,
                 qty_remaining=10,
                 cost_price=5.0,
@@ -599,7 +599,7 @@ class TestQuickPurchase:
                         "product_id": product_id,
                         "quantity": 100,
                         "batch_number": "RESTOCK-001",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 10.0,
                         "selling_price": 25.0,
                     }
@@ -618,7 +618,7 @@ class TestQuickPurchase:
                         "product_id": product_id,
                         "quantity": 50,
                         "batch_number": "RESTOCK-001",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 10.0,
                         # no selling_price -- must not conflict with the
                         # batch's real price (25.0) just because it
@@ -659,7 +659,7 @@ class TestQuickPurchase:
                         "product_id": product_id,
                         "quantity": 30,
                         "batch_number": "AUDIT-PO-1",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 8.0,
                         "selling_price": 15.0,
                     }
@@ -699,7 +699,7 @@ class TestQuickPurchase:
                         "product_id": product_id,
                         "quantity": 20,
                         "batch_number": "LOSS-QP-1",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 15.0,
                         "selling_price": 5.0,  # explicitly below cost -- must be rejected
                     }
@@ -733,7 +733,7 @@ class TestQuickPurchase:
                         "product_id": product_id,
                         "quantity": 10,
                         "batch_number": "BLEND-1",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 5.0,
                         "selling_price": 12.0,
                     }
@@ -756,7 +756,7 @@ class TestQuickPurchase:
                         "product_id": product_id,
                         "quantity": 10,
                         "batch_number": "BLEND-1",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 50.0,
                     }
                 ],
@@ -811,7 +811,7 @@ class TestQuickPurchaseConcurrency:
                         "product_id": product_id,
                         "quantity": qty,
                         "batch_number": "CONC-BATCH-1",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 10.0,
                         "selling_price": 20.0,
                     }
@@ -866,7 +866,7 @@ class TestQuickPurchaseConcurrency:
                             "product_id": product_id,
                             "quantity": 10,
                             "batch_number": "CONC-BATCH-5X",
-                            "expiry_date": "2027-06-30",
+                            "expiry_date": "2097-06-30",
                             "unit_cost": 10.0,
                             "selling_price": 20.0,
                         }
@@ -915,7 +915,7 @@ class TestQuickPurchaseRespectsStockTakeLock:
                         "product_id": product_id,
                         "quantity": 20,
                         "batch_number": "LOCK-BATCH-1",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 10.0,
                         "selling_price": 20.0,
                     }
@@ -948,7 +948,7 @@ class TestQuickPurchaseRespectsStockTakeLock:
                         "product_id": product_id,
                         "quantity": 5,
                         "batch_number": "LOCK-BATCH-1",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 10.0,
                     }
                 ],
@@ -982,7 +982,7 @@ class TestBlendedCostStaysInWholeCents:
                 {
                     "product_id": product_id,
                     "batch_number": "WAC1",
-                    "expiry_date": date(2030, 1, 1),
+                    "expiry_date": date(2100, 1, 1),
                     "quantity": quantity,
                     "unit_cost": unit_cost,
                     "selling_price": 50.0,
@@ -1066,7 +1066,7 @@ class TestCategoryOnPurchaseItems:
                         "product_id": product_id,
                         "quantity": 10,
                         "batch_number": "CAT-001",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 5.0,
                         "selling_price": 9.0,
                     }
@@ -1098,7 +1098,7 @@ class TestCategoryOnPurchaseItems:
                         "product_id": product_id,
                         "quantity": 5,
                         "batch_number": "NOCAT-001",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 3.0,
                         "selling_price": 6.0,
                     }
@@ -1131,7 +1131,7 @@ class TestCategoryOnPurchaseItems:
                         "product_id": product_id,
                         "quantity": 4,
                         "batch_number": "LIST-001",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 2.0,
                         "selling_price": 4.0,
                     }

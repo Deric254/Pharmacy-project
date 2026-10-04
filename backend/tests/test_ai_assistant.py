@@ -1296,7 +1296,7 @@ class TestBusinessContext:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "AICTX1",
-                "expiry_date": "2027-06-30",
+                "expiry_date": "2097-06-30",
                 "qty_received": 20,
                 "cost_price": 15.0,
                 "selling_price": 40.0,

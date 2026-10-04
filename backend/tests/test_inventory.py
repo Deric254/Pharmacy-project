@@ -38,7 +38,7 @@ async def _make_product(name: str, reorder_point: int = 10) -> int:
 
 
 async def _add_batch(
-    product_id: int, qty: int, expiry: str = "2027-01-01", batch_number: str = "B1"
+    product_id: int, qty: int, expiry: str = "2097-01-01", batch_number: str = "B1"
 ) -> int:
     async with AsyncSessionLocal() as db:
         batch = MedicineBatch(
@@ -563,7 +563,7 @@ class TestStockMovementHistory:
                         "product_id": product_id,
                         "quantity": 25,
                         "batch_number": "PO-TRACE-1",
-                        "expiry_date": "2027-06-30",
+                        "expiry_date": "2097-06-30",
                         "unit_cost": 4.0,
                         "selling_price": 8.0,
                     }
@@ -768,7 +768,7 @@ class TestExpiredStockWriteOff:
         token = await _login(client, "lucy", "S3curePass!")
         headers = {"Authorization": f"Bearer {token}"}
         product_id = await _make_product("Not Yet Expired Product")
-        batch_id = await _add_batch(product_id, qty=10, expiry="2029-01-01", batch_number="WO2")
+        batch_id = await _add_batch(product_id, qty=10, expiry="2099-01-01", batch_number="WO2")
 
         r = await client.post(
             f"/api/v1/inventory/batches/{batch_id}/write-off-expired", headers=headers
@@ -837,7 +837,7 @@ class TestExpiredStockWriteOff:
         product_id = await _make_product("Bulk Write-off Product")
         expired_1 = await _add_batch(product_id, qty=10, expiry="2020-01-01", batch_number="BULK1")
         expired_2 = await _add_batch(product_id, qty=6, expiry="2021-06-15", batch_number="BULK2")
-        still_good = await _add_batch(product_id, qty=20, expiry="2029-01-01", batch_number="BULK3")
+        still_good = await _add_batch(product_id, qty=20, expiry="2099-01-01", batch_number="BULK3")
 
         r = await client.post("/api/v1/inventory/write-off-all-expired", headers=headers)
         assert r.status_code == 200, r.text
@@ -871,7 +871,7 @@ class TestExpiredStockWriteOff:
         today = date.today().isoformat()
         expires_today = await _add_batch(product_id, qty=4, expiry=today, batch_number="BULK_TODAY")
         still_good = await _add_batch(
-            product_id, qty=20, expiry="2029-01-01", batch_number="BULK_OK"
+            product_id, qty=20, expiry="2099-01-01", batch_number="BULK_OK"
         )
 
         r = await client.post("/api/v1/inventory/write-off-all-expired", headers=headers)
@@ -886,7 +886,7 @@ class TestExpiredStockWriteOff:
         token = await _login(client, "lucy", "S3curePass!")
         headers = {"Authorization": f"Bearer {token}"}
         product_id = await _make_product("Nothing Expired Product")
-        await _add_batch(product_id, qty=10, expiry="2029-01-01", batch_number="NOEXP")
+        await _add_batch(product_id, qty=10, expiry="2099-01-01", batch_number="NOEXP")
 
         r = await client.post("/api/v1/inventory/write-off-all-expired", headers=headers)
         assert r.status_code == 200, r.text

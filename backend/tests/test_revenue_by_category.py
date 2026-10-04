@@ -62,7 +62,7 @@ async def _make_product_with_batch(
         batch = MedicineBatch(
             product_id=product.id,
             batch_number=f"CAT-{name}",
-            expiry_date=date(2027, 1, 1),
+            expiry_date=date(2097, 1, 1),
             qty_received=qty,
             qty_remaining=qty,
             cost_price=cost,

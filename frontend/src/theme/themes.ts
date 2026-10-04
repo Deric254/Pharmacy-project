@@ -1,3 +1,5 @@
+import { runAfterStartup } from '../lib/startupSettled'
+
 interface ThemeDefinition {
   name: string
   label: string
@@ -120,15 +122,33 @@ export function applyTheme(themeName: string): void {
   loadThemeFonts(theme)
 }
 
+// Fonts come from Google's servers, so like the update check they must not
+// compete with the app's own startup traffic. Until startup has settled the
+// app uses the fallback fonts in each theme's font stacks; the web fonts are
+// then fetched in one go. After that, a theme change loads its fonts at once.
 const loadedFontFamilies = new Set<string>()
+const pendingFontFamilies: string[] = []
+let startupSettled = false
+let releaseScheduled = false
+
+function appendFontLink(family: string): void {
+  const link = document.createElement('link')
+  link.rel = 'stylesheet'
+  link.href = `https://fonts.googleapis.com/css2?family=${family}&display=swap`
+  document.head.appendChild(link)
+}
 
 function loadThemeFonts(theme: ThemeDefinition): void {
   for (const family of theme.fontLinks) {
     if (loadedFontFamilies.has(family)) continue
     loadedFontFamilies.add(family)
-    const link = document.createElement('link')
-    link.rel = 'stylesheet'
-    link.href = `https://fonts.googleapis.com/css2?family=${family}&display=swap`
-    document.head.appendChild(link)
+    if (startupSettled) appendFontLink(family)
+    else pendingFontFamilies.push(family)
   }
+  if (startupSettled || releaseScheduled) return
+  releaseScheduled = true
+  runAfterStartup(() => {
+    startupSettled = true
+    for (const family of pendingFontFamilies.splice(0)) appendFontLink(family)
+  })
 }

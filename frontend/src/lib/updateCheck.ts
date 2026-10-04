@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { fetchWithTimeout } from '../api/client'
+import { runAfterStartup } from './startupSettled'
 
 const REPO = 'Deric254/Pharmacy-project'
 
@@ -138,14 +139,19 @@ export function useUpdateCheck(): UpdateCheckResult {
       return
     }
 
-    fetchLatestReleaseInfo(AUTO_CHECK_TIMEOUT_MS)
-      .then((result) => {
-        writeAutoCheckCache(result)
-        if (!cancelled) setInfo(result)
-      })
-      .catch(() => {})
+    // Held back until startup has settled so this external call never
+    // competes with the app's own launch traffic.
+    const cancelScheduled = runAfterStartup(() => {
+      fetchLatestReleaseInfo(AUTO_CHECK_TIMEOUT_MS)
+        .then((result) => {
+          writeAutoCheckCache(result)
+          if (!cancelled) setInfo(result)
+        })
+        .catch(() => {})
+    })
     return () => {
       cancelled = true
+      cancelScheduled()
     }
   }, [])
 

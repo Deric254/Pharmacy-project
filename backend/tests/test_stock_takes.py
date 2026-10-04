@@ -41,7 +41,7 @@ async def _make_product_with_batch(
         batch = MedicineBatch(
             product_id=product.id,
             batch_number="ST-1",
-            expiry_date=date(2027, 1, 1),
+            expiry_date=date(2097, 1, 1),
             qty_received=qty,
             qty_remaining=qty,
             cost_price=cost,
@@ -770,7 +770,7 @@ class TestStockTakeExcelRoundTrip:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "EXCEL1",
-                "expiry_date": "2027-06-30",
+                "expiry_date": "2097-06-30",
                 "qty_received": 75,
                 "cost_price": 8.0,
                 "selling_price": 20.0,
@@ -818,7 +818,7 @@ class TestStockTakeExcelRoundTrip:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "AUTOCLOSE1",
-                "expiry_date": "2027-06-30",
+                "expiry_date": "2097-06-30",
                 "qty_received": 100,
                 "cost_price": 5.0,
                 "selling_price": 20.0,
@@ -900,7 +900,7 @@ class TestStockTakeExcelRoundTrip:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "BLANK1",
-                "expiry_date": "2027-06-30",
+                "expiry_date": "2097-06-30",
                 "qty_received": 40,
                 "cost_price": 5.0,
                 "selling_price": 15.0,
@@ -962,7 +962,7 @@ class TestStockTakeExcelRoundTrip:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "TAMPER1",
-                "expiry_date": "2027-06-30",
+                "expiry_date": "2097-06-30",
                 "qty_received": 30,
                 "cost_price": 3.0,
                 "selling_price": 20.0,

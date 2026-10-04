@@ -33,7 +33,7 @@ async def _login(client, username: str, password: str) -> str:
 
 
 async def _make_product_with_batch(
-    price: float = 10.0, qty: int = 20, expiry: str = "2027-01-01"
+    price: float = 10.0, qty: int = 20, expiry: str = "2097-01-01"
 ) -> int:
     async with AsyncSessionLocal() as db:
         product = Product(name="Amoxicillin 500mg")

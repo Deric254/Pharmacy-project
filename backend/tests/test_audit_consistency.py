@@ -11,6 +11,8 @@ should be. A single missed edge case in any module would show up here
 even if that module's own narrower tests didn't happen to hit it.
 """
 
+from datetime import date, timedelta
+
 from sqlalchemy import select
 
 from app.core.database import AsyncSessionLocal
@@ -44,7 +46,10 @@ class TestBlanketLedgerReconciliation:
             product_id = resp.json()["id"]
             product_ids.append(product_id)
             for batch_num, (expiry, qty, cost) in enumerate(
-                [("2026-09-01", 40, price / 2), ("2027-03-01", 60, price / 2 + 1)]
+                [
+                    ((date.today() + timedelta(days=30)).isoformat(), 40, price / 2),
+                    ("2097-03-01", 60, price / 2 + 1),
+                ]
             ):
                 await client.post(
                     f"/api/v1/products/{product_id}/batches",
@@ -109,7 +114,7 @@ class TestBlanketLedgerReconciliation:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "INTERLEAVE-1",
-                "expiry_date": "2027-01-01",
+                "expiry_date": "2097-01-01",
                 "qty_received": 100,
                 "cost_price": 3.0,
                 "selling_price": 8.0,
@@ -185,7 +190,7 @@ class TestSupplierBalanceConsistency:
                             "product_id": product_id,
                             "quantity": 20,
                             "batch_number": f"SUPPLIER-CONS-{i}",
-                            "expiry_date": "2027-01-01",
+                            "expiry_date": "2097-01-01",
                             "unit_cost": 5.0,
                             "selling_price": 9.0,
                         }

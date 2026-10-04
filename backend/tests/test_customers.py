@@ -32,7 +32,7 @@ async def _make_product_with_batch(qty: int = 50, price: float = 10.0) -> int:
         batch = MedicineBatch(
             product_id=product.id,
             batch_number="C1",
-            expiry_date=date(2027, 1, 1),
+            expiry_date=date(2097, 1, 1),
             qty_received=qty,
             qty_remaining=qty,
             cost_price=2.0,

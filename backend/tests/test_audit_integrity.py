@@ -37,7 +37,7 @@ class TestForeignKeyEnforcement:
                     insert(MedicineBatch.__table__).values(
                         product_id=999999,
                         batch_number="ORPHAN",
-                        expiry_date=date(2027, 1, 1),
+                        expiry_date=date(2097, 1, 1),
                         qty_received=10,
                         qty_remaining=10,
                         cost_price=1.0,
@@ -115,7 +115,7 @@ class TestAuditLogCompleteness:
             batch = MedicineBatch(
                 product_id=product.id,
                 batch_number="AUDIT1",
-                expiry_date=date(2027, 1, 1),
+                expiry_date=date(2097, 1, 1),
                 qty_received=50,
                 qty_remaining=50,
                 cost_price=2.0,
@@ -161,7 +161,7 @@ class TestSoftDeleteIntegrity:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "B1",
-                "expiry_date": "2027-01-01",
+                "expiry_date": "2097-01-01",
                 "qty_received": 10,
                 "cost_price": 2.0,
                 "selling_price": 5.0,
@@ -209,7 +209,7 @@ class TestSoftDeleteIntegrity:
             f"/api/v1/products/{product_id}/batches",
             json={
                 "batch_number": "B1",
-                "expiry_date": "2027-01-01",
+                "expiry_date": "2097-01-01",
                 "qty_received": 10,
                 "cost_price": 2.0,
                 "selling_price": 5.0,

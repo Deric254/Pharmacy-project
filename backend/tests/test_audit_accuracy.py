@@ -46,9 +46,9 @@ class TestMultiBatchProfitAccuracy:
             db.add(product)
             await db.flush()
             for batch_number, expiry, qty, cost in [
-                ("A", (date.today() + timedelta(days=1)), 4, 2.0),
-                ("B", date(2026, 10, 1), 6, 3.0),
-                ("C", date(2027, 3, 1), 20, 4.0),
+                ("A", date.today() + timedelta(days=1), 4, 2.0),
+                ("B", date.today() + timedelta(days=30), 6, 3.0),
+                ("C", date.today() + timedelta(days=180), 20, 4.0),
             ]:
                 db.add(
                     MedicineBatch(
@@ -118,7 +118,7 @@ class TestMultiBatchProfitAccuracy:
             far = MedicineBatch(
                 product_id=product.id,
                 batch_number="FAR",
-                expiry_date=date(2027, 1, 1),
+                expiry_date=date(2097, 1, 1),
                 qty_received=50,
                 qty_remaining=50,
                 cost_price=1.5,
@@ -162,7 +162,7 @@ class TestMultiBatchProfitAccuracy:
                 MedicineBatch(
                     product_id=product.id,
                     batch_number="LAST-ONE",
-                    expiry_date=date(2027, 1, 1),
+                    expiry_date=date(2097, 1, 1),
                     qty_received=1,
                     qty_remaining=1,
                     cost_price=50.0,
@@ -216,7 +216,7 @@ class TestValuationAccuracy:
                     MedicineBatch(
                         product_id=product.id,
                         batch_number="V1",
-                        expiry_date=date(2027, 1, 1),
+                        expiry_date=date(2097, 1, 1),
                         qty_received=qty,
                         qty_remaining=qty,
                         cost_price=cost,

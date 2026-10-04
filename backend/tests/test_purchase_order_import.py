@@ -115,9 +115,9 @@ class TestPurchaseOrderBulkImport:
 
         content = _build_workbook(
             [
-                ["Amoxicillin 500mg", 100, "AMX-001", "2027-06-30", 10.0, 18.0],
+                ["Amoxicillin 500mg", 100, "AMX-001", "2097-06-30", 10.0, 18.0],
                 # lowercase on purpose
-                ["paracetamol 500mg", 200, "PARA-001", "2027-06-30", 4.0, 8.0],
+                ["paracetamol 500mg", 200, "PARA-001", "2097-06-30", 4.0, 8.0],
             ]
         )
         r = await client.post(
@@ -148,8 +148,8 @@ class TestPurchaseOrderBulkImport:
 
         content = _build_workbook(
             [
-                ["Real Product Here", 10, "B1", "2027-06-30", 5.0],
-                ["Does Not Exist In Catalog", 10, "B2", "2027-06-30", 5.0],
+                ["Real Product Here", 10, "B1", "2097-06-30", 5.0],
+                ["Does Not Exist In Catalog", 10, "B2", "2097-06-30", 5.0],
             ]
         )
         r = await client.post(
@@ -180,8 +180,8 @@ class TestPurchaseOrderBulkImport:
 
         content = _build_workbook(
             [
-                ["Duplicate Batch Test Product", -5, "SAMEBATCH", "2027-06-30", 5.0],
-                ["Duplicate Batch Test Product", 10, "SAMEBATCH", "2027-06-30", 5.0],
+                ["Duplicate Batch Test Product", -5, "SAMEBATCH", "2097-06-30", 5.0],
+                ["Duplicate Batch Test Product", 10, "SAMEBATCH", "2097-06-30", 5.0],
             ]
         )
         r = await client.post(
@@ -221,7 +221,7 @@ class TestPurchaseOrderBulkImport:
         product_id = create.json()["id"]
         await client.delete(f"/api/v1/products/{product_id}", headers=headers)
 
-        content = _build_workbook([["Soon Deactivated", 10, "B1", "2027-06-30", 5.0]])
+        content = _build_workbook([["Soon Deactivated", 10, "B1", "2097-06-30", 5.0]])
         r = await client.post(
             "/api/v1/purchase-orders/import",
             headers=headers,
@@ -234,7 +234,7 @@ class TestPurchaseOrderBulkImport:
         await _make_product("Some Product")
         token = await _login(client, "lucy", "S3curePass!")
 
-        content = _build_workbook([["Some Product", 10, "B1", "2027-06-30", 5.0]])
+        content = _build_workbook([["Some Product", 10, "B1", "2097-06-30", 5.0]])
         r = await client.post(
             "/api/v1/purchase-orders/import",
             headers={"Authorization": f"Bearer {token}"},
@@ -245,7 +245,7 @@ class TestPurchaseOrderBulkImport:
 
     async def test_requires_create_po_permission(self, client, employee_user):
         token = await _login(client, "joe", "pass1234")
-        content = _build_workbook([["Some Product", 10, "B1", "2027-06-30", 5.0]])
+        content = _build_workbook([["Some Product", 10, "B1", "2097-06-30", 5.0]])
         r = await client.post(
             "/api/v1/purchase-orders/import",
             headers={"Authorization": f"Bearer {token}"},
@@ -271,7 +271,7 @@ class TestPurchaseOrderBulkImport:
         headers = {"Authorization": f"Bearer {token}"}
 
         content = _build_workbook(
-            [["Reupload Test Product", 100, "REUP1", "2027-06-30", 10.0, 18.0]]
+            [["Reupload Test Product", 100, "REUP1", "2097-06-30", 10.0, 18.0]]
         )
 
         first = await client.post(

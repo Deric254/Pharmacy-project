@@ -51,9 +51,9 @@ class TestFEFOSelection:
             product_id = await _make_product_with_batches(
                 db,
                 [
-                    ("FAR", "2028-01-01", 50),
+                    ("FAR", "2098-01-01", 50),
                     ("NEAR", (date.today() + timedelta(days=1)).isoformat(), 50),
-                    ("MID", "2027-01-01", 50),
+                    ("MID", "2097-01-01", 50),
                 ],
             )
 
@@ -70,7 +70,7 @@ class TestFEFOSelection:
                 db,
                 [
                     ("NEAR", (date.today() + timedelta(days=1)).isoformat(), 5),
-                    ("MID", "2027-01-01", 20),
+                    ("MID", "2097-01-01", 20),
                 ],
             )
 
@@ -85,7 +85,7 @@ class TestFEFOSelection:
 
     async def test_raises_when_total_stock_insufficient(self):
         async with AsyncSessionLocal() as db:
-            product_id = await _make_product_with_batches(db, [("ONLY", "2027-01-01", 5)])
+            product_id = await _make_product_with_batches(db, [("ONLY", "2097-01-01", 5)])
 
             with pytest.raises(InsufficientStockError) as exc_info:
                 await select_batches_fefo(db, product_id, qty_needed=10, lock=False)
@@ -99,7 +99,7 @@ class TestFEFOSelection:
                 db,
                 [
                     ("EMPTY", (date.today() + timedelta(days=1)).isoformat(), 0),
-                    ("HAS_STOCK", "2027-01-01", 20),
+                    ("HAS_STOCK", "2097-01-01", 20),
                 ],
             )
 
@@ -110,7 +110,7 @@ class TestFEFOSelection:
 
     async def test_rejects_non_positive_quantity(self):
         async with AsyncSessionLocal() as db:
-            product_id = await _make_product_with_batches(db, [("A", "2027-01-01", 10)])
+            product_id = await _make_product_with_batches(db, [("A", "2097-01-01", 10)])
             with pytest.raises(ValueError):
                 await select_batches_fefo(db, product_id, qty_needed=0, lock=False)
 
@@ -122,7 +122,7 @@ class TestApplyAllocations:
                 db,
                 [
                     ("NEAR", (date.today() + timedelta(days=1)).isoformat(), 5),
-                    ("MID", "2027-01-01", 20),
+                    ("MID", "2097-01-01", 20),
                 ],
             )
 
@@ -160,7 +160,7 @@ class TestApplyAllocations:
         ledger's meaning (a batch can't have negative physical stock).
         """
         async with AsyncSessionLocal() as db:
-            product_id = await _make_product_with_batches(db, [("A", "2027-01-01", 10)])
+            product_id = await _make_product_with_batches(db, [("A", "2097-01-01", 10)])
             allocations = await select_batches_fefo(db, product_id, qty_needed=10, lock=False)
             await apply_allocations(
                 db, allocations, movement_type=MovementType.SALE, created_by_user_id=None

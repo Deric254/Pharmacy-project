@@ -32,12 +32,15 @@ several services per request is cheap -- it does not re-hit the DB
 on every call.
 """
 
+import logging
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.business_config_service import BusinessConfigService
+
+logger = logging.getLogger(__name__)
 
 
 async def get_business_timezone(db: AsyncSession) -> ZoneInfo:
@@ -50,6 +53,12 @@ async def get_business_timezone(db: AsyncSession) -> ZoneInfo:
     try:
         return ZoneInfo(config.timezone)
     except Exception:  # a bad saved timezone name must never break a report
+        # Falling back keeps reports working, but every report day is now
+        # bucketed in UTC instead of the shop's own timezone, so say so.
+        logger.warning(
+            "Saved business timezone %r is not usable; reports are falling back to UTC",
+            config.timezone,
+        )
         return ZoneInfo("UTC")
 
 

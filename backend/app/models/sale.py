@@ -4,7 +4,7 @@ import enum
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, func
+from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -23,6 +23,13 @@ class Sale(Base):
     """
 
     __tablename__ = "sales"
+    # See migration 0039: a recorded sale can never carry a negative amount.
+    __table_args__ = (
+        CheckConstraint(
+            "subtotal >= 0 AND discount_amount >= 0 AND total_amount >= 0",
+            name="ck_sales_amounts_nonneg",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     cashier_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
@@ -59,6 +66,19 @@ class SaleItem(Base):
     """
 
     __tablename__ = "sale_items"
+    # See migration 0039. qty_refunded <= quantity is the database-level
+    # backstop behind RefundService's atomic over-refund guard.
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_sale_items_quantity_positive"),
+        CheckConstraint(
+            "qty_refunded >= 0 AND qty_refunded <= quantity",
+            name="ck_sale_items_qty_refunded_in_range",
+        ),
+        CheckConstraint(
+            "unit_price >= 0 AND unit_cost >= 0 AND line_total >= 0",
+            name="ck_sale_items_amounts_nonneg",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     sale_id: Mapped[int] = mapped_column(ForeignKey("sales.id"), index=True)
@@ -112,6 +132,8 @@ class PaymentMethod(enum.StrEnum):
 
 class Payment(Base):
     __tablename__ = "payments"
+    # See migration 0039: a payment row always records money actually taken.
+    __table_args__ = (CheckConstraint("amount > 0", name="ck_payments_amount_positive"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     sale_id: Mapped[int] = mapped_column(ForeignKey("sales.id"), index=True)

@@ -4,7 +4,7 @@ import enum
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, func
+from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -55,6 +55,14 @@ class StockTakeItem(Base):
     """
 
     __tablename__ = "stock_take_items"
+    # Database-level rules, listed in app/core/integrity_rules.py (migration 0039).
+    __table_args__ = (
+        CheckConstraint(
+            "expected_qty >= 0 AND physical_qty >= 0",
+            name="ck_stock_take_items_quantities_nonneg",
+        ),
+        CheckConstraint("unit_cost_at_close >= 0", name="ck_stock_take_items_cost_nonneg"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     stock_take_id: Mapped[int] = mapped_column(ForeignKey("stock_takes.id"), index=True)

@@ -279,11 +279,25 @@ jobs:
           # workflow. Retrying a few times with backoff turns that kind
           # of one-off blip into a non-issue instead of failing an
           # otherwise-good release outright.
+          # SHA-256 of both assets, published next to them, so anyone (the
+          # owner, support, a customer's IT person) can confirm a download
+          # is byte-for-byte what this workflow built:
+          #   sha256sum -c SHA256SUMS-<tag>.txt
+          # Deliberately NOT named Pharmacy-ERP-Setup-*.exe: the update
+          # check and the Electron download policy both pick the installer
+          # by that prefix + .exe, and must never mistake this file for it.
+          (cd dist && sha256sum \
+            "Pharmacy-ERP-${{ needs.release.outputs.tag }}.zip" \
+            "Pharmacy-ERP-Setup-${{ needs.release.outputs.tag }}.exe" \
+            > "SHA256SUMS-${{ needs.release.outputs.tag }}.txt")
+          (cd dist && sha256sum -c "SHA256SUMS-${{ needs.release.outputs.tag }}.txt")
+
           max_attempts=5
           attempt=1
           until gh release upload "${{ needs.release.outputs.tag }}" \
             "dist/Pharmacy-ERP-${{ needs.release.outputs.tag }}.zip" \
-            "dist/Pharmacy-ERP-Setup-${{ needs.release.outputs.tag }}.exe" --clobber
+            "dist/Pharmacy-ERP-Setup-${{ needs.release.outputs.tag }}.exe" \
+            "dist/SHA256SUMS-${{ needs.release.outputs.tag }}.txt" --clobber
           do
             if [ "$attempt" -ge "$max_attempts" ]; then
               echo "::error::gh release upload failed after $attempt attempts."

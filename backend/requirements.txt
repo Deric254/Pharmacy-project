@@ -13,7 +13,7 @@ pydantic-settings==2.14.*
 # security.py used it to forge tokens for exactly the attacks this
 # migration closes off). See app/core/security.py for the isolated,
 # single-file migration.
-pyjwt==2.13.*
+pyjwt==2.15.*
 argon2-cffi==23.1.*
 redis[hiredis]==5.1.*
 # 43.0.* had multiple disclosed CVEs by the time of this audit

@@ -35,8 +35,8 @@ shipped desktop app uses.
 cd backend
 pip install -r requirements.txt -r requirements-dev.txt
 export DATABASE_URL="sqlite+aiosqlite:///./dev.db"
-export JWT_SECRET_KEY="dev-secret-change-me"
-export ENCRYPTION_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="  # dev only -- see note below
+export JWT_SECRET_KEY="dev-only-secret-change-me-0123456789"  # dev only, 32+ characters
+export ENCRYPTION_KEY="cGhhcm1hY3ktZXJwLXRlc3Qta2V5LTAxMjM0NTY3ODk="  # dev only -- see note below
 export REDIS_MODE="memory"
 alembic upgrade head
 uvicorn app.main:app --reload
@@ -58,8 +58,10 @@ there. That's a fully working system after that — real checkout, real
 stock ledger, real refunds, real inventory adjustments.
 
 **About `ENCRYPTION_KEY`:** it must be a base64-encoded 32-byte value.
-The one above is all-zero and fine for trying the system locally, but
-generate a real one for anything that matters:
+The one above is a fixed sample that is fine for trying the system
+locally (the app refuses to start with an all-zero key, a `changeme…`
+placeholder, or a `JWT_SECRET_KEY` shorter than 32 characters), but
+generate real ones for anything that matters:
 `python -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())"`
 
 ### Windows — the two ways to run it, simplest first

@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
@@ -20,6 +21,8 @@ from app.schemas.auth import (
     UserOut,
 )
 from app.services.auth_service import MAX_LOGIN_ATTEMPTS, AuthService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -83,7 +86,13 @@ async def refresh(
         user_row = await db.get(User, user_id)
         must_change = user_row.must_change_password if user_row else False
     except Exception:
-        must_change = False
+        # Refresh must still succeed -- the token was already rotated, and
+        # failing here would leave the browser holding a dead cookie. But
+        # if the flag cannot be read, answer "yes, change it": the worst
+        # case is one unnecessary password-change prompt, whereas the old
+        # answer ("no") silently skipped a forced password change.
+        logger.exception("Could not read must_change_password during token refresh")
+        must_change = True
     return TokenResponse(access_token=tokens["access_token"], must_change_password=must_change)
 
 

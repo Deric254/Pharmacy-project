@@ -3,7 +3,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -29,6 +29,8 @@ class Refund(Base):
     """
 
     __tablename__ = "refunds"
+    # Database-level rules, listed in app/core/integrity_rules.py (migration 0039).
+    __table_args__ = (CheckConstraint("total_amount >= 0", name="ck_refunds_total_nonneg"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     sale_id: Mapped[int] = mapped_column(ForeignKey("sales.id"), index=True)
@@ -44,6 +46,12 @@ class Refund(Base):
 
 class RefundItem(Base):
     __tablename__ = "refund_items"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_refund_items_quantity_positive"),
+        CheckConstraint(
+            "unit_price >= 0 AND line_total >= 0", name="ck_refund_items_amounts_nonneg"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     refund_id: Mapped[int] = mapped_column(ForeignKey("refunds.id"), index=True)

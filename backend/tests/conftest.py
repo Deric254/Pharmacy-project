@@ -9,8 +9,8 @@ import os
 
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
-os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key")
-os.environ.setdefault("ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-for-the-pytest-suite-0123456789")
+os.environ.setdefault("ENCRYPTION_KEY", "cGhhcm1hY3ktZXJwLXRlc3Qta2V5LTAxMjM0NTY3ODk=")
 
 import pytest_asyncio
 

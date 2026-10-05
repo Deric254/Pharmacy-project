@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -21,6 +21,16 @@ class MedicineBatch(Base):
     """
 
     __tablename__ = "medicine_batches"
+    # The database itself refuses impossible stock and prices (migration
+    # 0039), independent of whichever code path wrote the row. Compared
+    # against the stored integer cents, so >= 0 means "not negative money".
+    __table_args__ = (
+        CheckConstraint("qty_remaining >= 0", name="ck_medicine_batches_qty_remaining_nonneg"),
+        CheckConstraint("qty_received >= 0", name="ck_medicine_batches_qty_received_nonneg"),
+        CheckConstraint(
+            "cost_price >= 0 AND selling_price >= 0", name="ck_medicine_batches_prices_nonneg"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), index=True)

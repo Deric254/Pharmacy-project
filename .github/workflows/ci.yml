@@ -41,12 +41,24 @@ jobs:
         working-directory: backend
         run: mypy app scripts desktop_main.py
 
+      - name: Security scan of our code (bandit)
+        working-directory: backend
+        run: |
+          pip install bandit
+          bandit -q -r app -ll
+
+      - name: Known-vulnerability audit of shipped dependencies (pip-audit)
+        working-directory: backend
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt
+
       - name: Run migrations against a fresh SQLite DB
         working-directory: backend
         env:
           DATABASE_URL: sqlite+aiosqlite:///./ci-migration-check.db
           JWT_SECRET_KEY: ci-test-secret-not-for-production
-          ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          ENCRYPTION_KEY: cGhhcm1hY3ktZXJwLXRlc3Qta2V5LTAxMjM0NTY3ODk=
         run: alembic upgrade head
 
       - name: Verify migrations also downgrade cleanly
@@ -54,7 +66,7 @@ jobs:
         env:
           DATABASE_URL: sqlite+aiosqlite:///./ci-migration-check.db
           JWT_SECRET_KEY: ci-test-secret-not-for-production
-          ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          ENCRYPTION_KEY: cGhhcm1hY3ktZXJwLXRlc3Qta2V5LTAxMjM0NTY3ODk=
         run: alembic downgrade base
 
       - name: Run tests with coverage
@@ -63,7 +75,7 @@ jobs:
           DATABASE_URL: sqlite+aiosqlite:///./test.db
           REDIS_URL: redis://127.0.0.1:6379/0
           JWT_SECRET_KEY: ci-test-secret-not-for-production
-          ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          ENCRYPTION_KEY: cGhhcm1hY3ktZXJwLXRlc3Qta2V5LTAxMjM0NTY3ODk=
         run: pytest --cov=app --cov-report=term-missing --cov-fail-under=80
 
   frontend-quality-gate:
@@ -83,6 +95,8 @@ jobs:
       - run: npm run lint
       - run: npm run test
       - run: npm run build
+      - name: Known-vulnerability audit (npm audit)
+        run: npm audit --audit-level=high
 
   electron-gui-smoke-test:
     name: Electron GUI smoke test (real window, real backend)
@@ -118,6 +132,10 @@ jobs:
       - name: Install electron test dependencies
         working-directory: electron
         run: npm install
+
+      - name: Electron unit tests (URL allow-list policy)
+        working-directory: electron
+        run: npm run test:unit
 
       - name: Install Chromium/Electron system dependencies
         working-directory: electron

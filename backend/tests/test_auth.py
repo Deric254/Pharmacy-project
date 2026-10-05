@@ -725,3 +725,23 @@ class TestUnknownAccountsCostTheSameAsKnownOnes:
 
         assert r.status_code == 400
         assert hasher.verify_calls == 1
+
+
+class TestRefreshFailsClosedOnTheForcedPasswordFlag:
+    async def test_if_the_flag_cannot_be_read_refresh_still_works_but_asks_for_a_change(
+        self, client, owner_user, monkeypatch, caplog
+    ):
+        await client.post(
+            "/api/v1/auth/login", json={"username": "lucy", "password": "S3curePass!"}
+        )
+
+        def broken_decode(_token):
+            raise RuntimeError("simulated failure while reading the user")
+
+        monkeypatch.setattr("app.api.v1.auth.decode_token", broken_decode)
+
+        r = await client.post("/api/v1/auth/refresh")
+
+        assert r.status_code == 200  # the rotated session is not thrown away
+        assert r.json()["must_change_password"] is True  # fail closed, not open
+        assert "Could not read must_change_password" in caplog.text  # and never silent

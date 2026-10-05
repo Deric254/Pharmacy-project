@@ -8,17 +8,33 @@ Configurable Business Panel (branding, currency, thresholds), which is
 runtime data stored in the `business_config` table, not app config.
 """
 
+import base64
+import binascii
+import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal, Self
 
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# HS256 needs a key at least as long as its 256-bit hash output (RFC 7518
+# section 3.2); PyJWT warns about anything shorter.
+MIN_JWT_SECRET_LENGTH = 32
+_AES_KEY_BYTES = 32
+# .env.example ships placeholders that start with this. Running with one
+# would mean every install shares a publicly known signing key.
+_PLACEHOLDER_PREFIX = "changeme"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     app_name: str = "Pharmacy ERP"
-    environment: str = "development"  # development | staging | production
+    # A typo such as "prod" used to be accepted silently and quietly skip
+    # every production-only behavior (docs off, Secure cookie), so the
+    # allowed values are enforced instead.
+    environment: Literal["development", "staging", "production"] = "development"
     api_v1_prefix: str = "/api/v1"
 
     database_url: str
@@ -28,7 +44,7 @@ class Settings(BaseSettings):
     # interface (app/core/memory_redis.py) -- exclusively for the
     # bundled desktop .exe, which can't reasonably require a separate
     # Redis install. Nothing else should ever set this.
-    redis_mode: str = "redis"
+    redis_mode: Literal["redis", "memory"] = "redis"
 
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"
@@ -41,6 +57,65 @@ class Settings(BaseSettings):
     encryption_key: str
 
     cors_origins: list[str] = ["http://localhost:5173"]
+
+    @model_validator(mode="after")
+    def _memory_redis_is_single_process_only(self) -> Self:
+        # The in-memory stand-in lives inside one process. With several
+        # workers each would get its own private cache, rate-limit counters
+        # and pub/sub, so a login attempt limit or a cache invalidation would
+        # silently apply to only one worker. WEB_CONCURRENCY is what uvicorn
+        # and gunicorn read for their worker count.
+        if self.redis_mode == "memory":
+            try:
+                workers = int(os.environ.get("WEB_CONCURRENCY", "1").strip() or "1")
+            except ValueError:
+                workers = 1
+            if workers > 1:
+                raise ValueError(
+                    f"REDIS_MODE=memory only works with a single worker, but "
+                    f"WEB_CONCURRENCY={workers}. Use REDIS_MODE=redis (a real Redis) "
+                    "for multi-worker deployments."
+                )
+        return self
+
+    @field_validator("jwt_secret_key")
+    @classmethod
+    def _jwt_secret_must_be_real(cls, value: str) -> str:
+        if value.lower().startswith(_PLACEHOLDER_PREFIX):
+            raise ValueError(
+                "JWT_SECRET_KEY is still the .env.example placeholder. Generate one with: "
+                'python -c "import secrets; print(secrets.token_hex(32))"'
+            )
+        if len(value) < MIN_JWT_SECRET_LENGTH:
+            raise ValueError(
+                f"JWT_SECRET_KEY must be at least {MIN_JWT_SECRET_LENGTH} characters. "
+                'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
+            )
+        return value
+
+    @field_validator("encryption_key")
+    @classmethod
+    def _encryption_key_must_be_a_valid_aes_key(cls, value: str) -> str:
+        # Checked at startup so a bad key fails loudly now, not on the first
+        # backup or AI-key save weeks later.
+        how_to = (
+            'Generate one with: python -c "import os,base64; '
+            'print(base64.b64encode(os.urandom(32)).decode())"'
+        )
+        try:
+            decoded = base64.b64decode(value, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError(f"ENCRYPTION_KEY is not valid base64. {how_to}") from exc
+        if len(decoded) != _AES_KEY_BYTES:
+            raise ValueError(
+                f"ENCRYPTION_KEY must decode to exactly {_AES_KEY_BYTES} bytes "
+                f"(AES-256), got {len(decoded)}. {how_to}"
+            )
+        if not any(decoded):
+            # 32 zero bytes is the most guessable key there is: anything
+            # encrypted with it is effectively not encrypted at all.
+            raise ValueError(f"ENCRYPTION_KEY is all zeros, which is not a real key. {how_to}")
+        return value
 
     # Controls the `Secure` flag on the refresh-token cookie. Browsers
     # (Chromium/Electron included) silently REFUSE to store a cookie

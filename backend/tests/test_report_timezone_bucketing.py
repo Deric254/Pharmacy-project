@@ -387,3 +387,26 @@ class TestReportTimezoneBucketing:
             f"Jan 14th report: {jan14_body}"
         )
         assert jan14_body["revenue"] == 10.0
+
+
+async def test_an_unusable_saved_timezone_falls_back_to_utc_but_says_so(caplog):
+    from types import SimpleNamespace
+
+    from app.core import business_time
+
+    class FakeConfigService:
+        def __init__(self, _db):
+            pass
+
+        async def get(self):
+            return SimpleNamespace(timezone="Not/A_Zone")
+
+    original = business_time.BusinessConfigService
+    business_time.BusinessConfigService = FakeConfigService
+    try:
+        zone = await business_time.get_business_timezone(None)
+    finally:
+        business_time.BusinessConfigService = original
+
+    assert str(zone) == "UTC"
+    assert "Not/A_Zone" in caplog.text and "falling back to UTC" in caplog.text

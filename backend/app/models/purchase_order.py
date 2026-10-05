@@ -4,7 +4,7 @@ import enum
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, func
+from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -59,6 +59,15 @@ class PurchaseOrderItem(Base):
     """
 
     __tablename__ = "purchase_order_items"
+    # Database-level rules, listed in app/core/integrity_rules.py (migration 0039).
+    __table_args__ = (
+        CheckConstraint("quantity_ordered > 0", name="ck_purchase_order_items_ordered_positive"),
+        CheckConstraint("quantity_received >= 0", name="ck_purchase_order_items_received_nonneg"),
+        CheckConstraint(
+            "unit_cost_expected >= 0 AND unit_cost_actual >= 0",
+            name="ck_purchase_order_items_costs_nonneg",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     purchase_order_id: Mapped[int] = mapped_column(ForeignKey("purchase_orders.id"), index=True)

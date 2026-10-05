@@ -26,8 +26,8 @@ async def main(num_sales: int) -> None:
     import os
 
     os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:////tmp/load_test.db")
-    os.environ.setdefault("JWT_SECRET_KEY", "load-test-secret")
-    os.environ.setdefault("ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+    os.environ.setdefault("JWT_SECRET_KEY", "load-test-secret-0123456789-0123456789")
+    os.environ.setdefault("ENCRYPTION_KEY", "cGhhcm1hY3ktZXJwLXRlc3Qta2V5LTAxMjM0NTY3ODk=")
     os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
     db_path = "/tmp/load_test.db"

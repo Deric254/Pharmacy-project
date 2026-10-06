@@ -26,6 +26,50 @@ _AES_KEY_BYTES = 32
 # would mean every install shares a publicly known signing key.
 _PLACEHOLDER_PREFIX = "changeme"
 
+# The values Settings accepts for these two fields. Kept here as plain tuples
+# so the desktop launcher can tell a stray, unusable machine-wide variable
+# from a real setting without constructing Settings (a test asserts these
+# match the Literal types below).
+ALLOWED_ENVIRONMENTS = ("development", "staging", "production")
+ALLOWED_REDIS_MODES = ("redis", "memory")
+
+
+def jwt_secret_problem(value: str) -> str | None:
+    """Why this is not an acceptable JWT secret, or None if it is."""
+    if value.lower().startswith(_PLACEHOLDER_PREFIX):
+        return (
+            "JWT_SECRET_KEY is still the .env.example placeholder. Generate one with: "
+            'python -c "import secrets; print(secrets.token_hex(32))"'
+        )
+    if len(value) < MIN_JWT_SECRET_LENGTH:
+        return (
+            f"JWT_SECRET_KEY must be at least {MIN_JWT_SECRET_LENGTH} characters. "
+            'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
+        )
+    return None
+
+
+def encryption_key_problem(value: str) -> str | None:
+    """Why this is not an acceptable AES-256 key, or None if it is."""
+    how_to = (
+        'Generate one with: python -c "import os,base64; '
+        'print(base64.b64encode(os.urandom(32)).decode())"'
+    )
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        return f"ENCRYPTION_KEY is not valid base64. {how_to}"
+    if len(decoded) != _AES_KEY_BYTES:
+        return (
+            f"ENCRYPTION_KEY must decode to exactly {_AES_KEY_BYTES} bytes "
+            f"(AES-256), got {len(decoded)}. {how_to}"
+        )
+    if not any(decoded):
+        # 32 zero bytes is the most guessable key there is: anything
+        # encrypted with it is effectively not encrypted at all.
+        return f"ENCRYPTION_KEY is all zeros, which is not a real key. {how_to}"
+    return None
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
@@ -81,16 +125,9 @@ class Settings(BaseSettings):
     @field_validator("jwt_secret_key")
     @classmethod
     def _jwt_secret_must_be_real(cls, value: str) -> str:
-        if value.lower().startswith(_PLACEHOLDER_PREFIX):
-            raise ValueError(
-                "JWT_SECRET_KEY is still the .env.example placeholder. Generate one with: "
-                'python -c "import secrets; print(secrets.token_hex(32))"'
-            )
-        if len(value) < MIN_JWT_SECRET_LENGTH:
-            raise ValueError(
-                f"JWT_SECRET_KEY must be at least {MIN_JWT_SECRET_LENGTH} characters. "
-                'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
-            )
+        problem = jwt_secret_problem(value)
+        if problem:
+            raise ValueError(problem)
         return value
 
     @field_validator("encryption_key")
@@ -98,23 +135,9 @@ class Settings(BaseSettings):
     def _encryption_key_must_be_a_valid_aes_key(cls, value: str) -> str:
         # Checked at startup so a bad key fails loudly now, not on the first
         # backup or AI-key save weeks later.
-        how_to = (
-            'Generate one with: python -c "import os,base64; '
-            'print(base64.b64encode(os.urandom(32)).decode())"'
-        )
-        try:
-            decoded = base64.b64decode(value, validate=True)
-        except (binascii.Error, ValueError) as exc:
-            raise ValueError(f"ENCRYPTION_KEY is not valid base64. {how_to}") from exc
-        if len(decoded) != _AES_KEY_BYTES:
-            raise ValueError(
-                f"ENCRYPTION_KEY must decode to exactly {_AES_KEY_BYTES} bytes "
-                f"(AES-256), got {len(decoded)}. {how_to}"
-            )
-        if not any(decoded):
-            # 32 zero bytes is the most guessable key there is: anything
-            # encrypted with it is effectively not encrypted at all.
-            raise ValueError(f"ENCRYPTION_KEY is all zeros, which is not a real key. {how_to}")
+        problem = encryption_key_problem(value)
+        if problem:
+            raise ValueError(problem)
         return value
 
     # Controls the `Secure` flag on the refresh-token cookie. Browsers

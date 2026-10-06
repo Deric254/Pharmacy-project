@@ -29,6 +29,7 @@ import sys
 import threading
 import time
 import webbrowser
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
@@ -106,9 +107,47 @@ def _write_file_atomically(path: Path, content: str) -> None:
     os.replace(temporary, path)
 
 
+def _discard_unusable_machine_settings(data_dir: Path) -> None:
+    """
+    Unrelated software on a pharmacy PC can leave machine-wide environment
+    variables with these same generic names (ENVIRONMENT especially). The
+    launcher below only fills in a setting that is absent, so a stray value
+    would win -- and with startup validation a stray bad value would stop the
+    app from opening at all. Anything the validation would reject is dropped
+    here so the launcher's own value is used instead; a usable value that was
+    set on purpose is left alone. Only the setting's NAME is ever logged,
+    never its value (two of these are secrets).
+    """
+    from app.core import config
+
+    # uvicorn.run(app, ...) below is a single in-process worker by
+    # construction, so WEB_CONCURRENCY (read only by uvicorn/gunicorn when
+    # launched from their own command line) means nothing here -- but the
+    # in-memory Redis guard would mistake a stray one for a real multi-worker
+    # setup and refuse to start.
+    os.environ.pop("WEB_CONCURRENCY", None)
+
+    def not_allowed(allowed: tuple[str, ...]) -> Callable[[str], str | None]:
+        return lambda value: None if value in allowed else "not an allowed value"
+
+    checks: dict[str, Callable[[str], str | None]] = {
+        "ENVIRONMENT": not_allowed(config.ALLOWED_ENVIRONMENTS),
+        "REDIS_MODE": not_allowed(config.ALLOWED_REDIS_MODES),
+        "JWT_SECRET_KEY": config.jwt_secret_problem,
+        "ENCRYPTION_KEY": config.encryption_key_problem,
+    }
+    for name, problem_with in checks.items():
+        value = os.environ.get(name)
+        if value is not None and problem_with(value):
+            os.environ.pop(name)
+            _log_stage(data_dir, f"ignored-unusable-machine-setting {name}")
+
+
 def _configure_environment(data_dir: Path, port: int) -> None:
     secrets_values = _load_or_create_secrets(data_dir)
     db_path = data_dir / "pharmacy.db"
+
+    _discard_unusable_machine_settings(data_dir)
 
     os.environ.setdefault("ENVIRONMENT", "production")
     os.environ.setdefault("DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
@@ -179,6 +218,7 @@ def _run_migrations(db_path: Path) -> None:
     from alembic import command
     from alembic.config import Config
     from alembic.script import ScriptDirectory
+    from app.core.integrity_rules import DataIntegrityViolation
 
     if getattr(sys, "frozen", False):
         base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
@@ -187,9 +227,82 @@ def _run_migrations(db_path: Path) -> None:
 
     alembic_cfg = Config(str(base / "alembic.ini"))
     alembic_cfg.set_main_option("script_location", str(base / "alembic"))
-    _snapshot_before_upgrade(db_path, ScriptDirectory.from_config(alembic_cfg).get_current_head())
+    head_revision = ScriptDirectory.from_config(alembic_cfg).get_current_head()
+    _snapshot_before_upgrade(db_path, head_revision)
     print("Setting up the database (first run may take a few seconds)...")
-    command.upgrade(alembic_cfg, "head")
+    try:
+        command.upgrade(alembic_cfg, "head")
+    except DataIntegrityViolation:
+        # Migration 0039 refuses -- before changing anything -- when existing
+        # rows already break a rule it would enforce. The rules only ADD
+        # protection; the app runs fine without them, so locking a shop out
+        # of its own till over it would be the worse outcome.
+        if not _refusal_may_be_tolerated(head_revision, _current_revision(db_path)):
+            raise
+        _keep_running_on_current_data(db_path)
+
+
+# Migration 0039 only adds database rules; code at that revision is identical
+# in behaviour on the schema just before it. That is the ONLY situation where
+# running on a not-fully-upgraded database is safe. A later migration may
+# change the schema code depends on, so this must not be widened casually:
+# any refusal not matching exactly this pair is still fatal.
+_TOLERATED_REFUSAL_FROM = "0038_products_category_id_index"
+_TOLERATED_REFUSAL_HEAD = "0039_money_and_stock_checks"
+
+
+def _refusal_may_be_tolerated(head_revision: str | None, current_revision: str | None) -> bool:
+    return head_revision == _TOLERATED_REFUSAL_HEAD and current_revision == _TOLERATED_REFUSAL_FROM
+
+
+def _current_revision(db_path: Path) -> str | None:
+    connection = sqlite3.connect(db_path)
+    try:
+        row = connection.execute("SELECT version_num FROM alembic_version").fetchone()
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        connection.close()
+    return str(row[0]) if row else None
+
+
+def _keep_running_on_current_data(db_path: Path) -> None:
+    """
+    Leaves the data exactly as it is, records which rows break which rules in
+    a file the owner or support can open, and lets the app start. The upgrade
+    is attempted again on every launch, so it completes by itself once those
+    rows have been corrected.
+    """
+    from app.core.integrity_rules import describe_violations, find_violations
+
+    data_dir = db_path.parent
+    report_path = data_dir / "integrity-report.txt"
+    detail = "(could not read the database to list the rows)"
+    connection = None
+    try:
+        connection = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+        detail = describe_violations(connection, find_violations(connection))
+    except sqlite3.Error:
+        pass
+    finally:
+        if connection is not None:
+            connection.close()
+    message = (
+        "Some existing records break data-integrity rules that this version "
+        "adds (for example a negative stock quantity). Your data was NOT "
+        "changed and the app is running normally on it, but those records "
+        "should be reviewed and corrected.\n\n"
+        f"{detail}\n\n"
+        "After correcting them, restart the app: the protection is added "
+        "automatically on the next launch.\n"
+    )
+    with contextlib.suppress(OSError):
+        report_path.write_text(message, encoding="utf-8")
+    _log_stage(data_dir, f"upgrade-skipped-existing-data-breaks-rules report={report_path}")
+    print()
+    print("NOTICE: some existing records need review. The app will run normally.")
+    print(f"        Details: {report_path}")
+    print()
 
 
 def _running_under_electron() -> bool:

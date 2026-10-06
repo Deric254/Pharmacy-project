@@ -38,6 +38,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 
 from alembic import op
+from app.core.integrity_rules import DataIntegrityViolation
 
 revision: str = "0039_money_and_stock_checks"
 down_revision: str | None = "0038_products_category_id_index"
@@ -109,7 +110,7 @@ def _refuse_if_existing_rows_violate() -> None:
             if count:
                 problems.append(f"  - {table}: {count} row(s) break the rule '{rule}' ({name})")
     if problems:
-        raise RuntimeError(
+        raise DataIntegrityViolation(
             "Cannot add the data-integrity rules from migration 0039 because "
             "existing records already break them:\n"
             + "\n".join(problems)

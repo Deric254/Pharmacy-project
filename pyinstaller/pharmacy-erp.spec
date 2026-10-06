@@ -70,6 +70,9 @@ a = Analysis(
     hiddenimports=[
         "app.main",
         "app.models",
+        # Imported by migration 0039 (loaded dynamically by alembic) and by
+        # desktop_main's tolerated-refusal handling.
+        "app.core.integrity_rules",
         "alembic",
         "alembic.op",
         "aiosqlite",

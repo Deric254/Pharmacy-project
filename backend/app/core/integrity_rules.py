@@ -16,6 +16,18 @@ judged once they hold a value.
 
 import sqlite3
 
+SAMPLE_ROWS = 10
+
+
+class DataIntegrityViolation(RuntimeError):
+    """
+    Existing rows already break a rule that a migration is about to enforce.
+    Raised BEFORE the migration changes anything, so the database is exactly
+    as it was. The desktop launcher recognises this one type (and nothing
+    else) so it can keep the shop running instead of refusing to start.
+    """
+
+
 # table -> [(constraint name, rule that must be TRUE for every row)]
 INVARIANTS: dict[str, list[tuple[str, str]]] = {
     "medicine_batches": [
@@ -84,3 +96,19 @@ def find_violations(connection: sqlite3.Connection) -> list[tuple[str, str, str,
             if count:
                 found.append((table, name, rule, int(count)))
     return found
+
+
+def describe_violations(
+    connection: sqlite3.Connection, violations: list[tuple[str, str, str, int]]
+) -> str:
+    """Human-readable lines naming each broken rule and a sample of offending rowids."""
+    lines: list[str] = []
+    for table, name, rule, count in violations:
+        lines.append(f"{table}: {count} row(s) break '{rule}' ({name})")
+        rows = connection.execute(
+            f"SELECT rowid FROM {table} WHERE NOT ({rule}) LIMIT {SAMPLE_ROWS}"  # noqa: S608  # nosec B608
+        ).fetchall()
+        shown = ", ".join(str(row[0]) for row in rows)
+        more = "" if count <= SAMPLE_ROWS else f" (first {SAMPLE_ROWS} of {count})"
+        lines.append(f"    rowid(s): {shown}{more}")
+    return "\n".join(lines)

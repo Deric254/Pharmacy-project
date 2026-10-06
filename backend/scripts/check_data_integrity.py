@@ -20,9 +20,11 @@ from pathlib import Path
 # Allow running as `python scripts/check_data_integrity.py` from backend/.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.core.integrity_rules import INVARIANTS, find_violations  # noqa: E402
-
-SAMPLE_ROWS = 10
+from app.core.integrity_rules import (  # noqa: E402
+    INVARIANTS,
+    describe_violations,
+    find_violations,
+)
 
 
 def main(argv: list[str]) -> int:
@@ -52,14 +54,7 @@ def main(argv: list[str]) -> int:
             return 0
 
         print(f"PROBLEM: {len(violations)} of {rules_checked} rules are broken by existing rows.\n")
-        for table, name, rule, count in violations:
-            print(f"{table}: {count} row(s) break '{rule}' ({name})")
-            rows = connection.execute(
-                f"SELECT rowid FROM {table} WHERE NOT ({rule}) LIMIT {SAMPLE_ROWS}"  # noqa: S608  # nosec B608
-            ).fetchall()
-            shown = ", ".join(str(row[0]) for row in rows)
-            more = "" if count <= SAMPLE_ROWS else f" (first {SAMPLE_ROWS} of {count})"
-            print(f"    rowid(s): {shown}{more}")
+        print(describe_violations(connection, violations))
         print("\nNothing was changed. These rows need to be reviewed and corrected by a person.")
         return 1
     finally:

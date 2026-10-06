@@ -108,6 +108,14 @@ function logDesktopDiagnostic(message) {
   }
 }
 
+// Startup timing trace: one line per phase with milliseconds since this
+// file was first loaded, written to the same desktop.log. Diagnostic only
+// -- it never changes what the app does or when.
+const STARTUP_T0 = Date.now()
+function startupTrace(label) {
+  logDesktopDiagnostic(`startup-trace ${label} +${Date.now() - STARTUP_T0}ms`)
+}
+
 // Electron's own native answer to the exact bug a real report showed:
 // two copies of this app fighting over the same port. Checked before
 // anything else even starts, so a second launch never gets far enough
@@ -205,6 +213,7 @@ function startBackend() {
       PHARMACY_ERP_BACKEND_PORT: String(backendPort),
     }
 
+    startupTrace('spawning-backend')
     if (app.isPackaged) {
       backendProcess = spawn(packagedBackendPath(), [], {
         windowsHide: true, // the entire point: no console window
@@ -225,6 +234,7 @@ function startBackend() {
 
     let spawned = false
     backendProcess.once('spawn', () => {
+      startupTrace('backend-process-spawned')
       spawned = true
       writeBackendPidFile(backendProcess.pid)
       // Resolve WITH the process reference itself, not void -- the
@@ -377,8 +387,11 @@ function createWindow() {
   })
 
   mainWindow.once('ready-to-show', () => {
+    startupTrace('ready-to-show')
     mainWindow.show()
   })
+  mainWindow.webContents.once('did-start-loading', () => startupTrace('page-load-started'))
+  mainWindow.webContents.once('did-finish-load', () => startupTrace('page-load-finished'))
 
   // The only thing in this app that ever calls window.open() is the
   // receipt view (see handleViewReceipt in SalesPage.tsx and PosPage.tsx)
@@ -438,6 +451,7 @@ function createWindow() {
   // launch rather than a slow one.
   setTimeout(() => {
     if (mainWindow && !mainWindow.isVisible()) {
+      startupTrace('show-fallback-fired-after-10s')
       mainWindow.show()
     }
   }, 10000)
@@ -650,6 +664,7 @@ function killPreviousBackendIfAny() {
 }
 
 async function startApp() {
+  startupTrace('app-ready')
   try {
     // Without this, Electron's default behavior for the blob-URL
     // downloads every export and template button uses is to save the
@@ -744,13 +759,16 @@ async function startApp() {
     // killPreviousBackendIfAny()'s own comment for why this is no
     // longer a port/name/commandline scan.
     await killPreviousBackendIfAny()
+    startupTrace('previous-backend-check-done')
     // A fresh, OS-assigned port for this launch -- see getFreePort().
     // Nothing else on the machine can already be bound to it, so
     // there is nothing to wait for here the way the old fixed-port
     // design had to wait for a just-killed process's port to clear.
     backendPort = await getFreePort()
     backendUrl = `http://127.0.0.1:${backendPort}`
+    startupTrace('port-claimed')
     const spawnedBackend = await startBackend()
+    startupTrace('backend-spawn-returned')
     // These three are independent of each other -- clearing session
     // storage never depends on the backend being up, it only needs
     // Electron's own session API, which is available immediately.
@@ -783,12 +801,15 @@ async function startApp() {
     // client (a real browser hitting this backend directly) that
     // isn't going through this Electron startup path at all.
     await Promise.all([
-      waitForBackendHealthy(spawnedBackend),
-      session.defaultSession.clearStorageData({
-        storages: ['serviceworkers', 'cachestorage'],
-      }),
-      session.defaultSession.clearCache(),
+      waitForBackendHealthy(spawnedBackend).then(() => startupTrace('backend-health-ok')),
+      session.defaultSession
+        .clearStorageData({
+          storages: ['serviceworkers', 'cachestorage'],
+        })
+        .then(() => startupTrace('clear-storage-done')),
+      session.defaultSession.clearCache().then(() => startupTrace('clear-cache-done')),
     ])
+    startupTrace('creating-window')
     createWindow()
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

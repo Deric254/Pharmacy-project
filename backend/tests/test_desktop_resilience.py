@@ -27,7 +27,7 @@ from app.core.config import (
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 BEFORE_0039 = "0038_products_category_id_index"
-HEAD_0039 = "0039_money_and_stock_checks"
+HEAD = "0040_drop_unused_po_workflow"
 VALID_JWT = "j" * 40
 VALID_AES = "cGhhcm1hY3ktZXJwLXRlc3Qta2V5LTAxMjM0NTY3ODk="
 
@@ -236,7 +236,7 @@ def test_the_upgrade_completes_by_itself_once_the_rows_are_corrected(tmp_path):
     result = _run_launcher_migration(db_path)
 
     assert result.returncode == 0, result.stderr
-    assert _revision(db_path) == HEAD_0039
+    assert _revision(db_path) == HEAD
 
 
 def test_clean_data_upgrades_normally_and_writes_no_report(tmp_path):
@@ -245,7 +245,7 @@ def test_clean_data_upgrades_normally_and_writes_no_report(tmp_path):
     result = _run_launcher_migration(db_path)
 
     assert result.returncode == 0, result.stderr
-    assert _revision(db_path) == HEAD_0039
+    assert _revision(db_path) == HEAD
     assert not (tmp_path / "integrity-report.txt").exists()
 
 
@@ -267,10 +267,10 @@ def test_any_other_migration_failure_is_still_fatal_and_leaves_nothing_behind(tm
 @pytest.mark.parametrize(
     ("head", "current", "tolerated"),
     [
-        (HEAD_0039, BEFORE_0039, True),
-        ("0040_something_later", BEFORE_0039, False),  # a later migration may need the schema
-        (HEAD_0039, "0037_restore_lost_indexes", False),  # not the one revision known to be safe
-        (HEAD_0039, None, False),
+        (HEAD, BEFORE_0039, True),
+        ("0041_something_later", BEFORE_0039, False),  # a later migration may need the schema
+        (HEAD, "0037_restore_lost_indexes", False),  # not the one revision known to be safe
+        (HEAD, None, False),
         (None, BEFORE_0039, False),
     ],
 )

@@ -13,7 +13,6 @@ import type {
   ProductCoOccurrenceOut,
   ProfitByProductEntry,
   ProfitReportOut,
-  ReceivingDiscrepancyReportOut,
   SalesSummaryOut,
   SeasonalTrendsOut,
   StockRunwayOut,
@@ -36,7 +35,6 @@ type Tab =
   | 'profit'
   | 'expired'
   | 'movers'
-  | 'receiving'
   | 'stocktakes'
   | 'stockRunway'
   | 'coOccurrence'
@@ -47,7 +45,6 @@ const TABS: { id: Tab; label: string; permission: string }[] = [
   { id: 'profit', label: 'Profit', permission: 'reports.view_profit' },
   { id: 'expired', label: 'Expired Stock', permission: 'reports.view' },
   { id: 'movers', label: 'Fast/Slow Movers', permission: 'reports.view' },
-  { id: 'receiving', label: 'Receiving Variance', permission: 'reports.view' },
   { id: 'stocktakes', label: 'Stock Take History', permission: 'reports.view' },
   { id: 'stockRunway', label: 'Stock Runway', permission: 'reports.view' },
   { id: 'coOccurrence', label: 'Frequently Bought Together', permission: 'reports.view' },
@@ -99,7 +96,6 @@ export function ReportsPage() {
       {tab === 'profit' && <ProfitReport />}
       {tab === 'expired' && <ExpiredStockReport />}
       {tab === 'movers' && <MoversReport />}
-      {tab === 'receiving' && <ReceivingReport />}
       {tab === 'stocktakes' && <StockTakeHistoryReport />}
       {tab === 'stockRunway' && <StockRunwayReport />}
       {tab === 'coOccurrence' && <CoOccurrenceReport />}
@@ -465,63 +461,6 @@ function MoverList({ title, entries }: { title: string; entries: string[] }) {
         ))}
         {entries.length === 0 && <li className="text-ink-soft">None</li>}
       </ul>
-    </div>
-  )
-}
-
-function ReceivingReport() {
-  const [data, setData] = useState<ReceivingDiscrepancyReportOut | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    reportsApi
-      .receivingDiscrepancies()
-      .then(setData)
-      .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load report.'))
-  }, [])
-
-  return (
-    <div>
-      {error && <p className="text-sm text-stamp-red">{error}</p>}
-      {data?.recommendation && (
-        <p className="mb-4 border border-stamp-red-soft bg-stamp-red-soft/30 p-2 text-sm text-stamp-red">
-          {data.recommendation}
-        </p>
-      )}
-      {data && (
-        <table className="w-full border border-rule text-sm">
-          <thead>
-            <tr className="border-b border-rule bg-panel text-left">
-              <th className="px-3 py-2">PO</th>
-              <th className="px-3 py-2">Product</th>
-              <th className="px-3 py-2">Ordered</th>
-              <th className="px-3 py-2">Received</th>
-              <th className="px-3 py-2">Variance</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.entries.map((e) => (
-              <tr key={e.item_id} className="ruled-row">
-                <td className="px-3 py-2">#{e.purchase_order_id}</td>
-                <td className="px-3 py-2">{e.product_name}</td>
-                <td className="figure px-3 py-2">{e.quantity_ordered}</td>
-                <td className="figure px-3 py-2">{e.quantity_received}</td>
-                <td className={`figure px-3 py-2 ${e.variance < 0 ? 'text-stamp-red' : 'text-stamp-green'}`}>
-                  {e.variance > 0 ? '+' : ''}
-                  {e.variance}
-                </td>
-              </tr>
-            ))}
-            {data.entries.length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-3 py-4 text-center text-ink-soft">
-                  No receiving discrepancies.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      )}
     </div>
   )
 }

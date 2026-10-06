@@ -71,21 +71,6 @@ class FastSlowMoversOut(BaseModel):
     never_sold: list[NeverSoldEntry]
 
 
-class ReceivingDiscrepancyEntry(BaseModel):
-    purchase_order_id: int
-    item_id: int
-    product_id: int
-    product_name: str
-    quantity_ordered: int
-    quantity_received: int
-    variance: int
-
-
-class ReceivingDiscrepancyReportOut(BaseModel):
-    entries: list[ReceivingDiscrepancyEntry]
-    recommendation: str
-
-
 class StockTakeHistoryEntry(BaseModel):
     stock_take_id: int
     started_at: datetime

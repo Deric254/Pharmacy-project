@@ -15,19 +15,13 @@ if TYPE_CHECKING:
 
 
 class PurchaseOrderStatus(enum.StrEnum):
-    DRAFT = "DRAFT"
-    SENT = "SENT"
-    IN_TRANSIT = "IN_TRANSIT"
     RECEIVED = "RECEIVED"
-    RECONCILED = "RECONCILED"
 
 
 class PurchaseOrder(Base):
     """
-    A real state machine, not a free-text status field -- legal
-    transitions are enforced in PurchasingService, not left to whatever
-    a client happens to send. `version` supports optimistic locking so
-    two people can't push conflicting transitions through at once.
+    A purchase receipt. quick_purchase is the only thing that creates one,
+    and always as RECEIVED -- see purchasing_service.py.
     """
 
     __tablename__ = "purchase_orders"
@@ -35,27 +29,21 @@ class PurchaseOrder(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id"), index=True)
     status: Mapped[PurchaseOrderStatus] = mapped_column(
-        Enum(PurchaseOrderStatus), default=PurchaseOrderStatus.DRAFT
+        Enum(PurchaseOrderStatus), default=PurchaseOrderStatus.RECEIVED
     )
     created_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     notes: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    version: Mapped[int] = mapped_column(Integer, default=1)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    in_transit_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    reconciled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     items: Mapped[list[PurchaseOrderItem]] = relationship(lazy="selectin")
 
 
 class PurchaseOrderItem(Base):
     """
-    quantity_received/unit_cost_actual/batch_id are null until the
-    Received transition -- that's the receiving step, where actual
-    quantity and cost may differ from what was ordered (a receiving
-    variance), and a new MedicineBatch row is created for it.
+    quick_purchase sets quantity_received equal to quantity_ordered and
+    fills unit_cost_actual and batch_id at the same moment.
     """
 
     __tablename__ = "purchase_order_items"

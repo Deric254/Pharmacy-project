@@ -242,13 +242,15 @@ def _run_migrations(db_path: Path) -> None:
         _keep_running_on_current_data(db_path)
 
 
-# Migration 0039 only adds database rules; code at that revision is identical
-# in behaviour on the schema just before it. That is the ONLY situation where
-# running on a not-fully-upgraded database is safe. A later migration may
-# change the schema code depends on, so this must not be widened casually:
-# any refusal not matching exactly this pair is still fatal.
+# Migration 0039 only adds database rules, and the migration after it (0040)
+# only drops purchase-order columns and statuses the app no longer reads or
+# writes; code at that revision is identical in behaviour on the schema just
+# before 0039. That is the ONLY situation where running on a not-fully-upgraded
+# database is safe. A later migration may change the schema code depends on, so
+# this must not be widened casually: any refusal not matching exactly this pair
+# is still fatal.
 _TOLERATED_REFUSAL_FROM = "0038_products_category_id_index"
-_TOLERATED_REFUSAL_HEAD = "0039_money_and_stock_checks"
+_TOLERATED_REFUSAL_HEAD = "0040_drop_unused_po_workflow"
 
 
 def _refusal_may_be_tolerated(head_revision: str | None, current_revision: str | None) -> bool:

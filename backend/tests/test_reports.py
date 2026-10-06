@@ -20,7 +20,6 @@ from app.core.database import AsyncSessionLocal
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
 from app.models.stock_movement import MovementType, StockMovement
-from app.models.supplier import Supplier
 
 
 async def _login(client, username: str, password: str) -> str:
@@ -594,57 +593,6 @@ class TestSeasonalTrends:
             "/api/v1/reports/seasonal-trends", headers={"Authorization": f"Bearer {token}"}
         )
         assert r.status_code == 403
-
-
-class TestReceivingDiscrepancies:
-    async def test_quick_purchase_never_produces_a_discrepancy(self, client, owner_user):
-        """
-        This report used to be populated by the old receive endpoint,
-        which tracked ordered vs. actually-received quantity as two
-        separate numbers -- a real discrepancy was possible if a
-        shipment came up short. quick_purchase (the only way stock
-        enters the app now -- see purchasing_service.py's docstring)
-        has no such distinction: "what you type in is what you got",
-        quantity_ordered and quantity_received are always set to the
-        exact same value. So the real, current invariant this report
-        needs to hold is the opposite of what it used to test: a
-        normal purchase must never appear here, not even with a
-        deliberately unusual quantity.
-        """
-        async with AsyncSessionLocal() as db:
-            supplier = Supplier(name="Discrepancy Test Supplier")
-            db.add(supplier)
-            await db.flush()
-            product = Product(name="Discrepancy Test Product")
-            db.add(product)
-            await db.commit()
-            supplier_id, product_id = int(supplier.id), int(product.id)
-
-        token = await _login(client, "lucy", "S3curePass!")
-        headers = {"Authorization": f"Bearer {token}"}
-
-        po = await client.post(
-            "/api/v1/purchase-orders/quick-purchase",
-            json={
-                "supplier_id": supplier_id,
-                "lines": [
-                    {
-                        "product_id": product_id,
-                        "quantity": 90,
-                        "batch_number": "SHORT",
-                        "expiry_date": "2097-01-01",
-                        "unit_cost": 5.0,
-                        "selling_price": 9.0,
-                    }
-                ],
-            },
-            headers=headers,
-        )
-        assert po.status_code == 201, po.text
-
-        r = await client.get("/api/v1/reports/receiving-discrepancies", headers=headers)
-        assert r.status_code == 200
-        assert r.json()["entries"] == []
 
 
 class TestStockTakeHistory:

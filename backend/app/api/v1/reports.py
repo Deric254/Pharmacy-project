@@ -17,7 +17,6 @@ from app.schemas.reports import (
     ProductCoOccurrenceOut,
     ProfitByProductEntry,
     ProfitReportOut,
-    ReceivingDiscrepancyReportOut,
     RevenuePotentialOut,
     RevenueTrendOut,
     SeasonalTrendsOut,
@@ -351,17 +350,6 @@ async def seasonal_trends(
     days: int = Query(default=730, ge=1),
 ) -> SeasonalTrendsOut:
     return await ReportService(db).seasonal_trends(days=days)
-
-
-@router.get(
-    "/receiving-discrepancies",
-    response_model=ReceivingDiscrepancyReportOut,
-    dependencies=[Depends(require_permission("reports.view"))],
-)
-async def receiving_discrepancies(
-    db: Annotated[AsyncSession, Depends(get_db)],
-) -> ReceivingDiscrepancyReportOut:
-    return await ReportService(db).receiving_discrepancies()
 
 
 @router.get(

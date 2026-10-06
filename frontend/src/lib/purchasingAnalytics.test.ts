@@ -25,10 +25,7 @@ function po(items: ReturnType<typeof item>[]): PurchaseOrderOut {
     created_by_user_id: 1,
     notes: null,
     created_at: '2026-01-01T00:00:00Z',
-    sent_at: null,
-    in_transit_at: null,
     received_at: null,
-    reconciled_at: null,
     items,
   }
 }

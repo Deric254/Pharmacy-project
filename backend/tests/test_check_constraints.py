@@ -329,7 +329,7 @@ def test_a_failure_part_way_through_the_upgrade_leaves_the_database_exactly_as_i
 
     _alembic(db_path, "upgrade", "head")  # a clean retry now succeeds in full
 
-    assert _revision(db_path) == "0039_money_and_stock_checks"
+    assert _revision(db_path) == "0040_drop_unused_po_workflow"
     assert _check_names(db_path) == _all_constraint_names()
 
 

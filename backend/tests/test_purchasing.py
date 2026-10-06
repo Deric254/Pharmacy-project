@@ -275,8 +275,6 @@ class TestQuickPurchase:
         body = r.json()
         assert body["status"] == "RECEIVED"
         assert body["received_at"] is not None
-        assert body["sent_at"] is not None
-        assert body["in_transit_at"] is not None
 
         product = await client.get(f"/api/v1/products/{product_id}", headers=headers)
         assert product.json()["total_qty_available"] == 50

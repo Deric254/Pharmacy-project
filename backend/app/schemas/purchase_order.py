@@ -27,10 +27,7 @@ class PurchaseOrderOut(BaseModel):
     created_by_user_id: int
     notes: str | None
     created_at: datetime
-    sent_at: datetime | None
-    in_transit_at: datetime | None
     received_at: datetime | None
-    reconciled_at: datetime | None
     items: list[PurchaseOrderItemOut]
 
     model_config = {"from_attributes": True}

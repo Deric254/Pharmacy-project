@@ -128,15 +128,7 @@ export function PurchasingPage() {
                 <td className="px-3 py-2">{supplierName(suppliers, po.supplier_id)}</td>
                 <td className="figure px-3 py-2">{po.items.length}</td>
                 <td className="px-3 py-2">
-                  <span
-                    className={`px-2 py-0.5 text-xs uppercase tracking-wide ${
-                      po.status === 'RECONCILED'
-                        ? 'bg-stamp-green-soft/40 text-stamp-green'
-                        : po.status === 'RECEIVED'
-                          ? 'bg-brass-soft/30 text-ink'
-                          : 'text-ink-soft'
-                    }`}
-                  >
+                  <span className="bg-brass-soft/30 px-2 py-0.5 text-xs uppercase tracking-wide text-ink">
                     {po.status}
                   </span>
                 </td>

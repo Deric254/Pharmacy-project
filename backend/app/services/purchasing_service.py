@@ -4,13 +4,7 @@ Purchasing service.
 Stock only ever enters through quick_purchase: physically-here stock,
 receipted in one atomic step -- real batches, real stock movements,
 real money owed to the supplier, no draft/sent/in-transit ceremony in
-between. There used to be a full state machine here
-(DRAFT -> SENT -> IN_TRANSIT -> RECEIVED -> RECONCILED) but nothing in
-the app could ever put a PO into any state before RECEIVED (there was
-no "create a draft PO" call wired anywhere in the frontend), so that
-whole pipeline was unreachable dead code sitting alongside the one
-path that actually worked. Removed rather than left as an inert trap
-for the next person who might wire a button up to it.
+between. Every purchase order is therefore created already RECEIVED.
 """
 
 from datetime import UTC, datetime
@@ -60,8 +54,6 @@ class PurchasingService:
             created_by_user_id=user.id,
             notes=payload.notes,
             status=PurchaseOrderStatus.RECEIVED,
-            sent_at=now,
-            in_transit_at=now,
             received_at=now,
         )
         self.db.add(po)

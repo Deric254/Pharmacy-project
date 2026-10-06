@@ -256,7 +256,7 @@ export interface RefundOut {
   items: RefundItemOut[]
 }
 
-export type PurchaseOrderStatus = 'DRAFT' | 'SENT' | 'IN_TRANSIT' | 'RECEIVED' | 'RECONCILED'
+export type PurchaseOrderStatus = 'RECEIVED'
 
 export interface SupplierOut {
   id: number
@@ -325,10 +325,7 @@ export interface PurchaseOrderOut {
   created_by_user_id: number
   notes: string | null
   created_at: string
-  sent_at: string | null
-  in_transit_at: string | null
   received_at: string | null
-  reconciled_at: string | null
   items: PurchaseOrderItemOut[]
 }
 
@@ -631,21 +628,6 @@ export interface SeasonalTrendsOut {
   lookback_days: number
   entries: SeasonalTrendEntry[]
   has_sufficient_history: boolean
-}
-
-export interface ReceivingDiscrepancyEntry {
-  purchase_order_id: number
-  item_id: number
-  product_id: number
-  product_name: string
-  quantity_ordered: number
-  quantity_received: number
-  variance: number
-}
-
-export interface ReceivingDiscrepancyReportOut {
-  entries: ReceivingDiscrepancyEntry[]
-  recommendation: string
 }
 
 export interface StockTakeHistoryEntry {

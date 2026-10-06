@@ -8,7 +8,6 @@ import type {
   ProductCoOccurrenceOut,
   ProfitByProductEntry,
   ProfitReportOut,
-  ReceivingDiscrepancyReportOut,
   RevenuePotentialOut,
   RevenueTrendOut,
   SalesSummaryOut,
@@ -72,8 +71,6 @@ export const reportsApi = {
   expiredStock: () => api.get<ExpiredStockReportOut>('/reports/expired-stock'),
   fastSlowMovers: (days: number, limit: number) =>
     api.get<FastSlowMoversOut>('/reports/fast-slow-movers', { days, limit }),
-  receivingDiscrepancies: () =>
-    api.get<ReceivingDiscrepancyReportOut>('/reports/receiving-discrepancies'),
   stockTakeHistory: () => api.get<StockTakeHistoryOut>('/reports/stock-take-history'),
   stockRunway: (lookbackDays = 30) =>
     api.get<StockRunwayOut>('/reports/stock-runway', { lookback_days: lookbackDays }),

@@ -32,7 +32,6 @@ from app.models.category import Category
 from app.models.customer import Customer
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
-from app.models.purchase_order import PurchaseOrderItem
 from app.models.refund import Refund, RefundItem
 from app.models.sale import Sale, SaleItem
 from app.models.stock_take import StockTake, StockTakeItem, StockTakeStatus
@@ -52,8 +51,6 @@ from app.schemas.reports import (
     ProductPairEntry,
     ProfitByProductEntry,
     ProfitReportOut,
-    ReceivingDiscrepancyEntry,
-    ReceivingDiscrepancyReportOut,
     RevenuePotentialEntry,
     RevenuePotentialOut,
     RevenueTrendOut,
@@ -655,47 +652,6 @@ class ReportService:
         return SeasonalTrendsOut(
             lookback_days=days, entries=entries, has_sufficient_history=has_sufficient_history
         )
-
-    async def receiving_discrepancies(self) -> ReceivingDiscrepancyReportOut:
-        # Only mismatched lines, filtered in SQL -- this used to fetch
-        # every ever-received PO line (the overwhelming majority of
-        # which match exactly and get discarded) just to throw away
-        # everything but the mismatches in a Python list comprehension.
-        # A pharmacy years into receiving stock could have this scan
-        # its entire purchasing history on every single request for a
-        # report that only ever cares about the exceptions.
-        result = await self.db.execute(
-            select(PurchaseOrderItem, Product.name)
-            .join(Product, Product.id == PurchaseOrderItem.product_id)
-            .where(
-                PurchaseOrderItem.quantity_received.is_not(None),
-                PurchaseOrderItem.quantity_received != PurchaseOrderItem.quantity_ordered,
-            )
-        )
-
-        entries = [
-            ReceivingDiscrepancyEntry(
-                purchase_order_id=item.purchase_order_id,
-                item_id=item.id,
-                product_id=item.product_id,
-                product_name=product_name,
-                quantity_ordered=item.quantity_ordered,
-                quantity_received=item.quantity_received,
-                variance=item.quantity_received - item.quantity_ordered,
-            )
-            for item, product_name in result.all()
-        ]
-
-        recommendation = (
-            "No receiving discrepancies on record."
-            if not entries
-            else (
-                f"{len(entries)} line(s) received a different quantity than ordered -- "
-                "review supplier reliability for repeated short-shipments."
-            )
-        )
-
-        return ReceivingDiscrepancyReportOut(entries=entries, recommendation=recommendation)
 
     async def stock_take_history(self) -> StockTakeHistoryOut:
         """

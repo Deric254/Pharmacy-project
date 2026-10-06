@@ -143,3 +143,73 @@ def test_upgrading_renames_existing_case_variant_duplicates_instead_of_failing(t
         3: "ASPIRIN (duplicate #3)",
         4: "Ibuprofen",
     }
+
+
+def _orders_at_0039(tmp_path: Path, statuses: list[str]) -> Path:
+    db_path = tmp_path / "orders.db"
+    _run_alembic(db_path, "upgrade", "0039_money_and_stock_checks")
+    connection = sqlite3.connect(db_path)
+    for order_id, status in enumerate(statuses, start=1):
+        connection.execute(
+            "INSERT INTO purchase_orders (id, supplier_id, status, created_by_user_id,"
+            " received_at, sent_at, in_transit_at, reconciled_at) VALUES"
+            " (?, 1, ?, 1, '2026-01-02 10:00:00', '2026-01-01', '2026-01-01', '2026-01-03')",
+            (order_id, status),
+        )
+        connection.execute(
+            "INSERT INTO purchase_order_items (purchase_order_id, product_id, quantity_ordered,"
+            " unit_cost_expected) VALUES (?, 1, 5, 100)",
+            (order_id,),
+        )
+    connection.commit()
+    connection.close()
+    return db_path
+
+
+def _rows(db_path: Path, sql: str) -> list[tuple]:
+    connection = sqlite3.connect(db_path)
+    try:
+        return connection.execute(sql).fetchall()
+    finally:
+        connection.close()
+
+
+def test_dropping_the_po_workflow_keeps_every_order_and_item(tmp_path):
+    db_path = _orders_at_0039(tmp_path, ["RECEIVED", "RECONCILED"])
+
+    _run_alembic(db_path, "upgrade", "head")
+
+    assert _rows(db_path, "SELECT id, status, received_at FROM purchase_orders ORDER BY id") == [
+        (1, "RECEIVED", "2026-01-02 10:00:00"),
+        (2, "RECEIVED", "2026-01-02 10:00:00"),
+    ]
+    assert _rows(db_path, "SELECT COUNT(*) FROM purchase_order_items") == [(2,)]
+    columns = {row[1] for row in _rows(db_path, "PRAGMA table_info(purchase_orders)")}
+    assert columns.isdisjoint({"sent_at", "in_transit_at", "reconciled_at", "version"})
+
+
+def test_dropping_the_po_workflow_refuses_when_an_order_was_never_received(tmp_path):
+    db_path = _orders_at_0039(tmp_path, ["RECEIVED", "DRAFT"])
+
+    with pytest.raises(subprocess.CalledProcessError):
+        _run_alembic(db_path, "upgrade", "head")
+
+    assert _rows(db_path, "SELECT version_num FROM alembic_version") == [
+        ("0039_money_and_stock_checks",)
+    ]
+    assert _rows(db_path, "SELECT id, status FROM purchase_orders ORDER BY id") == [
+        (1, "RECEIVED"),
+        (2, "DRAFT"),
+    ]
+
+
+def test_the_po_workflow_downgrade_restores_the_columns(tmp_path):
+    db_path = _orders_at_0039(tmp_path, ["RECEIVED"])
+    _run_alembic(db_path, "upgrade", "head")
+
+    _run_alembic(db_path, "downgrade", "0039_money_and_stock_checks")
+
+    assert _rows(
+        db_path, "SELECT status, version, sent_at, in_transit_at FROM purchase_orders"
+    ) == [("RECEIVED", 1, "2026-01-02 10:00:00", "2026-01-02 10:00:00")]
+    assert _rows(db_path, "SELECT COUNT(*) FROM purchase_order_items") == [(1,)]

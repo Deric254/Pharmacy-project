@@ -71,10 +71,7 @@ function poWithItems(
     created_by_user_id: 1,
     notes: null,
     created_at: '2026-01-01T00:00:00Z',
-    sent_at: '2026-01-01T00:00:00Z',
-    in_transit_at: '2026-01-01T00:00:00Z',
     received_at: '2026-01-01T00:00:00Z',
-    reconciled_at: null,
     items,
     ...overrides,
   }

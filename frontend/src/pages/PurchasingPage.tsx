@@ -3,7 +3,7 @@ import { productsApi, purchaseOrdersApi, suppliersApi } from '../api/domain'
 import { useAuthStore } from '../auth/store'
 import { useConfigStore } from '../config/store'
 import { useCurrencyFormatter } from '../lib/currency'
-import { fallbackTimezone } from '../lib/businessDate'
+import { businessToday, fallbackTimezone, isUnsellableExpiry } from '../lib/businessDate'
 import { presetRange, type DateRangePreset } from '../lib/dateRangePresets'
 import { DateRangePicker } from '../components/DateRangePicker'
 import { categorySpendBreakdown } from '../lib/purchasingAnalytics'
@@ -636,6 +636,7 @@ function QuickPurchaseModal({
   onClose: () => void
   onReceived: () => void
 }) {
+  const timezone = useConfigStore((s) => s.config?.timezone) ?? fallbackTimezone()
   const [supplierId, setSupplierId] = useState<number | ''>(suppliers[0]?.id ?? '')
   const [sessionBatchNumber] = useState(generateSessionBatchNumber)
   const [lines, setLines] = useState<QuickPurchaseLineDraft[]>([
@@ -709,6 +710,22 @@ function QuickPurchaseModal({
     }
     if (validLines.some((l) => !l.batchNumber.trim() || !l.expiryDate)) {
       setError('Every line needs a batch number and expiry date.')
+      return
+    }
+    // A mistyped year (2025 for 2027) would otherwise create stock nobody can
+    // sell, owed to the supplier, with the cashier only seeing "insufficient
+    // stock". The server allows it on purpose (an admin can correct a batch's
+    // date later), so ask here, before anything is recorded.
+    const today = businessToday(timezone)
+    const unsellable = validLines.filter((l) => isUnsellableExpiry(l.expiryDate, today))
+    if (
+      unsellable.length > 0 &&
+      !window.confirm(
+        `${unsellable.length} line(s) have an expiry date that is today or already past ` +
+          `(${unsellable.map((l) => l.expiryDate).join(', ')}). That stock cannot be sold. ` +
+          'Check the year for a typo.\n\nReceive it anyway?',
+      )
+    ) {
       return
     }
     submittingRef.current = true

@@ -30,7 +30,10 @@ def _settings(**overrides) -> Settings:
     return Settings(_env_file=None, **values)
 
 
-def test_valid_configuration_is_accepted():
+def test_valid_configuration_is_accepted(monkeypatch):
+    # Defaults only: a REDIS_MODE / ENVIRONMENT left in the shell must not leak in.
+    monkeypatch.delenv("REDIS_MODE", raising=False)
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
     settings = _settings()
     assert settings.environment == "development"
     assert settings.redis_mode == "redis"

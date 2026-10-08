@@ -49,7 +49,6 @@ from app.api.v1.sales import router as sales_router
 from app.api.v1.setup import router as setup_router
 from app.api.v1.stock_takes import router as stock_takes_router
 from app.api.v1.suppliers import router as suppliers_router
-from app.api.v1.updates import router as updates_router
 from app.api.v1.users import router as users_router
 from app.api.v1.websocket import router as websocket_router
 from app.core.config import get_settings
@@ -260,7 +259,6 @@ app.include_router(roles_router, prefix=settings.api_v1_prefix)
 app.include_router(setup_router, prefix=settings.api_v1_prefix)
 app.include_router(audit_logs_router, prefix=settings.api_v1_prefix)
 app.include_router(websocket_router, prefix=settings.api_v1_prefix)
-app.include_router(updates_router, prefix=settings.api_v1_prefix)
 
 
 @app.get("/health", tags=["health"])

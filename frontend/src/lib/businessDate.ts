@@ -40,3 +40,12 @@ export function startOfMonth(isoDate: string): string {
   const { year, month } = fromIsoDate(isoDate)
   return toIsoDate({ year, month, day: 1 })
 }
+
+/**
+ * True when stock with this expiry date can no longer be sold on `today`
+ * (the backend only sells batches whose expiry is strictly after today).
+ * Both arguments are ISO dates, which compare correctly as plain strings.
+ */
+export function isUnsellableExpiry(expiryDate: string, today: string): boolean {
+  return expiryDate <= today
+}

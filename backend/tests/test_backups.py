@@ -476,6 +476,45 @@ class TestRestoreKeepsForeignKeysEnforced:
         assert surviving == 1  # the failed restore rolled back; nothing was lost
 
 
+class TestRestoreRefusesInternallyInconsistentBackups:
+    async def test_a_backup_with_a_batch_pointing_at_a_missing_product_is_refused_whole(
+        self, owner_user
+    ):
+        async with AsyncSessionLocal() as db:
+            product = Product(name="Consistency Product")
+            db.add(product)
+            await db.flush()
+            db.add(
+                MedicineBatch(
+                    product_id=product.id,
+                    batch_number="B1",
+                    expiry_date=date(2097, 1, 1),
+                    qty_received=10,
+                    qty_remaining=10,
+                    cost_price=1.0,
+                    selling_price=2.0,
+                )
+            )
+            await db.commit()
+            dump = await dump_all_tables(db)
+
+        dump["medicine_batches"][0]["product_id"] = 999_999  # parent does not exist
+
+        async with AsyncSessionLocal() as db:
+            with pytest.raises(HTTPException) as caught:
+                await restore_all_tables(db, dump)
+        assert caught.value.status_code == 400
+        assert "medicine_batches" in str(caught.value.detail)
+
+        # Nothing was lost: the live product and batch are still there.
+        async with AsyncSessionLocal() as db:
+            products = (await db.execute(select(func.count()).select_from(Product))).scalar_one()
+            batches = (
+                await db.execute(select(func.count()).select_from(MedicineBatch))
+            ).scalar_one()
+        assert (products, batches) == (1, 1)
+
+
 class TestRestoringAnOlderBackupKeepsNewerPermissions:
     """
     Permissions are seeded by migrations, and alembic will not re-run one

@@ -52,7 +52,7 @@ class TestFEFOSelection:
                 db,
                 [
                     ("FAR", "2098-01-01", 50),
-                    ("NEAR", (date.today() + timedelta(days=1)).isoformat(), 50),
+                    ("NEAR", (date.today() + timedelta(days=2)).isoformat(), 50),
                     ("MID", "2097-01-01", 50),
                 ],
             )
@@ -69,7 +69,7 @@ class TestFEFOSelection:
             product_id = await _make_product_with_batches(
                 db,
                 [
-                    ("NEAR", (date.today() + timedelta(days=1)).isoformat(), 5),
+                    ("NEAR", (date.today() + timedelta(days=2)).isoformat(), 5),
                     ("MID", "2097-01-01", 20),
                 ],
             )
@@ -98,7 +98,7 @@ class TestFEFOSelection:
             product_id = await _make_product_with_batches(
                 db,
                 [
-                    ("EMPTY", (date.today() + timedelta(days=1)).isoformat(), 0),
+                    ("EMPTY", (date.today() + timedelta(days=2)).isoformat(), 0),
                     ("HAS_STOCK", "2097-01-01", 20),
                 ],
             )
@@ -121,7 +121,7 @@ class TestApplyAllocations:
             product_id = await _make_product_with_batches(
                 db,
                 [
-                    ("NEAR", (date.today() + timedelta(days=1)).isoformat(), 5),
+                    ("NEAR", (date.today() + timedelta(days=2)).isoformat(), 5),
                     ("MID", "2097-01-01", 20),
                 ],
             )

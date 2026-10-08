@@ -14,6 +14,7 @@ import json
 from datetime import date, datetime
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy import Table, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -157,6 +158,7 @@ async def restore_all_tables(db: AsyncSession, dump: dict[str, list[dict[str, An
             total_rows += len(coerced_rows)
 
         await _reapply_grants(db, dump, carried_over_grants)
+        await _refuse_dangling_references(db)
 
         await db.commit()
     except Exception:
@@ -190,3 +192,29 @@ async def _reapply_grants(
     ]
     if missing:
         await db.execute(Base.metadata.tables["role_permissions"].insert(), missing)
+
+
+async def _refuse_dangling_references(db: AsyncSession) -> None:
+    """
+    Foreign keys are off for the whole restore, so nothing has yet checked
+    that the restored rows still point at rows that exist (a sale line
+    whose sale is missing, a batch with no product). A damaged or hand-
+    edited backup would otherwise be accepted silently and surface later
+    as broken reports. Raising here rolls the entire restore back.
+
+    The backup bookkeeping tables are left out of the check on purpose:
+    they are never wiped, so their references into replaced tables (e.g.
+    the user who ran a backup) may legitimately no longer resolve.
+    """
+    result = await db.execute(text("PRAGMA foreign_key_check"))
+    broken = [row for row in result.all() if row[0] not in EXCLUDED_TABLES]
+    if broken:
+        tables = ", ".join(sorted({str(row[0]) for row in broken}))
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Refusing to restore: {len(broken)} restored row(s) in {tables} point at "
+                "records that do not exist in this backup. The file is damaged or was "
+                "edited. Nothing was changed."
+            ),
+        )

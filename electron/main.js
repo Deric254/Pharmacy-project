@@ -150,7 +150,9 @@ function sleep(ms) {
 }
 
 function killOtherInstances() {
-  if (process.platform !== 'win32') return Promise.resolve()
+  // Packaged builds only: in development the executable is the shared
+  // electron.exe, and sweeping by that name could close unrelated dev apps.
+  if (process.platform !== 'win32' || !app.isPackaged) return Promise.resolve()
   const run = (args) =>
     new Promise((resolve) => {
       const p = spawn('taskkill', args, { windowsHide: true })

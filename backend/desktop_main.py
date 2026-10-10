@@ -369,6 +369,83 @@ def _already_running_instance(port: int) -> bool:
         return False
 
 
+_PARENT_GONE_HARD_EXIT_SECONDS = 15
+
+
+def _wait_for_process_exit(pid: int) -> bool:
+    """
+    Blocks until process `pid` has exited. Returns True when it did, False
+    when it could not be watched (so the caller leaves the backend running --
+    wrongly stopping a healthy app is worse than failing to stop an orphan).
+
+    Windows waits on a real process handle (instant, no polling, immune to
+    pid reuse because the handle pins the original process). Elsewhere it
+    polls with signal 0.
+    """
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        synchronize = 0x00100000
+        error_invalid_parameter = 87  # no process with that id exists
+        handle = kernel32.OpenProcess(synchronize, False, pid)
+        if not handle:
+            return ctypes.get_last_error() == error_invalid_parameter
+        try:
+            return kernel32.WaitForSingleObject(handle, 0xFFFFFFFF) == 0
+        finally:
+            kernel32.CloseHandle(handle)
+
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False
+        time.sleep(1)
+
+
+def _watch_parent(parent_pid: int, on_parent_gone: Callable[[], None]) -> None:
+    if _wait_for_process_exit(parent_pid):
+        on_parent_gone()
+
+
+def _start_parent_watchdog(server: object) -> None:
+    """
+    When this backend was started by the desktop window and that window
+    process disappears for ANY reason (crash, force-kill, Windows shutting
+    down without letting it clean up), stop serving instead of lingering as
+    an invisible orphan. Orphans are what used to pile up in Task Manager and
+    block the next launch. Shutdown is the normal graceful one (in-flight
+    requests finish, the database closes cleanly); only if that hangs does a
+    hard exit follow. Committed data is safe either way: the database runs
+    in WAL mode with synchronous=FULL, so a hard exit loses nothing committed
+    and rolls back whatever was mid-transaction.
+    """
+    raw = os.environ.get("PHARMACY_ERP_PARENT_PID", "")
+    if not _running_under_electron() or not raw.isdigit() or int(raw) <= 0:
+        return
+
+    def stop() -> None:
+        with contextlib.suppress(Exception):
+            _log_stage(_app_data_dir(), "parent-gone-shutting-down")
+        server.should_exit = True  # type: ignore[attr-defined]
+        timer = threading.Timer(_PARENT_GONE_HARD_EXIT_SECONDS, lambda: os._exit(0))
+        timer.daemon = True
+        timer.start()
+
+    threading.Thread(
+        target=_watch_parent, args=(int(raw), stop), daemon=True, name="parent-watchdog"
+    ).start()
+
+
 def _port_is_available(port: int) -> bool:
     """
     A real bind-and-release probe, not a guess -- this exists because
@@ -515,7 +592,11 @@ def main() -> None:
 
     _log_stage(data_dir, "uvicorn-starting")
     try:
-        uvicorn.run(app, host=_BIND_HOST, port=port, log_level="warning")
+        server = uvicorn.Server(
+            uvicorn.Config(app, host=_BIND_HOST, port=port, log_level="warning")
+        )
+        _start_parent_watchdog(server)
+        server.run()
     except OSError as exc:
         if exc.errno in (10048, 98):  # Windows / POSIX "address already in use"
             print()

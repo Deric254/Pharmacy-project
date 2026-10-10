@@ -125,15 +125,92 @@ function startupTrace(label) {
 // (desktop_main.py's _already_running_instance) -- that one protects
 // someone running the raw exe directly outside Electron; this one
 // protects the packaged app specifically.
-const gotSingleInstanceLock = app.requestSingleInstanceLock()
+let splashWindow = null
+let quitting = false
+
+// How a second launch proves to itself that the first instance is alive
+// and showing something: it passes a file path as additionalData, and the
+// first instance writes that file once it has focused a visible window.
+// No ack = the old instance is stuck or window-less, so the new launch
+// offers to restart it instead of silently quitting (the old behaviour,
+// which looked exactly like "I click the icon and nothing happens").
+function ackFilePath() {
+  return path.join(app.getPath('userData'), `launch-ack-${process.pid}.flag`)
+}
+
+function liveWindow() {
+  for (const w of [mainWindow, splashWindow]) {
+    if (w && !w.isDestroyed() && (w.isVisible() || w.isMinimized())) return w
+  }
+  return null
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function killOtherInstances() {
+  if (process.platform !== 'win32') return Promise.resolve()
+  const run = (args) =>
+    new Promise((resolve) => {
+      const p = spawn('taskkill', args, { windowsHide: true })
+      p.on('error', resolve)
+      p.on('exit', resolve)
+    })
+  return run([
+    '/F', '/T', '/FI', `PID ne ${process.pid}`, '/IM', path.basename(process.execPath),
+  ]).then(() => run(['/F', '/T', '/IM', 'Pharmacy-ERP.exe']))
+}
+
+async function handleDeniedLaunch(ackFile) {
+  const deadline = Date.now() + 3000
+  while (Date.now() < deadline) {
+    if (fs.existsSync(ackFile)) {
+      try { fs.rmSync(ackFile, { force: true }) } catch { /* ignore */ }
+      app.quit()
+      return
+    }
+    await sleep(150)
+  }
+  await app.whenReady()
+  logDesktopDiagnostic('second-launch-no-ack: existing instance has no visible window')
+  const { response } = await dialog.showMessageBox({
+    type: 'warning',
+    buttons: ['Restart Pharmacy ERP', 'Cancel'],
+    defaultId: 0,
+    cancelId: 1,
+    title: 'Pharmacy ERP',
+    message: 'Pharmacy ERP is already running, but it has no window.',
+    detail: 'A previous session did not close properly. Restart will close it and open the app fresh. No data is lost.',
+  })
+  if (response === 0) {
+    await killOtherInstances()
+    await sleep(1500)
+    app.relaunch()
+    app.exit(0)
+  } else {
+    app.quit()
+  }
+}
+
+fs.mkdirSync(app.getPath('userData'), { recursive: true })
+const myAckFile = ackFilePath()
+const gotSingleInstanceLock = app.requestSingleInstanceLock({ ackFile: myAckFile })
 
 if (!gotSingleInstanceLock) {
-  app.quit()
+  handleDeniedLaunch(myAckFile)
 } else {
-  app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore()
-      mainWindow.focus()
+  app.on('second-instance', (_event, _argv, _cwd, additionalData) => {
+    const win = liveWindow()
+    if (!win) return // no ack: the new launch will offer a restart
+    if (win.isMinimized()) win.restore()
+    win.focus()
+    const ack = additionalData && additionalData.ackFile
+    if (
+      typeof ack === 'string' &&
+      path.dirname(path.resolve(ack)) === path.resolve(app.getPath('userData'))
+    ) {
+      try { fs.writeFileSync(ack, '1') } catch { /* ignore */ }
     }
   })
 
@@ -152,10 +229,12 @@ if (!gotSingleInstanceLock) {
     // very next launch inherits an orphan holding the port. This is
     // the normal, everyday way this app closes, so this path matters
     // more than the startup-failure one below.
+    beginQuit()
     stopBackend().then(() => app.quit())
   })
 
   app.on('before-quit', (event) => {
+    beginQuit()
     if (backendProcess === null) return
     // Delay Electron's own shutdown until the kill is confirmed, same
     // reasoning as window-all-closed above -- before-quit can fire
@@ -164,6 +243,51 @@ if (!gotSingleInstanceLock) {
     event.preventDefault()
     stopBackend().then(() => app.quit())
   })
+}
+
+// Once quitting starts, a hard exit is guaranteed shortly after, so a hung
+// taskkill or cleanup can never leave a window-less Pharmacy ERP process
+// behind holding the single-instance lock.
+function beginQuit() {
+  if (quitting) return
+  quitting = true
+  setTimeout(() => app.exit(0), 8000).unref()
+}
+
+function createSplash() {
+  if (splashWindow) return
+  splashWindow = new BrowserWindow({
+    width: 380,
+    height: 210,
+    frame: false,
+    resizable: false,
+    center: true,
+    show: true,
+    backgroundColor: '#f7f3ec',
+    title: 'Pharmacy ERP',
+    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+  })
+  const html = `<body style="margin:0;font-family:Segoe UI,sans-serif;background:#f7f3ec;color:#333;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh">
+    <div style="font-size:22px;font-weight:600">Pharmacy ERP</div>
+    <div id="m" style="margin-top:12px;font-size:14px">Starting, please wait...</div></body>`
+  splashWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
+  splashWindow.webContents.on('will-navigate', (e) => e.preventDefault())
+  splashWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  splashWindow.on('closed', () => { splashWindow = null })
+  setTimeout(() => {
+    if (splashWindow && !splashWindow.isDestroyed()) {
+      splashWindow.webContents
+        .executeJavaScript(
+          "document.getElementById('m').textContent='Still starting... this can take up to a minute after an update.'",
+        )
+        .catch(() => {})
+    }
+  }, 20000)
+}
+
+function closeSplash() {
+  if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close()
 }
 
 /**
@@ -211,6 +335,7 @@ function startBackend() {
       ...process.env,
       PHARMACY_ERP_ELECTRON: '1',
       PHARMACY_ERP_BACKEND_PORT: String(backendPort),
+      PHARMACY_ERP_PARENT_PID: String(process.pid),
     }
 
     startupTrace('spawning-backend')
@@ -389,6 +514,7 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     startupTrace('ready-to-show')
     mainWindow.show()
+    closeSplash()
   })
   mainWindow.webContents.once('did-start-loading', () => startupTrace('page-load-started'))
   mainWindow.webContents.once('did-finish-load', () => startupTrace('page-load-finished'))
@@ -453,6 +579,7 @@ function createWindow() {
     if (mainWindow && !mainWindow.isVisible()) {
       startupTrace('show-fallback-fired-after-10s')
       mainWindow.show()
+      closeSplash()
     }
   }, 10000)
 
@@ -665,6 +792,7 @@ function killPreviousBackendIfAny() {
 
 async function startApp() {
   startupTrace('app-ready')
+  createSplash()
   try {
     // Without this, Electron's default behavior for the blob-URL
     // downloads every export and template button uses is to save the
@@ -812,6 +940,8 @@ async function startApp() {
     startupTrace('creating-window')
     createWindow()
   } catch (err) {
+    if (quitting) return
+    if (splashWindow && !splashWindow.isDestroyed()) splashWindow.hide()
     const message = err instanceof Error ? err.message : String(err)
     const stack = err instanceof Error ? err.stack : undefined
     logDesktopDiagnostic(`startup-error ${stack ?? message}`)

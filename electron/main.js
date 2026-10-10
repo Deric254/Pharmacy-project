@@ -169,6 +169,7 @@ async function handleDeniedLaunch(ackFile) {
   while (Date.now() < deadline) {
     if (fs.existsSync(ackFile)) {
       try { fs.rmSync(ackFile, { force: true }) } catch { /* ignore */ }
+      logDesktopDiagnostic('second-launch-handed-to-running-instance')
       app.quit()
       return
     }
@@ -231,8 +232,12 @@ if (!gotSingleInstanceLock) {
     // very next launch inherits an orphan holding the port. This is
     // the normal, everyday way this app closes, so this path matters
     // more than the startup-failure one below.
+    logDesktopDiagnostic('window-all-closed')
     beginQuit()
-    stopBackend().then(() => app.quit())
+    stopBackend().then(() => {
+      logDesktopDiagnostic('backend-stopped')
+      app.quit()
+    })
   })
 
   app.on('before-quit', (event) => {
@@ -253,7 +258,11 @@ if (!gotSingleInstanceLock) {
 function beginQuit() {
   if (quitting) return
   quitting = true
-  setTimeout(() => app.exit(0), 8000).unref()
+  logDesktopDiagnostic('quit-begin')
+  setTimeout(() => {
+    logDesktopDiagnostic('quit-hard-exit-fired')
+    app.exit(0)
+  }, 8000).unref()
 }
 
 function createSplash() {

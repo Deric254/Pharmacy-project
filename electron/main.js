@@ -88,6 +88,18 @@ app.setName('PharmacyERP')
 // %APPDATA%\\PharmacyERP location instead of the package name directory.
 app.setPath('userData', path.join(app.getPath('appData'), 'PharmacyERP'))
 
+// Software rendering, on purpose. A real report showed the splash and then
+// the main window painting as an empty white (later dark) rectangle on a
+// real Windows PC while the page behind it was demonstrably alive (its title
+// had been set by the app after loading its config). That is the signature
+// of the GPU/compositor path failing to present frames, which this app has
+// no use for: it is forms, tables and a receipt PDF, not video or 3D. Turning
+// it off makes every PC use the same plain, predictable drawing path instead
+// of whatever each graphics driver does. Must run before the app is ready.
+// Every automated GUI test already runs this way (no GPU), so this also makes
+// the real app match what the tests check.
+app.disableHardwareAcceleration()
+
 let backendProcess = null
 let mainWindow = null
 // The one installer URL the updater IPC has approved. A download counts as the
@@ -115,6 +127,12 @@ const STARTUP_T0 = Date.now()
 function startupTrace(label) {
   logDesktopDiagnostic(`startup-trace ${label} +${Date.now() - STARTUP_T0}ms`)
 }
+
+// A crashed GPU, utility or network helper process is invisible to the user
+// and to every other log line here; this is the only record of it.
+app.on('child-process-gone', (_event, details) => {
+  logDesktopDiagnostic(`child-process-gone ${JSON.stringify(details)}`)
+})
 
 // Electron's own native answer to the exact bug a real report showed:
 // two copies of this app fighting over the same port. Checked before
@@ -507,6 +525,57 @@ function waitForBackendHealthy(processToWatch = backendProcess) {
   })
 }
 
+// Five seconds after the page loads, looks at what is actually on screen. If
+// the page has real content but every pixel is the same colour, the
+// window is alive and drawing nothing -- the exact failure that was reported.
+// It is logged, and the page is reloaded once (never more), because a window
+// that is provably blank cannot be made worse by a reload. A page that is
+// still legitimately showing its startup screen has varied pixels, so this
+// does not fire on a slow start.
+let paintCheckDone = false
+function schedulePaintCheck() {
+  if (paintCheckDone) return
+  paintCheckDone = true
+  setTimeout(async () => {
+    const win = mainWindow
+    if (!win || win.isDestroyed() || !win.isVisible() || win.isMinimized()) return
+    try {
+      const image = await win.webContents.capturePage()
+      const { width, height } = image.getSize()
+      if (width === 0 || height === 0) return
+      const bitmap = image.toBitmap()
+      // Every pixel, stopping at the first one that differs: exact (a fixed
+      // stride can line up with the window width and only ever look at a few
+      // columns), and a normal screen exits within the first few rows. Only a
+      // truly flat screen scans it all, about 40 ms, once. The right and bottom
+      // 24 px are skipped because a scrollbar there is drawn even over an
+      // otherwise empty page.
+      const first = bitmap.readUInt32LE(0)
+      const scanWidth = width - 24
+      const scanHeight = height - 24
+      let distinct = 1
+      for (let y = 0; y < scanHeight && distinct < 2; y += 1) {
+        for (let x = 0; x < scanWidth; x += 1) {
+          if (bitmap.readUInt32LE((y * width + x) * 4) !== first) {
+            distinct += 1
+            break
+          }
+        }
+      }
+      const textChars = await win.webContents.executeJavaScript(
+        'document.body ? document.body.innerText.length : 0',
+      )
+      logDesktopDiagnostic(`paint-check distinct-colours=${distinct >= 2 ? 'many' : 'one'} dom-text-chars=${textChars}`)
+      if (distinct < 2 && textChars > 0 && !win.isDestroyed()) {
+        logDesktopDiagnostic('blank-paint-detected: reloading once')
+        win.webContents.reloadIgnoringCache()
+      }
+    } catch (err) {
+      logDesktopDiagnostic(`paint-check-failed ${err && err.message}`)
+    }
+  }, 5000).unref()
+}
+
 function createWindow() {
   // Checked defensively -- if the icon asset isn't there for any
   // reason, the window must still open with Electron's default icon
@@ -678,6 +747,9 @@ function createWindow() {
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     logDesktopDiagnostic(`render-process-gone ${JSON.stringify(details)}`)
   })
+  mainWindow.webContents.on('unresponsive', () => logDesktopDiagnostic('window-unresponsive'))
+  mainWindow.webContents.on('responsive', () => logDesktopDiagnostic('window-responsive'))
+  mainWindow.webContents.once('did-finish-load', () => schedulePaintCheck())
   mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
     if (level >= 2) {
       logDesktopDiagnostic(`renderer-console level=${level} ${sourceId}:${line} ${message}`)
@@ -821,6 +893,11 @@ function killPreviousBackendIfAny() {
 
 async function startApp() {
   startupTrace('app-ready')
+  try {
+    startupTrace(`gpu-status ${JSON.stringify(app.getGPUFeatureStatus())}`)
+  } catch {
+    // Diagnostics must never be the reason the app fails to open.
+  }
   createSplash()
   try {
     // Without this, Electron's default behavior for the blob-URL

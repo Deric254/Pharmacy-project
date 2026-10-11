@@ -16,6 +16,7 @@ import { test, expect, _electron as electron } from '@playwright/test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { mainWindow } from './helpers'
 
 let appDataDir: string
 
@@ -31,7 +32,7 @@ test.beforeEach(() => {
 })
 
 test.afterEach(() => {
-  rmSync(appDataDir, { recursive: true, force: true })
+  rmSync(appDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
 })
 
 test('the real app window appears and is never left blank', async () => {
@@ -42,7 +43,7 @@ test('the real app window appears and is never left blank', async () => {
   })
 
   try {
-    const window = await electronApp.firstWindow({ timeout: 30_000 })
+    const window = await mainWindow(electronApp)
 
     // The real fix from earlier this session: the window is held back
     // (show: false) until the renderer has actually painted, via
@@ -74,7 +75,7 @@ test('the window title matches the product name', async () => {
   })
 
   try {
-    const window = await electronApp.firstWindow({ timeout: 30_000 })
+    const window = await mainWindow(electronApp)
     await window.waitForLoadState('domcontentloaded')
     const title = await window.title()
     expect(title).toContain('Pharmacy')

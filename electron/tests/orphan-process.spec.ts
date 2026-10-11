@@ -37,7 +37,7 @@ test.beforeEach(() => {
 })
 
 test.afterEach(() => {
-  rmSync(appDataDir, { recursive: true, force: true })
+  rmSync(appDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
 })
 
 function countBackendProcesses(): number {

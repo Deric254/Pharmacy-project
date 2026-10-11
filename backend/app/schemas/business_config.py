@@ -6,7 +6,6 @@ from app.schemas._money import Money
 from app.schemas._text import NonBlankName
 from app.schemas._timezone import ValidTimezone
 
-BUILT_IN_THEMES = ("ledger", "clinical", "midnight", "sunrise")
 ThemeName = Literal["ledger", "clinical", "midnight", "sunrise"]
 
 

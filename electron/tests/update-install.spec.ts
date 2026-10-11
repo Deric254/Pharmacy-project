@@ -23,6 +23,7 @@ import { createServer, type Server } from 'node:http'
 import { mkdtempSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { mainWindow } from './helpers'
 
 let appDataDir: string
 let fakeReleaseServer: Server
@@ -70,7 +71,7 @@ test.beforeEach(async () => {
 
 test.afterEach(() => {
   fakeReleaseServer.close()
-  rmSync(appDataDir, { recursive: true, force: true })
+  rmSync(appDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
 })
 
 test('choosing "Install now" saves the update and launches the installer', async () => {
@@ -83,7 +84,7 @@ test('choosing "Install now" saves the update and launches the installer', async
   const savePath = path.join(appDataDir, 'Pharmacy-ERP-Setup-9.9.9.exe')
 
   try {
-    const page = await electronApp.firstWindow({ timeout: 30_000 })
+    const page = await mainWindow(electronApp)
 
     // app.getPath('userData') is a plain method call on an object
     // evaluate() already hands us -- no require() needed, unlike
@@ -146,7 +147,7 @@ test('choosing "Later" saves the update but does not launch the installer', asyn
   })
 
   try {
-    const page = await electronApp.firstWindow({ timeout: 30_000 })
+    const page = await mainWindow(electronApp)
     const savePath = path.join(appDataDir, 'Pharmacy-ERP-Setup-9.9.9-later.exe')
 
     await electronApp.evaluate(({ dialog, shell }, savePath) => {
@@ -287,7 +288,7 @@ test('the update IPC refuses an address that is not this project\'s own release'
   })
 
   try {
-    const page = await electronApp.firstWindow({ timeout: 30_000 })
+    const page = await mainWindow(electronApp)
     await electronApp.evaluate(({ dialog }) => {
       const state = globalThis as unknown as { saveDialogShown: boolean }
       state.saveDialogShown = false

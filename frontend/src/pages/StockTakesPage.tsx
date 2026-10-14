@@ -3,6 +3,7 @@ import { stockTakesApi } from '../api/domain'
 import { useAuthStore } from '../auth/store'
 import { ApiError } from '../api/client'
 import type { AdjustmentReason, StockTakeItemOut, StockTakeOut } from '../types/api'
+import { formatServerDate } from '../lib/serverTime'
 
 const REASONS: AdjustmentReason[] = [
   'MISCOUNT',
@@ -157,7 +158,7 @@ function StockTakeRow({
       <span>
         Stock take #{stockTake.id}{' '}
         <span className="text-ink-soft">
-          · started {new Date(stockTake.started_at).toLocaleDateString()}
+          · started {formatServerDate(stockTake.started_at)}
         </span>
       </span>
       <span className="figure text-ink-soft">

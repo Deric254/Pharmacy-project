@@ -18,6 +18,7 @@ import type {
   StockRunwayOut,
   StockTakeHistoryOut,
 } from '../types/api'
+import { formatServerDate } from '../lib/serverTime'
 
 const CoOccurrencePairsChart = lazy(() =>
   import('../components/charts/CoOccurrencePairsChart').then((m) => ({
@@ -498,9 +499,9 @@ function StockTakeHistoryReport() {
             {data.entries.map((e) => (
               <tr key={e.stock_take_id} className="ruled-row">
                 <td className="px-3 py-2">#{e.stock_take_id}</td>
-                <td className="px-3 py-2">{new Date(e.started_at).toLocaleDateString()}</td>
+                <td className="px-3 py-2">{formatServerDate(e.started_at)}</td>
                 <td className="px-3 py-2">
-                  {e.closed_at ? new Date(e.closed_at).toLocaleDateString() : '—'}
+                  {e.closed_at ? formatServerDate(e.closed_at) : '—'}
                 </td>
                 <td className="figure px-3 py-2 text-stamp-red">
                   {formatCurrency(e.shrinkage_value)}

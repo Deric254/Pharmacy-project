@@ -3,6 +3,7 @@ import { backupsApi } from '../api/backups'
 import { ApiError } from '../api/client'
 import { Modal } from '../components/Modal'
 import type { BackupLogOut, RestoreResult } from '../types/api'
+import { formatServerDateTime } from '../lib/serverTime'
 
 export function BackupsPage() {
   const [backups, setBackups] = useState<BackupLogOut[]>([])
@@ -87,13 +88,13 @@ export function BackupsPage() {
           <div key={b.id} className="flex items-center justify-between px-3 py-3 text-sm">
             <div>
               <p className="flex items-center gap-2 font-medium">
-                {new Date(b.created_at).toLocaleString()}
+                {formatServerDateTime(b.created_at)}
                 <StatusBadge status={b.status} />
               </p>
               <p className="text-xs text-ink-soft">
                 {b.provider === 'LOCAL_FILE' ? 'On this computer' : 'Google Drive'}
                 {b.size_bytes !== null && ` · ${formatBytes(b.size_bytes)}`}
-                {b.restored_at && ` · restored ${new Date(b.restored_at).toLocaleString()}`}
+                {b.restored_at && ` · restored ${formatServerDateTime(b.restored_at)}`}
               </p>
               {b.error_message && (
                 <p className="mt-1 text-xs text-stamp-red">{b.error_message}</p>
@@ -290,7 +291,7 @@ function ConfirmRestoreModal({
       <div className="border border-stamp-red-soft bg-stamp-red-soft/30 p-3 text-sm text-stamp-red">
         <p className="font-medium">This overwrites the live database right now.</p>
         <p className="mt-1">
-          Everything recorded since {new Date(backup.created_at).toLocaleString()} — every sale,
+          Everything recorded since {formatServerDateTime(backup.created_at)} — every sale,
           refund, adjustment, and stock take — will be gone. This cannot be undone. Only do this
           if you're certain the current data is wrong and this backup is correct.
         </p>

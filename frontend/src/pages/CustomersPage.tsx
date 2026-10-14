@@ -5,6 +5,7 @@ import { ApiError, downloadExport } from '../api/client'
 import { Modal } from '../components/Modal'
 import { useAuthStore } from '../auth/store'
 import type { CustomerLifetimeValueOut, CustomerOut, ImportRowError, PurchaseHistoryEntryOut } from '../types/api'
+import { formatServerDate } from '../lib/serverTime'
 
 export function CustomersPage() {
   const canSeeLtv = useAuthStore((s) => s.hasPermission('reports.view'))
@@ -258,7 +259,7 @@ function CustomerDetailModal({
         {history?.map((h) => (
           <li key={h.sale_id} className="flex justify-between px-3 py-2 text-sm">
             <span>
-              Sale #{h.sale_id} · {new Date(h.created_at).toLocaleDateString()}
+              Sale #{h.sale_id} · {formatServerDate(h.created_at)}
             </span>
             <span className="figure">{formatCurrency(h.total_amount)}</span>
           </li>

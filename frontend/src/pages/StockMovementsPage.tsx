@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { inventoryApi } from '../api/domain'
 import { ApiError, downloadExport } from '../api/client'
 import type { StockMovementOut } from '../types/api'
+import { formatServerDateTime } from '../lib/serverTime'
 
 const PAGE_SIZE = 25
 
@@ -161,7 +162,7 @@ export function StockMovementsPage() {
                 </span>
               </p>
               <span className="figure text-xs text-ink-soft">
-                {new Date(entry.created_at).toLocaleString()}
+                {formatServerDateTime(entry.created_at)}
               </span>
             </div>
             <p className="text-xs text-ink-soft">

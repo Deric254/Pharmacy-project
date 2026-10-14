@@ -10,6 +10,7 @@ import type {
   SaleListItemOut,
   SaleOut,
 } from '../types/api'
+import { formatServerDateTime } from '../lib/serverTime'
 
 const REFUND_REASONS: { value: RefundReason; label: string }[] = [
   { value: 'CUSTOMER_RETURN', label: 'Customer return' },
@@ -94,7 +95,7 @@ export function SalesPage() {
                 <td className="figure px-3 py-2">{s.item_count}</td>
                 <td className="figure px-3 py-2 text-right">{formatCurrency(s.total_amount)}</td>
                 <td className="px-3 py-2 text-ink-soft">
-                  {new Date(s.created_at).toLocaleString()}
+                  {formatServerDateTime(s.created_at)}
                 </td>
               </tr>
             ))}
@@ -219,7 +220,7 @@ function SaleDetailModal({
                 {refunds.map((r) => (
                   <li key={r.id} className="px-3 py-2 text-sm">
                     <div className="flex justify-between">
-                      <span>{new Date(r.created_at).toLocaleString()}</span>
+                      <span>{formatServerDateTime(r.created_at)}</span>
                       <span className="figure text-stamp-red">
                         -{formatCurrency(r.total_amount)}
                       </span>

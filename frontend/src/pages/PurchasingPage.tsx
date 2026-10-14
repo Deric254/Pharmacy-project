@@ -17,6 +17,7 @@ import type {
   SupplierOut,
   SupplierPaymentOut,
 } from '../types/api'
+import { formatServerDateTime, parseServerDate } from '../lib/serverTime'
 
 export function PurchasingPage() {
   const hasPermission = useAuthStore((s) => s.hasPermission)
@@ -57,7 +58,7 @@ export function PurchasingPage() {
   }
 
   const allPurchases = [...orders].sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    (a, b) => parseServerDate(b.created_at).getTime() - parseServerDate(a.created_at).getTime(),
   )
 
   return (
@@ -142,7 +143,7 @@ export function PurchasingPage() {
                   </span>
                 </td>
                 <td className="px-3 py-2 text-ink-soft">
-                  {new Date(po.created_at).toLocaleString()}
+                  {formatServerDateTime(po.created_at)}
                 </td>
               </tr>
             ))}
@@ -557,7 +558,7 @@ function SupplierRow({
               <div className="flex items-center justify-between gap-2">
                 <span className={p.reversed ? 'text-ink-soft line-through' : ''}>
                   <span className="figure">{formatCurrency(p.amount)}</span>{' '}
-                  <span className="text-ink-soft">{new Date(p.created_at).toLocaleString()}</span>
+                  <span className="text-ink-soft">{formatServerDateTime(p.created_at)}</span>
                   {p.notes ? <span className="text-ink-soft"> · {p.notes}</span> : null}
                 </span>
                 {p.reversed ? (
@@ -666,12 +667,12 @@ function PODetailModal({
         Supplier: <span className="font-medium">{supplierName}</span>
       </p>
       <p className="mb-3 text-sm text-ink-soft">
-        Received {new Date(po.received_at ?? po.created_at).toLocaleString()}
+        Received {formatServerDateTime(po.received_at ?? po.created_at)}
       </p>
 
       {po.status === 'REVERSED' && (
         <p className="mb-3 border border-stamp-red-soft bg-stamp-red-soft/40 px-3 py-2 text-sm text-stamp-red">
-          Reversed{po.reversed_at ? ` ${new Date(po.reversed_at).toLocaleString()}` : ''}:{' '}
+          Reversed{po.reversed_at ? ` ${formatServerDateTime(po.reversed_at)}` : ''}:{' '}
           {po.reversal_reason}
         </p>
       )}

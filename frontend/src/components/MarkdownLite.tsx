@@ -10,11 +10,11 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
   })
 }
 
+// Models often drop the outer pipes ("a | b | c", "---|---|---"), so they are
+// optional here.
 function splitRow(line: string): string[] {
-  return line
-    .slice(1, -1)
-    .split('|')
-    .map((cell) => cell.trim())
+  const inner = line.replace(/^\|/, '').replace(/\|$/, '')
+  return inner.split('|').map((cell) => cell.trim())
 }
 
 const NUMERIC_CELL = /^-?[A-Za-z]{0,3}\s?-?[\d,]+(\.\d+)?%?$/
@@ -99,10 +99,13 @@ export function MarkdownLite({ text }: { text: string }) {
 
   for (const rawLine of lines) {
     const line = rawLine.trim()
-    const isTableRow = line.length > 1 && line.startsWith('|') && line.endsWith('|')
-    if (!isTableRow) flushTable()
     const bulletMatch = /^[-*]\s+(.*)/.exec(line)
     const numberedMatch = /^\d+\.\s+(.*)/.exec(line)
+    const isTableRow =
+      line.length > 1 &&
+      line.includes('|') &&
+      (line.startsWith('|') || !(bulletMatch || numberedMatch))
+    if (!isTableRow) flushTable()
     const headerMatch = /^#{1,6}\s+(.*)/.exec(line)
 
     if (isTableRow) {

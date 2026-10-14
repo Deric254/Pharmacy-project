@@ -53,3 +53,13 @@ describe('MarkdownLite', () => {
     expect(container.textContent).toContain('<img src=x onerror=alert(1)> hi')
   })
 })
+
+describe('MarkdownLite tables without outer pipes', () => {
+  it('renders a table whose rows have no leading or trailing pipe', () => {
+    const { container } = render(
+      <MarkdownLite text={'Here are the items:\nProduct | Qty\n---|---\nmed1 | 0\nmed2 | 5'} />,
+    )
+    expect(container.querySelector('table')).not.toBeNull()
+    expect(container.querySelectorAll('tbody tr')).toHaveLength(2)
+  })
+})

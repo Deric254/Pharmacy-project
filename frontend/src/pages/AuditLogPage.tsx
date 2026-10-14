@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { auditLogsApi } from '../api/audit'
 import { ApiError, downloadExport } from '../api/client'
 import type { AuditLogFilterOptionsOut, AuditLogOut } from '../types/api'
+import { formatServerDateTime } from '../lib/serverTime'
 
 const PAGE_SIZE = 25
 
@@ -161,7 +162,7 @@ export function AuditLogPage() {
                 </span>
               </p>
               <span className="figure text-xs text-ink-soft">
-                {new Date(entry.created_at).toLocaleString()}
+                {formatServerDateTime(entry.created_at)}
               </span>
             </div>
             <p className="text-xs text-ink-soft">

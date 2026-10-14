@@ -5,16 +5,6 @@ import { useConfigStore } from './config/store'
 import { setupApi } from './api/setup'
 import { RequireAuth, RequirePermission } from './auth/guards'
 import { AppShell } from './components/AppShell'
-// LoginPage and SetupPage are the very first thing an unauthenticated
-// user sees, so they stay eager -- lazy-loading them would trade one
-// network-free local import for a guaranteed Suspense flash on the
-// one screen where that's most visible. Every page behind AppShell
-// (reachable only after auth) is lazy: none of it is needed until the
-// user actually navigates there, and bundling it all eagerly was
-// putting every page's code -- including rarely-opened ones like
-// Roles, Backups, and the AI assistant -- into the single JS chunk
-// parsed and evaluated before the app can render anything, on every
-// single launch of the desktop app.
 import { LoginPage } from './pages/LoginPage'
 import { SetupPage } from './pages/SetupPage'
 
@@ -57,10 +47,6 @@ const AiAssistantPage = lazy(() =>
   import('./pages/AiAssistantPage').then((m) => ({ default: m.AiAssistantPage })),
 )
 
-// Same visual language as the "Starting up…" bootstrap screen below,
-// so a lazy page chunk loading (near-instant from local disk in the
-// desktop app, briefly visible on a cold cache in the browser) reads
-// as a continuation of the same app rather than a different spinner.
 function PageLoadingFallback() {
   return (
     <div className="grid min-h-[50vh] place-items-center">

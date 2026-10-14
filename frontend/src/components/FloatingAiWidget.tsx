@@ -1,9 +1,16 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { aiApi } from '../api/ai'
 import { ApiError } from '../api/client'
 import { MarkdownLite } from './MarkdownLite'
 import { useViewedRangeStore } from '../lib/viewedRangeStore'
 import type { AIConversationOut } from '../types/api'
+
+const SUGGESTIONS = [
+  "What's running low on stock?",
+  'Who do we owe money to?',
+  'Best sellers this month',
+  'What expires in the next 60 days?',
+]
 
 interface Turn {
   prompt: string
@@ -23,7 +30,7 @@ function ThinkingIndicator() {
     elapsedMs < 3000
       ? 'Reading your numbers…'
       : elapsedMs < 9000
-        ? 'Checking today\u2019s sales and stock…'
+        ? 'Looking up your data…'
         : 'Still working \u2014 a slow provider can take a moment…'
 
   return (
@@ -58,12 +65,15 @@ export function FloatingAiWidget() {
 
   const viewedRange = useViewedRangeStore((s) => s.range)
 
-  async function handleAsk(e: FormEvent) {
-    e.preventDefault()
-    if (!prompt.trim() || asking) return
+  const endOfMessages = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    endOfMessages.current?.scrollIntoView?.({ block: 'end' })
+  }, [conversation, pendingPrompt, error])
+
+  async function ask(askedPrompt: string) {
+    if (!askedPrompt.trim() || asking) return
     setAsking(true)
     setError(null)
-    const askedPrompt = prompt
     setPrompt('')
     setPendingPrompt(askedPrompt)
     try {
@@ -82,6 +92,11 @@ export function FloatingAiWidget() {
       setAsking(false)
       setPendingPrompt(null)
     }
+  }
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    void ask(prompt)
   }
 
   function startNewChat() {
@@ -149,7 +164,7 @@ export function FloatingAiWidget() {
   }
 
   return (
-    <div className="fixed bottom-5 right-5 z-50 flex max-h-[70vh] w-96 flex-col border border-rule bg-paper shadow-xl">
+    <div className="fixed bottom-5 right-5 z-50 flex max-h-[75vh] w-[30rem] max-w-[calc(100vw-2.5rem)] flex-col border border-rule bg-paper shadow-xl">
       <div className="flex items-center justify-between border-b border-rule bg-ink px-3 py-2">
         <span className="text-sm font-medium text-paper">Assistant</span>
         <div className="flex items-center gap-3">
@@ -205,10 +220,24 @@ export function FloatingAiWidget() {
       )}
 
       <div className="flex-1 space-y-3 overflow-y-auto p-3">
-        {conversation.length === 0 && (
-          <p className="text-sm text-ink-soft">
-            Ask anything about today's sales, stock, or margins.
-          </p>
+        {conversation.length === 0 && !pendingPrompt && (
+          <div className="space-y-2">
+            <p className="text-sm text-ink-soft">
+              Ask about your sales, stock, purchases, suppliers or customers.
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {SUGGESTIONS.map((suggestion) => (
+                <button
+                  key={suggestion}
+                  onClick={() => void ask(suggestion)}
+                  disabled={asking}
+                  className="border border-rule px-2 py-1 text-xs text-ink-soft hover:border-brass hover:text-ink"
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
+          </div>
         )}
         {conversation.map((turn, i) => (
           <div key={i} className="space-y-1">
@@ -225,9 +254,10 @@ export function FloatingAiWidget() {
           </div>
         )}
         {error && <p className="text-sm text-stamp-red">{error}</p>}
+        <div ref={endOfMessages} />
       </div>
 
-      <form onSubmit={(e) => void handleAsk(e)} className="flex gap-2 border-t border-rule p-2">
+      <form onSubmit={handleSubmit} className="flex gap-2 border-t border-rule p-2">
         <input
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}

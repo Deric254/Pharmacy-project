@@ -256,7 +256,7 @@ export interface RefundOut {
   items: RefundItemOut[]
 }
 
-export type PurchaseOrderStatus = 'RECEIVED'
+export type PurchaseOrderStatus = 'RECEIVED' | 'REVERSED'
 
 export interface SupplierOut {
   id: number
@@ -289,6 +289,20 @@ export interface SupplierCreate {
 export interface PaymentRecordRequest {
   amount: number
   notes?: string | null
+  idempotency_key?: string
+}
+
+export interface PaymentReverseRequest {
+  reason: string
+}
+
+export interface SupplierPaymentOut {
+  id: number
+  amount: number
+  notes: string | null
+  created_at: string
+  reversed: boolean
+  reversal_reason: string | null
 }
 
 export interface QuickPurchaseLine {
@@ -326,7 +340,13 @@ export interface PurchaseOrderOut {
   notes: string | null
   created_at: string
   received_at: string | null
+  reversed_at: string | null
+  reversal_reason: string | null
   items: PurchaseOrderItemOut[]
+}
+
+export interface PurchaseReverseRequest {
+  reason: string
 }
 
 export interface CustomerOut {

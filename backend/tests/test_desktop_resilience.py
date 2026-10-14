@@ -27,7 +27,7 @@ from app.core.config import (
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 BEFORE_0039 = "0038_products_category_id_index"
-HEAD = "0040_drop_unused_po_workflow"
+HEAD = "0043_purchase_restock_snapshot"
 VALID_JWT = "j" * 40
 VALID_AES = "cGhhcm1hY3ktZXJwLXRlc3Qta2V5LTAxMjM0NTY3ODk="
 
@@ -268,7 +268,7 @@ def test_any_other_migration_failure_is_still_fatal_and_leaves_nothing_behind(tm
     ("head", "current", "tolerated"),
     [
         (HEAD, BEFORE_0039, True),
-        ("0041_something_later", BEFORE_0039, False),  # a later migration may need the schema
+        ("0044_something_later", BEFORE_0039, False),  # a later migration may need the schema
         (HEAD, "0037_restore_lost_indexes", False),  # not the one revision known to be safe
         (HEAD, None, False),
         (None, BEFORE_0039, False),
@@ -276,3 +276,54 @@ def test_any_other_migration_failure_is_still_fatal_and_leaves_nothing_behind(tm
 )
 def test_the_refusal_is_tolerated_only_for_the_one_known_safe_upgrade(head, current, tolerated):
     assert desktop_main._refusal_may_be_tolerated(head, current) is tolerated
+
+
+def test_a_shop_kept_on_the_old_schema_still_gets_the_columns_the_app_needs(tmp_path):
+    """
+    The app code reads supplier_transactions.idempotency_key and
+    .reverses_transaction_id and purchase_orders.reversed_at and
+    .reversal_reason, purchase_order_items.batch_cost_before and
+    .batch_cost_after, and checks the two reversal permissions. A shop whose
+    old data makes 0039 refuse stays at 0038, so the launcher must add those
+    columns itself or the first supplier or purchasing request would crash.
+    """
+    db_path = _database_before_0039(tmp_path, "shop.db", qty_remaining=-3)
+
+    result = _run_launcher_migration(db_path)
+
+    assert result.returncode == 0, result.stderr
+    assert _revision(db_path) == BEFORE_0039  # still on the old revision
+    connection = sqlite3.connect(db_path)
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(supplier_transactions)")}
+    order_columns = {row[1] for row in connection.execute("PRAGMA table_info(purchase_orders)")}
+    item_columns = {row[1] for row in connection.execute("PRAGMA table_info(purchase_order_items)")}
+    granted = {
+        code: connection.execute(
+            "SELECT COUNT(*) FROM role_permissions rp "
+            "JOIN permissions p ON p.id = rp.permission_id "
+            "JOIN roles r ON r.id = rp.role_id "
+            "WHERE p.code = ? AND r.name = 'ChemistOwner'",
+            (code,),
+        ).fetchone()[0]
+        for code in ("purchasing.reverse_payment", "purchasing.reverse_purchase")
+    }
+    connection.close()
+    assert {"idempotency_key", "reverses_transaction_id"} <= columns
+    assert {"reversed_at", "reversal_reason"} <= order_columns
+    assert {"batch_cost_before", "batch_cost_after"} <= item_columns
+    assert granted == {"purchasing.reverse_payment": 1, "purchasing.reverse_purchase": 1}
+
+
+def test_the_forward_compatible_schema_is_safe_to_apply_twice(tmp_path):
+    """Alembic reaching 0041 after the launcher already applied it must be a no-op."""
+    db_path = _database_before_0039(tmp_path, "shop.db", qty_remaining=-3)
+    _run_launcher_migration(db_path)
+
+    connection = sqlite3.connect(db_path)
+    connection.execute("UPDATE medicine_batches SET qty_remaining = 0 WHERE id = 7")
+    connection.commit()
+    connection.close()
+    result = _run_launcher_migration(db_path)  # 0039 -> 0040 -> 0041 over the added columns
+
+    assert result.returncode == 0, result.stderr
+    assert _revision(db_path) == HEAD

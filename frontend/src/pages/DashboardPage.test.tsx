@@ -48,13 +48,6 @@ vi.mock('../lib/useSaleCompletedRefresh', () => ({
   useSaleCompletedRefresh: () => 0,
 }))
 
-// CategoryRevenueChart renders through recharts' ResponsiveContainer,
-// which needs real layout (width/height) that jsdom doesn't provide --
-// it would render zero bars in this environment regardless of data.
-// Stubbing it out lets these tests verify what's actually
-// DashboardPage's own responsibility: fetching the report, wiring the
-// click-to-drill-down handler, and rendering the result -- not
-// re-testing recharts' own rendering.
 vi.mock('../components/charts/CategoryRevenueChart', () => ({
   CategoryRevenueChart: ({
     data,

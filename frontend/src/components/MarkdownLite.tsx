@@ -10,11 +10,21 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
   })
 }
 
+function splitRow(line: string): string[] {
+  return line
+    .slice(1, -1)
+    .split('|')
+    .map((cell) => cell.trim())
+}
+
+const NUMERIC_CELL = /^-?[A-Za-z]{0,3}\s?-?[\d,]+(\.\d+)?%?$/
+
 export function MarkdownLite({ text }: { text: string }) {
   const lines = text.split('\n')
   const blocks: ReactNode[] = []
   let listBuffer: string[] = []
   let listType: 'ul' | 'ol' | null = null
+  let tableBuffer: string[] = []
 
   function flushList() {
     if (listBuffer.length === 0) return
@@ -36,13 +46,69 @@ export function MarkdownLite({ text }: { text: string }) {
     listType = null
   }
 
+  function flushTable() {
+    if (tableBuffer.length === 0) return
+    const rows = tableBuffer.map(splitRow)
+    const isTable = rows.length >= 2 && rows[1].every((cell) => /^:?-{2,}:?$/.test(cell))
+    if (isTable) {
+      const [header, , ...body] = rows
+      const numeric = header.map(
+        (_, col) => body.length > 0 && body.every((row) => NUMERIC_CELL.test(row[col] ?? '')),
+      )
+      const align = (col: number) => (numeric[col] ? 'text-right figure' : 'text-left')
+      blocks.push(
+        <div key={blocks.length} className="overflow-x-auto">
+          <table className="w-full border-collapse text-xs">
+            <thead>
+              <tr>
+                {header.map((cell, col) => (
+                  <th
+                    key={col}
+                    className={`border border-rule bg-brass-soft/30 px-2 py-1 font-medium text-ink ${align(col)}`}
+                  >
+                    {renderInline(cell, `th-${blocks.length}-${col}`)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {body.map((row, r) => (
+                <tr key={r}>
+                  {header.map((_, col) => (
+                    <td key={col} className={`border border-rule px-2 py-1 ${align(col)}`}>
+                      {renderInline(row[col] ?? '', `td-${blocks.length}-${r}-${col}`)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      )
+    } else {
+      for (const line of tableBuffer) {
+        blocks.push(
+          <p key={blocks.length} className="mb-1 last:mb-0">
+            {renderInline(line, `p-${blocks.length}`)}
+          </p>,
+        )
+      }
+    }
+    tableBuffer = []
+  }
+
   for (const rawLine of lines) {
     const line = rawLine.trim()
+    const isTableRow = line.length > 1 && line.startsWith('|') && line.endsWith('|')
+    if (!isTableRow) flushTable()
     const bulletMatch = /^[-*]\s+(.*)/.exec(line)
     const numberedMatch = /^\d+\.\s+(.*)/.exec(line)
     const headerMatch = /^#{1,6}\s+(.*)/.exec(line)
 
-    if (bulletMatch) {
+    if (isTableRow) {
+      flushList()
+      tableBuffer.push(line)
+    } else if (bulletMatch) {
       if (listType !== 'ul') flushList()
       listType = 'ul'
       listBuffer.push(bulletMatch[1])
@@ -69,6 +135,7 @@ export function MarkdownLite({ text }: { text: string }) {
     }
   }
   flushList()
+  flushTable()
 
   return <div className="space-y-1">{blocks}</div>
 }

@@ -188,13 +188,11 @@ describe('ReportsPage stock take history tab', () => {
 
     const row = (await screen.findByText('#15')).closest('tr')!
     const cells = within(row).getAllByRole('cell')
-    expect(cells).toHaveLength(8) // stock take, started, closed, shrinkage x2, excess x2, net
-    expect(cells[3]).toHaveTextContent(money(0)) // shrinkage_value
-    expect(cells[5]).toHaveTextContent(money(8)) // excess_value
+    expect(cells).toHaveLength(8)
+    expect(cells[3]).toHaveTextContent(money(0))
+    expect(cells[5]).toHaveTextContent(money(8))
     expect(cells[5]).toHaveClass('text-emerald-600')
-    expect(cells[6]).toHaveTextContent('22.94%') // excess_percent
-    // net_variance_value is positive (excess outweighs shrinkage): must not
-    // render in the loss color used for a genuine net shortfall.
+    expect(cells[6]).toHaveTextContent('22.94%')
     expect(cells[7]).toHaveTextContent(money(8))
     expect(cells[7]).toHaveClass('text-emerald-600')
     expect(cells[7]).not.toHaveClass('text-stamp-red')

@@ -122,10 +122,6 @@ export function applyTheme(themeName: string): void {
   loadThemeFonts(theme)
 }
 
-// Fonts come from Google's servers, so like the update check they must not
-// compete with the app's own startup traffic. Until startup has settled the
-// app uses the fallback fonts in each theme's font stacks; the web fonts are
-// then fetched in one go. After that, a theme change loads its fonts at once.
 const loadedFontFamilies = new Set<string>()
 const pendingFontFamilies: string[] = []
 let startupSettled = false

@@ -14,11 +14,13 @@ import type {
   ExpiringBatchOut,
   LowStockProductOut,
   PaymentRecordRequest,
+  PaymentReverseRequest,
   ProductCreate,
   ProductOut,
   ProductUpdate,
   PurchaseHistoryEntryOut,
   PurchaseOrderOut,
+  PurchaseReverseRequest,
   QuickPurchaseRequest,
   ReconciliationIssueOut,
   RefundOut,
@@ -36,6 +38,7 @@ import type {
   SupplierCreate,
   SupplierKpiOut,
   SupplierOut,
+  SupplierPaymentOut,
   WriteOffResult,
 } from '../types/api'
 
@@ -105,6 +108,10 @@ export const suppliersApi = {
   create: (payload: SupplierCreate) => api.post<SupplierOut>('/suppliers', payload),
   recordPayment: (supplierId: number, payload: PaymentRecordRequest) =>
     api.post<SupplierOut>(`/suppliers/${supplierId}/payments`, payload),
+  payments: (supplierId: number) =>
+    api.get<SupplierPaymentOut[]>(`/suppliers/${supplierId}/payments`),
+  reversePayment: (supplierId: number, transactionId: number, payload: PaymentReverseRequest) =>
+    api.post<SupplierOut>(`/suppliers/${supplierId}/payments/${transactionId}/reverse`, payload),
   kpis: (startDate: string, endDate: string) =>
     api.get<SupplierKpiOut>('/suppliers/kpis', { start_date: startDate, end_date: endDate }),
 }
@@ -119,6 +126,8 @@ export const purchaseOrdersApi = {
   get: (id: number) => api.get<PurchaseOrderOut>(`/purchase-orders/${id}`),
   quickPurchase: (payload: QuickPurchaseRequest) =>
     api.post<PurchaseOrderOut>('/purchase-orders/quick-purchase', payload),
+  reverse: (id: number, payload: PurchaseReverseRequest) =>
+    api.post<PurchaseOrderOut>(`/purchase-orders/${id}/reverse`, payload),
   downloadImportTemplate: () =>
     downloadFile('/purchase-orders/import-template', 'purchase-order-import-template.xlsx'),
   importFromExcel: (file: File, supplierId: number) =>

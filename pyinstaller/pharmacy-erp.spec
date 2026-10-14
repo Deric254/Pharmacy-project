@@ -73,6 +73,10 @@ a = Analysis(
         # Imported by migration 0039 (loaded dynamically by alembic) and by
         # desktop_main's tolerated-refusal handling.
         "app.core.integrity_rules",
+        # Imported by migrations 0041-0043 (loaded dynamically by alembic) and
+        # by desktop_main's tolerated-refusal handling.
+        "app.core.supplier_payment_schema",
+        "app.core.purchase_reversal_schema",
         "alembic",
         "alembic.op",
         "aiosqlite",

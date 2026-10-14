@@ -2,8 +2,6 @@ import { renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useReleaseHistory, useUpdateCheck } from './updateCheck'
 
-// The startup delay has its own tests (startupSettled.test.ts); here the
-// task runs immediately so these tests exercise the check itself.
 vi.mock('./startupSettled', () => ({
   runAfterStartup: (task: () => void) => {
     task()
@@ -29,9 +27,6 @@ describe('useUpdateCheck', () => {
   beforeEach(() => {
     fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
-    // The automatic check now caches its result in localStorage so a
-    // fresh check isn't repeated on every mount -- each test needs to
-    // start from "no prior check" to exercise a real fetch.
     window.localStorage.clear()
   })
 
@@ -173,7 +168,7 @@ describe('useUpdateCheck', () => {
       expect(raw).not.toBeNull()
     })
     const cached = JSON.parse(window.localStorage.getItem('pharmacy-erp:update-check-cache')!)
-    expect(cached.info).toBeNull() // already on the latest version
+    expect(cached.info).toBeNull()
     expect(typeof cached.checkedAt).toBe('number')
   })
 
@@ -197,7 +192,6 @@ describe('useUpdateCheck', () => {
     })
 
     const { result } = renderHook(() => useUpdateCheck())
-    // Let the (cache-hit, no-fetch) mount effect settle first.
     await waitFor(() => expect(result.current.info).toBeNull())
     fetchMock.mockClear()
 

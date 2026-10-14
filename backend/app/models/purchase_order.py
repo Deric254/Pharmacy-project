@@ -16,12 +16,16 @@ if TYPE_CHECKING:
 
 class PurchaseOrderStatus(enum.StrEnum):
     RECEIVED = "RECEIVED"
+    # Cancelled after the fact by PurchasingService.reverse_purchase. The row,
+    # its items and its history stay; only the stock and the debt are undone.
+    REVERSED = "REVERSED"
 
 
 class PurchaseOrder(Base):
     """
     A purchase receipt. quick_purchase is the only thing that creates one,
-    and always as RECEIVED -- see purchasing_service.py.
+    always as RECEIVED, and reverse_purchase is the only thing that ever moves
+    it on (to REVERSED, once) -- see purchasing_service.py.
     """
 
     __tablename__ = "purchase_orders"
@@ -36,6 +40,9 @@ class PurchaseOrder(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Both set together with status = REVERSED, never otherwise.
+    reversed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reversal_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     items: Mapped[list[PurchaseOrderItem]] = relationship(lazy="selectin")
 
@@ -67,6 +74,13 @@ class PurchaseOrderItem(Base):
     quantity_received: Mapped[int | None] = mapped_column(Integer, nullable=True)
     unit_cost_actual: Mapped[float | None] = mapped_column(MoneyCents, nullable=True)
     batch_id: Mapped[int | None] = mapped_column(ForeignKey("medicine_batches.id"), nullable=True)
+    # Only on a line that restocked a batch that already existed: the batch's
+    # cost price just before and just after this line blended into it. Lets
+    # reverse_purchase put the cost back exactly (a weighted average can't be
+    # inverted -- every receipt rounds to a cent) and prove nobody has changed
+    # it since. NULL on a line that created its batch.
+    batch_cost_before: Mapped[float | None] = mapped_column(MoneyCents, nullable=True)
+    batch_cost_after: Mapped[float | None] = mapped_column(MoneyCents, nullable=True)
 
     product: Mapped[Product] = relationship(lazy="selectin")
 

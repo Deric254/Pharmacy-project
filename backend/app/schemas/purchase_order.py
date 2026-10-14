@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 from app.models.purchase_order import PurchaseOrderStatus
 from app.schemas._money import Money, PositiveQuantity
+from app.schemas._text import NonBlankName
 
 
 class PurchaseOrderItemOut(BaseModel):
@@ -28,9 +29,17 @@ class PurchaseOrderOut(BaseModel):
     notes: str | None
     created_at: datetime
     received_at: datetime | None
+    reversed_at: datetime | None
+    reversal_reason: str | None
     items: list[PurchaseOrderItemOut]
 
     model_config = {"from_attributes": True}
+
+
+class PurchaseReverseRequest(BaseModel):
+    # Required and non-blank: a reversal removes stock and cancels a debt, so
+    # the audit trail must always say why.
+    reason: NonBlankName = Field(min_length=3, max_length=255)
 
 
 class QuickPurchaseLine(BaseModel):

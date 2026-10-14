@@ -150,9 +150,6 @@ export function DashboardPage() {
   useEffect(() => {
     if (!canSeeReports) return
     let cancelled = false
-    // A drill-down from a previous range no longer applies once the
-    // range itself changes -- clear it rather than silently showing
-    // stale products under the newly-selected category.
     setSelectedCategory(null)
     setCategoryProducts(null)
     setCategoryProductsError(null)

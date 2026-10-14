@@ -90,6 +90,8 @@ async def seeded_roles():
                 "purchasing.create_po",
                 "purchasing.approve_po",
                 "purchasing.receive_stock",
+                "purchasing.reverse_payment",
+                "purchasing.reverse_purchase",
                 "reports.view",
                 "reports.export",
                 "reports.view_profit",

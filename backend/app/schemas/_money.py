@@ -25,6 +25,7 @@ database itself.
 """
 
 import math
+from decimal import Decimal
 from typing import Annotated
 
 from pydantic import AfterValidator, Field
@@ -36,10 +37,27 @@ def _must_be_finite(value: float) -> float:
     return value
 
 
+def _whole_cents(value: float) -> float:
+    # An amount a person types or a client sends must already be whole
+    # cents. Silently rounding 100.005 to 100.01 (or 100.00) would
+    # record a different payment than the one that was asked for.
+    exponent = Decimal(str(value)).as_tuple().exponent
+    if isinstance(exponent, int) and exponent < -2:
+        raise ValueError("must have at most 2 decimal places")
+    return value
+
+
 MAX_MONEY = 999_999_999.99
 
 Money = Annotated[float, AfterValidator(_must_be_finite), Field(ge=0, le=MAX_MONEY)]
 PositiveMoney = Annotated[float, AfterValidator(_must_be_finite), Field(gt=0, le=MAX_MONEY)]
+# A positive amount of money that must be exact to the cent (a payment).
+PositiveCents = Annotated[
+    float,
+    AfterValidator(_must_be_finite),
+    AfterValidator(_whole_cents),
+    Field(gt=0, le=MAX_MONEY),
+]
 
 # A quantity field with only `gt=0`/`ge=0` and no upper bound has the
 # same hole as Money did, just reached with an integer instead of a

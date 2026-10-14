@@ -2,7 +2,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
-from app.schemas._money import PositiveMoney
+from app.schemas._money import PositiveCents
 from app.schemas._text import NonBlankName, OptionalStrippedText
 
 
@@ -28,8 +28,29 @@ class SupplierOut(BaseModel):
 
 
 class PaymentRecordRequest(BaseModel):
-    amount: PositiveMoney
+    amount: PositiveCents
     notes: str | None = Field(default=None, max_length=255)
+    # Generated once per payment attempt by the client. Sending the same
+    # key again returns the original payment instead of recording a
+    # second one. Optional so existing API callers keep working.
+    idempotency_key: str | None = Field(
+        default=None, min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$"
+    )
+
+
+class PaymentReverseRequest(BaseModel):
+    # Required and non-blank: a reversal changes the books, so the audit
+    # trail must always say why.
+    reason: NonBlankName = Field(min_length=3, max_length=255)
+
+
+class SupplierPaymentOut(BaseModel):
+    id: int
+    amount: float  # positive: what was paid
+    notes: str | None
+    created_at: datetime
+    reversed: bool
+    reversal_reason: str | None = None
 
 
 class SupplierKpiOut(BaseModel):

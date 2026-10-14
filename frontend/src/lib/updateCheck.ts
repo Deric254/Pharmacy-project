@@ -4,23 +4,9 @@ import { runAfterStartup } from './startupSettled'
 
 const REPO = 'Deric254/Pharmacy-project'
 
-// User-initiated ("Check for updates" button): the person is actively
-// waiting on this one, so it gets the generous timeout.
 const MANUAL_CHECK_TIMEOUT_MS = 10_000
-// Silent, automatic check fired on every mount of useUpdateCheck (the
-// app shell mounts it once per session; the settings page mounts a
-// second independent instance every time it's opened). This one must
-// never be allowed to compete for long with the app's own startup
-// traffic, so it gets a short leash.
 const AUTO_CHECK_TIMEOUT_MS = 4_000
 
-// The automatic check is throttled to once per this interval,
-// regardless of how many times useUpdateCheck() gets mounted (app
-// shell + settings page both mount it). Without this, every app
-// launch -- and every visit to Settings -- fired two more sequential
-// external HTTP requests, which is what made the app feel slow at
-// startup specifically when online (offline, the same fetch fails
-// instantly instead of waiting out a real network round trip).
 const AUTO_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 const AUTO_CHECK_CACHE_KEY = 'pharmacy-erp:update-check-cache'
 
@@ -56,10 +42,6 @@ function isNewer(latest: string, current: string): boolean {
   return false
 }
 
-// localStorage can throw (private browsing, storage disabled, quota) --
-// never let a caching optimization break the update check itself. On
-// any failure we simply behave as if there were no cache, which is
-// exactly the pre-existing behavior.
 function readAutoCheckCache(): UpdateCheckCacheEntry | null {
   try {
     const raw = window.localStorage.getItem(AUTO_CHECK_CACHE_KEY)
@@ -77,8 +59,6 @@ function writeAutoCheckCache(info: UpdateInfo | null): void {
     const entry: UpdateCheckCacheEntry = { checkedAt: Date.now(), info }
     window.localStorage.setItem(AUTO_CHECK_CACHE_KEY, JSON.stringify(entry))
   } catch {
-    // Best-effort only -- a failed write just means the next mount
-    // checks again, which is the safe direction to fail in.
   }
 }
 
@@ -89,11 +69,6 @@ interface UpdateCheckResult {
 }
 
 async function fetchLatestReleaseInfo(timeoutMs: number): Promise<UpdateInfo | null> {
-  // These two requests don't depend on each other -- the health call
-  // only supplies the locally-installed version, which isNewer() needs
-  // but which the release request doesn't. Running them in parallel
-  // instead of one after another halves the worst-case wall-clock cost
-  // of this check.
   const [healthRes, releaseRes] = await Promise.all([
     fetchWithTimeout('/health', {}, timeoutMs),
     fetchWithTimeout(`https://api.github.com/repos/${REPO}/releases/latest`, {}, timeoutMs),
@@ -139,8 +114,6 @@ export function useUpdateCheck(): UpdateCheckResult {
       return
     }
 
-    // Held back until startup has settled so this external call never
-    // competes with the app's own launch traffic.
     const cancelScheduled = runAfterStartup(() => {
       fetchLatestReleaseInfo(AUTO_CHECK_TIMEOUT_MS)
         .then((result) => {

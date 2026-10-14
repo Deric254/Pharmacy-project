@@ -8,7 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.rbac import get_current_user, require_permission
 from app.models.user import User
-from app.schemas.supplier import PaymentRecordRequest, SupplierCreate, SupplierKpiOut, SupplierOut
+from app.schemas.supplier import (
+    PaymentRecordRequest,
+    PaymentReverseRequest,
+    SupplierCreate,
+    SupplierKpiOut,
+    SupplierOut,
+    SupplierPaymentOut,
+)
 from app.services.report_export_service import ExportFormat, build_export_response
 from app.services.supplier_service import SupplierService
 
@@ -99,3 +106,28 @@ async def record_payment(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SupplierOut:
     return await SupplierService(db).record_payment(supplier_id, payload, user)
+
+
+@router.get(
+    "/{supplier_id}/payments",
+    response_model=list[SupplierPaymentOut],
+    dependencies=[Depends(require_permission("purchasing.approve_po"))],
+)
+async def list_payments(
+    supplier_id: int, db: Annotated[AsyncSession, Depends(get_db)]
+) -> list[SupplierPaymentOut]:
+    return await SupplierService(db).list_payments(supplier_id)
+
+
+@router.post(
+    "/{supplier_id}/payments/{transaction_id}/reverse",
+    response_model=SupplierOut,
+)
+async def reverse_payment(
+    supplier_id: int,
+    transaction_id: int,
+    payload: PaymentReverseRequest,
+    user: Annotated[User, Depends(require_permission("purchasing.reverse_payment"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> SupplierOut:
+    return await SupplierService(db).reverse_payment(supplier_id, transaction_id, payload, user)

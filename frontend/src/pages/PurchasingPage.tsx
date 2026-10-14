@@ -15,11 +15,14 @@ import type {
   PurchaseOrderOut,
   SupplierKpiOut,
   SupplierOut,
+  SupplierPaymentOut,
 } from '../types/api'
 
 export function PurchasingPage() {
   const hasPermission = useAuthStore((s) => s.hasPermission)
   const canApprove = hasPermission('purchasing.approve_po')
+  const canReversePayment = hasPermission('purchasing.reverse_payment')
+  const canReversePurchase = hasPermission('purchasing.reverse_purchase')
 
   const [orders, setOrders] = useState<PurchaseOrderOut[]>([])
   const [suppliers, setSuppliers] = useState<SupplierOut[]>([])
@@ -128,7 +131,13 @@ export function PurchasingPage() {
                 <td className="px-3 py-2">{supplierName(suppliers, po.supplier_id)}</td>
                 <td className="figure px-3 py-2">{po.items.length}</td>
                 <td className="px-3 py-2">
-                  <span className="bg-brass-soft/30 px-2 py-0.5 text-xs uppercase tracking-wide text-ink">
+                  <span
+                    className={`px-2 py-0.5 text-xs uppercase tracking-wide ${
+                      po.status === 'REVERSED'
+                        ? 'bg-stamp-red-soft/40 text-stamp-red'
+                        : 'bg-brass-soft/30 text-ink'
+                    }`}
+                  >
                     {po.status}
                   </span>
                 </td>
@@ -174,6 +183,7 @@ export function PurchasingPage() {
         <SuppliersModal
           suppliers={suppliers}
           canRecordPayment={canApprove}
+          canReversePayment={canReversePayment}
           onClose={() => setShowSuppliers(false)}
           onChanged={refresh}
         />
@@ -183,6 +193,11 @@ export function PurchasingPage() {
         <PODetailModal
           po={selectedPO}
           supplierName={supplierName(suppliers, selectedPO.supplier_id)}
+          canReverse={canReversePurchase}
+          onReversed={() => {
+            setSelectedPO(null)
+            refresh()
+          }}
           onClose={() => setSelectedPO(null)}
         />
       )}
@@ -297,19 +312,19 @@ function CategoryBreakdownPanel({ orders }: { orders: PurchaseOrderOut[] }) {
 function SuppliersModal({
   suppliers,
   canRecordPayment,
+  canReversePayment,
   onClose,
   onChanged,
 }: {
   suppliers: SupplierOut[]
   canRecordPayment: boolean
+  canReversePayment: boolean
   onClose: () => void
   onChanged: () => void
 }) {
-  const formatCurrency = useCurrencyFormatter()
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const [paymentAmounts, setPaymentAmounts] = useState<Record<number, string>>({})
 
   async function handleCreate(e: FormEvent) {
     e.preventDefault()
@@ -322,19 +337,6 @@ function SuppliersModal({
       onChanged()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not add supplier.')
-    }
-  }
-
-  async function handlePay(supplierId: number) {
-    const amount = Number(paymentAmounts[supplierId])
-    if (!amount || amount <= 0) return
-    setError(null)
-    try {
-      await suppliersApi.recordPayment(supplierId, { amount })
-      setPaymentAmounts((prev) => ({ ...prev, [supplierId]: '' }))
-      onChanged()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not record payment.')
     }
   }
 
@@ -370,35 +372,14 @@ function SuppliersModal({
 
       <ul className="divide-y divide-rule">
         {suppliers.map((s) => (
-          <li key={s.id} className="flex items-center justify-between gap-2 py-2 text-sm">
-            <div>
-              <p className="font-medium">{s.name}</p>
-              <p className="figure text-xs text-ink-soft">
-                Owed: {formatCurrency(s.balance_owed)}
-              </p>
-            </div>
-            {canRecordPayment && s.balance_owed > 0 && (
-              <div className="flex items-center gap-1">
-                <input
-                  type="number"
-                  min={0.01}
-                  step="any"
-                  value={paymentAmounts[s.id] ?? ''}
-                  onChange={(e) =>
-                    setPaymentAmounts((prev) => ({ ...prev, [s.id]: e.target.value }))
-                  }
-                  placeholder="amount"
-                  className="figure w-24 border border-rule px-2 py-1 text-xs"
-                />
-                <button
-                  onClick={() => void handlePay(s.id)}
-                  className="border border-stamp-green px-2 py-1 text-xs text-stamp-green"
-                >
-                  Pay
-                </button>
-              </div>
-            )}
-          </li>
+          <SupplierRow
+            key={s.id}
+            supplier={s}
+            canRecordPayment={canRecordPayment}
+            canReversePayment={canReversePayment}
+            onChanged={onChanged}
+            onError={setError}
+          />
         ))}
         {suppliers.length === 0 && (
           <li className="py-3 text-sm text-ink-soft">No suppliers yet.</li>
@@ -408,16 +389,276 @@ function SuppliersModal({
   )
 }
 
+function newAttemptKey(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random()
+    .toString(36)
+    .slice(2)}`
+}
+
+function SupplierRow({
+  supplier,
+  canRecordPayment,
+  canReversePayment,
+  onChanged,
+  onError,
+}: {
+  supplier: SupplierOut
+  canRecordPayment: boolean
+  canReversePayment: boolean
+  onChanged: () => void
+  onError: (message: string | null) => void
+}) {
+  const formatCurrency = useCurrencyFormatter()
+  const [amount, setAmount] = useState('')
+  const [paying, setPaying] = useState(false)
+  const attempt = useRef<{ key: string; cents: number } | null>(null)
+  const busy = useRef(false)
+
+  const [showHistory, setShowHistory] = useState(false)
+  const [payments, setPayments] = useState<SupplierPaymentOut[] | null>(null)
+  const [reversingId, setReversingId] = useState<number | null>(null)
+  const [reason, setReason] = useState('')
+  const [reversing, setReversing] = useState(false)
+
+  const ownedCents = Math.round(supplier.balance_owed * 100)
+
+  async function loadPayments() {
+    try {
+      setPayments(await suppliersApi.payments(supplier.id))
+    } catch (err) {
+      onError(err instanceof ApiError ? err.message : 'Could not load payments.')
+    }
+  }
+
+  async function handlePay() {
+    if (busy.current) return
+    const typed = amount.trim()
+    if (!/^\d+(\.\d{1,2})?$/.test(typed) || Number(typed) <= 0) {
+      onError('Enter an amount greater than 0 with at most 2 decimal places.')
+      return
+    }
+    const cents = Math.round(Number(typed) * 100)
+    if (cents > ownedCents) {
+      onError(`Payment cannot exceed the amount owed (${formatCurrency(supplier.balance_owed)}).`)
+      return
+    }
+    if (attempt.current === null || attempt.current.cents !== cents) {
+      attempt.current = { key: newAttemptKey(), cents }
+    }
+    busy.current = true
+    setPaying(true)
+    onError(null)
+    try {
+      await suppliersApi.recordPayment(supplier.id, {
+        amount: cents / 100,
+        idempotency_key: attempt.current.key,
+      })
+      attempt.current = null
+      setAmount('')
+      if (showHistory) await loadPayments()
+      onChanged()
+    } catch (err) {
+      if (err instanceof ApiError) {
+        attempt.current = null
+        onError(err.message)
+      } else {
+        onError('Could not reach the server. Check the payment history before retrying.')
+      }
+    } finally {
+      busy.current = false
+      setPaying(false)
+    }
+  }
+
+  async function handleReverse(paymentId: number) {
+    if (busy.current) return
+    if (reason.trim().length < 3) {
+      onError('Give a reason (at least 3 characters) for reversing a payment.')
+      return
+    }
+    busy.current = true
+    setReversing(true)
+    onError(null)
+    try {
+      await suppliersApi.reversePayment(supplier.id, paymentId, {
+        reason: reason.trim(),
+      })
+      setReversingId(null)
+      setReason('')
+      await loadPayments()
+      onChanged()
+    } catch (err) {
+      onError(err instanceof ApiError ? err.message : 'Could not reverse the payment.')
+    } finally {
+      busy.current = false
+      setReversing(false)
+    }
+  }
+
+  return (
+    <li className="py-2 text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <p className="font-medium">{supplier.name}</p>
+          <p className="figure text-xs text-ink-soft">
+            {supplier.balance_owed < 0
+              ? `Overpaid (credit): ${formatCurrency(-supplier.balance_owed)}`
+              : `Owed: ${formatCurrency(supplier.balance_owed)}`}
+          </p>
+        </div>
+        <div className="flex items-center gap-1">
+          {canRecordPayment && supplier.balance_owed > 0 && (
+            <>
+              <input
+                type="number"
+                min={0.01}
+                max={supplier.balance_owed}
+                step="0.01"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                disabled={paying}
+                placeholder="amount"
+                aria-label={`Payment amount for ${supplier.name}`}
+                className="figure w-24 border border-rule px-2 py-1 text-xs"
+              />
+              <button
+                onClick={() => void handlePay()}
+                disabled={paying}
+                className="border border-stamp-green px-2 py-1 text-xs text-stamp-green disabled:opacity-50"
+              >
+                {paying ? 'Paying…' : 'Pay'}
+              </button>
+            </>
+          )}
+          {canRecordPayment && (
+            <button
+              onClick={() => {
+                const next = !showHistory
+                setShowHistory(next)
+                if (next) void loadPayments()
+              }}
+              className="border border-rule px-2 py-1 text-xs text-ink-soft hover:border-brass"
+            >
+              {showHistory ? 'Hide payments' : 'Payments'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {showHistory && (
+        <div className="mt-2 border border-rule bg-paper px-3 py-2">
+          {payments === null && <p className="text-xs text-ink-soft">Loading…</p>}
+          {payments?.length === 0 && <p className="text-xs text-ink-soft">No payments yet.</p>}
+          {payments?.map((p) => (
+            <div key={p.id} className="border-b border-rule py-1.5 text-xs last:border-b-0">
+              <div className="flex items-center justify-between gap-2">
+                <span className={p.reversed ? 'text-ink-soft line-through' : ''}>
+                  <span className="figure">{formatCurrency(p.amount)}</span>{' '}
+                  <span className="text-ink-soft">{new Date(p.created_at).toLocaleString()}</span>
+                  {p.notes ? <span className="text-ink-soft"> · {p.notes}</span> : null}
+                </span>
+                {p.reversed ? (
+                  <span className="text-stamp-red">Reversed: {p.reversal_reason}</span>
+                ) : (
+                  canReversePayment &&
+                  reversingId !== p.id && (
+                    <button
+                      onClick={() => {
+                        setReversingId(p.id)
+                        setReason('')
+                      }}
+                      className="border border-stamp-red px-2 py-0.5 text-stamp-red"
+                    >
+                      Reverse
+                    </button>
+                  )
+                )}
+              </div>
+              {reversingId === p.id && (
+                <div className="mt-1 flex items-center gap-1">
+                  <input
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                    maxLength={255}
+                    placeholder="Reason (required)"
+                    aria-label="Reason for reversing this payment"
+                    className="flex-1 border border-rule px-2 py-1"
+                  />
+                  <button
+                    onClick={() => void handleReverse(p.id)}
+                    disabled={reversing}
+                    className="border border-stamp-red bg-stamp-red px-2 py-1 text-paper disabled:opacity-50"
+                  >
+                    {reversing ? 'Reversing…' : 'Confirm reversal'}
+                  </button>
+                  <button
+                    onClick={() => setReversingId(null)}
+                    disabled={reversing}
+                    className="border border-rule px-2 py-1 text-ink-soft"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </li>
+  )
+}
+
 function PODetailModal({
   po,
   supplierName,
+  canReverse,
+  onReversed,
   onClose,
 }: {
   po: PurchaseOrderOut
   supplierName: string
+  canReverse: boolean
+  onReversed: () => void
   onClose: () => void
 }) {
   const formatCurrency = useCurrencyFormatter()
+  const [confirming, setConfirming] = useState(false)
+  const [reason, setReason] = useState('')
+  const [reversing, setReversing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const busy = useRef(false)
+
+  const total = po.items.reduce((sum, item) => {
+    const quantity = item.quantity_received ?? item.quantity_ordered
+    return sum + quantity * (item.unit_cost_actual ?? item.unit_cost_expected)
+  }, 0)
+
+  async function handleReverse() {
+    if (busy.current) return
+    if (reason.trim().length < 3) {
+      setError('Give a reason (at least 3 characters) for reversing this purchase.')
+      return
+    }
+    busy.current = true
+    setReversing(true)
+    setError(null)
+    try {
+      await purchaseOrdersApi.reverse(po.id, { reason: reason.trim() })
+      onReversed()
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : 'Could not reach the server. Check the purchase list before retrying.',
+      )
+    } finally {
+      busy.current = false
+      setReversing(false)
+    }
+  }
 
   return (
     <Modal title={`Purchase order #${po.id}`} onClose={onClose}>
@@ -427,6 +668,13 @@ function PODetailModal({
       <p className="mb-3 text-sm text-ink-soft">
         Received {new Date(po.received_at ?? po.created_at).toLocaleString()}
       </p>
+
+      {po.status === 'REVERSED' && (
+        <p className="mb-3 border border-stamp-red-soft bg-stamp-red-soft/40 px-3 py-2 text-sm text-stamp-red">
+          Reversed{po.reversed_at ? ` ${new Date(po.reversed_at).toLocaleString()}` : ''}:{' '}
+          {po.reversal_reason}
+        </p>
+      )}
 
       <ul className="mb-4 divide-y divide-rule border border-rule">
         {po.items.map((item) => (
@@ -445,7 +693,57 @@ function PODetailModal({
         ))}
       </ul>
 
-      <div className="flex justify-end">
+      {confirming && (
+        <div className="mb-4 border border-stamp-red-soft px-3 py-2 text-sm">
+          <p className="mb-2">
+            This removes this stock from inventory and cancels {formatCurrency(total)} owed to{' '}
+            {supplierName}. It only works while the stock is exactly as this purchase left it (nothing sold, adjusted or delivered into since).
+          </p>
+          {error && (
+            <p role="alert" className="mb-2 text-stamp-red">
+              {error}
+            </p>
+          )}
+          <input
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            maxLength={255}
+            disabled={reversing}
+            placeholder="Reason (required)"
+            aria-label="Reason for reversing this purchase"
+            className="mb-2 w-full border border-rule px-2 py-1"
+          />
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => {
+                setConfirming(false)
+                setError(null)
+              }}
+              disabled={reversing}
+              className="border border-rule px-3 py-1.5 text-ink-soft"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => void handleReverse()}
+              disabled={reversing}
+              className="border border-stamp-red bg-stamp-red px-3 py-1.5 text-paper disabled:opacity-50"
+            >
+              {reversing ? 'Reversing…' : 'Confirm reversal'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex justify-end gap-2">
+        {canReverse && po.status === 'RECEIVED' && !confirming && (
+          <button
+            onClick={() => setConfirming(true)}
+            className="border border-stamp-red px-4 py-2 text-sm text-stamp-red"
+          >
+            Reverse purchase
+          </button>
+        )}
         <button onClick={onClose} className="border border-rule px-4 py-2 text-sm">
           Close
         </button>
@@ -712,10 +1010,6 @@ function QuickPurchaseModal({
       setError('Every line needs a batch number and expiry date.')
       return
     }
-    // A mistyped year (2025 for 2027) would otherwise create stock nobody can
-    // sell, owed to the supplier, with the cashier only seeing "insufficient
-    // stock". The server allows it on purpose (an admin can correct a batch's
-    // date later), so ask here, before anything is recorded.
     const today = businessToday(timezone)
     const unsellable = validLines.filter((l) => isUnsellableExpiry(l.expiryDate, today))
     if (

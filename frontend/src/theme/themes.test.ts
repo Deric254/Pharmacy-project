@@ -8,8 +8,6 @@ function fontLinks(): string[] {
   )
 }
 
-// themes.ts keeps its "startup settled" state at module level, so every test
-// gets a fresh copy of it.
 async function freshThemes() {
   vi.resetModules()
   return import('./themes')

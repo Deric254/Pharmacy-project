@@ -1,11 +1,10 @@
 """
 AI provider adapter interface.
 
-Adding a new provider later means writing one new adapter class here
-and registering it in the map in ai_assistant_service.py -- nothing
-else in the system changes. This is the Open/Closed Principle doing
-real work: the panel, the fallback chain, and the key storage are all
-already provider-agnostic.
+A provider adapter is pure transport: it sends one prompt and returns the
+text. Adding a provider means writing one adapter class in adapters.py and
+registering it in the map in ai_assistant_service.py -- the planner, the data
+lookups, the fallback chain and the key storage are all provider-agnostic.
 """
 
 from abc import ABC, abstractmethod
@@ -28,5 +27,5 @@ class AIProvider(ABC):
         self.api_key = api_key
 
     @abstractmethod
-    async def ask(self, prompt: str, context: dict[str, object]) -> AIResponse:
+    async def complete(self, prompt: str) -> AIResponse:
         """Raises AIProviderError on any failure."""

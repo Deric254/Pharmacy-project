@@ -36,4 +36,15 @@ class SupplierTransaction(Base):
     amount: Mapped[float] = mapped_column(MoneyCents)
     reference: Mapped[str | None] = mapped_column(String(100), nullable=True)  # e.g. "po:12"
     notes: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Client-generated token sent with a payment so a repeated request
+    # (double click, retry) is answered with the original result instead
+    # of paying twice. Unique; NULL on every other kind of row.
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+    # Set only on a reversal row: the payment it cancels. Unique, so a
+    # payment can be reversed at most once.
+    reverses_transaction_id: Mapped[int | None] = mapped_column(
+        ForeignKey("supplier_transactions.id"), nullable=True, unique=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

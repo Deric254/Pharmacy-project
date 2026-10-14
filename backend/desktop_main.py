@@ -31,7 +31,7 @@ import time
 import webbrowser
 from collections.abc import Callable
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 # Unbuffered stdout: without this, print() output can appear to lag
 # behind what's actually happening (migrations already done, waiting
@@ -239,22 +239,61 @@ def _run_migrations(db_path: Path) -> None:
         # of its own till over it would be the worse outcome.
         if not _refusal_may_be_tolerated(head_revision, _current_revision(db_path)):
             raise
+        _apply_forward_compatible_schema(db_path)
         _keep_running_on_current_data(db_path)
 
 
-# Migration 0039 only adds database rules, and the migration after it (0040)
-# only drops purchase-order columns and statuses the app no longer reads or
-# writes; code at that revision is identical in behaviour on the schema just
-# before 0039. That is the ONLY situation where running on a not-fully-upgraded
-# database is safe. A later migration may change the schema code depends on, so
-# this must not be widened casually: any refusal not matching exactly this pair
-# is still fatal.
+# Migration 0039 only adds database rules. The migrations after it either only
+# drop purchase-order columns and statuses the app no longer reads or writes
+# (0040: identical in behaviour on the schema just before 0039) or only ADD
+# nullable columns/indexes the app needs (0041-0043: applied here by
+# `_apply_forward_compatible_schema`, so the app still has them). That is the
+# ONLY situation where running on a not-fully-upgraded database is safe. A
+# later migration may change the schema code depends on, so this must not be
+# widened casually: any refusal not matching exactly this set is still fatal.
 _TOLERATED_REFUSAL_FROM = "0038_products_category_id_index"
-_TOLERATED_REFUSAL_HEAD = "0040_drop_unused_po_workflow"
+_TOLERATED_REFUSAL_HEADS = frozenset(
+    {
+        "0040_drop_unused_po_workflow",
+        "0041_supplier_payment_safety",
+        "0042_purchase_reversal",
+        "0043_purchase_restock_snapshot",
+    }
+)
 
 
 def _refusal_may_be_tolerated(head_revision: str | None, current_revision: str | None) -> bool:
-    return head_revision == _TOLERATED_REFUSAL_HEAD and current_revision == _TOLERATED_REFUSAL_FROM
+    return head_revision in _TOLERATED_REFUSAL_HEADS and current_revision == _TOLERATED_REFUSAL_FROM
+
+
+def _apply_forward_compatible_schema(db_path: Path) -> None:
+    """
+    Adds the schema later migrations introduced that the current code needs,
+    while the database stays on the older revision. Each step is idempotent and
+    purely additive, in one transaction: it either all lands or none of it.
+    """
+    from app.core import purchase_reversal_schema, supplier_payment_schema
+
+    connection = sqlite3.connect(db_path, isolation_level=None)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+
+            def run(sql: str, params: tuple[Any, ...] = ()) -> list[Any]:
+                return connection.execute(sql, params).fetchall()
+
+            for additive_step in (
+                supplier_payment_schema.apply,
+                purchase_reversal_schema.apply,
+                purchase_reversal_schema.apply_restock_snapshot,
+            ):
+                additive_step(run)
+            connection.execute("COMMIT")
+        except BaseException:
+            connection.execute("ROLLBACK")
+            raise
+    finally:
+        connection.close()
 
 
 def _current_revision(db_path: Path) -> str | None:

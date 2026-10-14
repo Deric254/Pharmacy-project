@@ -7,7 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.rbac import require_permission
 from app.models.user import User
-from app.schemas.purchase_order import PurchaseOrderOut, QuickPurchaseRequest
+from app.schemas.purchase_order import (
+    PurchaseOrderOut,
+    PurchaseReverseRequest,
+    QuickPurchaseRequest,
+)
 from app.services.purchase_order_import_service import (
     bulk_import_purchase_order,
     generate_purchase_order_import_template,
@@ -99,3 +103,13 @@ async def get_purchase_order(
     po_id: int, db: Annotated[AsyncSession, Depends(get_db)]
 ) -> PurchaseOrderOut:
     return await PurchasingService(db).get(po_id)
+
+
+@router.post("/{po_id}/reverse", response_model=PurchaseOrderOut)
+async def reverse_purchase_order(
+    po_id: int,
+    payload: PurchaseReverseRequest,
+    user: Annotated[User, Depends(require_permission("purchasing.reverse_purchase"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> PurchaseOrderOut:
+    return await PurchasingService(db).reverse_purchase(po_id, payload, user)

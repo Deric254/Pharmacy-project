@@ -11,21 +11,22 @@ AI assistant tests. The properties that matter:
 """
 
 import asyncio
+import json
+import re
 import time as time_module
-from datetime import UTC, datetime, time, timedelta
+from datetime import date
 
 import httpx
+import pytest
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 
-from app.core.business_time import business_today, get_business_timezone, local_day_bounds_utc
 from app.core.database import AsyncSessionLocal
 from app.core.security import decrypt_secret, encrypt_secret
 from app.models.ai_conversation import AIConversation, AIConversationMessage
 from app.models.ai_provider_key import AIProviderKey, AIProviderName
-from app.models.customer import Customer
+from app.models.product import Product
 from app.models.role import Role
-from app.models.sale import Sale
+from app.models.supplier import Supplier, SupplierTransaction
 from app.models.user import User
 from app.schemas.ai import AIAskRequest
 from app.services.ai.adapters import (
@@ -36,8 +37,27 @@ from app.services.ai.adapters import (
     OpenAIAdapter,
 )
 from app.services.ai.base import AIProviderError, AIResponse
+from app.services.ai.data_tools import (
+    MAX_CALLS,
+    MAX_RESULT_CHARS,
+    MAX_ROWS,
+    TOOLS,
+    DataTool,
+    ToolContext,
+    ToolInputError,
+    ToolResult,
+    _bounded,
+    _validate,
+    available_tools,
+    catalog_text,
+    parse_plan,
+    render_results,
+    run_tool_calls,
+)
+from app.services.ai.prompts import FORMATTING_RULES, answer_prompt
 from app.services.ai_assistant_service import AIAssistantService
 from app.services.ai_conversation_service import ConversationNotFound
+from app.services.business_config_service import BusinessConfigService
 
 
 async def _login(client, username: str, password: str) -> str:
@@ -260,7 +280,7 @@ class TestFallbackChain:
 
         def working_factory(provider, api_key):
             class FakeAdapter:
-                async def ask(self, prompt, context):
+                async def complete(self, prompt):
                     return AIResponse(text=f"Answer from {provider.value}")
 
             return FakeAdapter()
@@ -295,11 +315,11 @@ class TestFallbackChain:
             await db.commit()
 
         class FailingAdapter:
-            async def ask(self, prompt, context):
+            async def complete(self, prompt):
                 raise AIProviderError("simulated failure")
 
         class WorkingAdapter:
-            async def ask(self, prompt, context):
+            async def complete(self, prompt):
                 return AIResponse(text="Claude saved the day")
 
         def fallback_factory(provider, api_key):
@@ -328,7 +348,7 @@ class TestFallbackChain:
             await db.commit()
 
         class AlwaysFailsAdapter:
-            async def ask(self, prompt, context):
+            async def complete(self, prompt):
                 raise AIProviderError("provider is down")
 
         def always_fails_factory(provider, api_key):
@@ -363,7 +383,7 @@ class TestFallbackChain:
             await db.commit()
 
         class BuggyAdapter:
-            async def ask(self, prompt, context):
+            async def complete(self, prompt):
                 raise ValueError("some unrelated bug, not an AIProviderError")
 
         def buggy_factory(provider, api_key):
@@ -375,46 +395,10 @@ class TestFallbackChain:
             assert response.provider_used is None
             assert "temporarily unavailable" in response.answer
 
-    async def test_context_is_passed_through_to_the_adapter(self, client, owner_user):
-        async with AsyncSessionLocal() as db:
-            db.add(
-                AIProviderKey(
-                    user_id=owner_user.id,
-                    provider=AIProviderName.OPENAI,
-                    encrypted_key=encrypt_secret("key"),
-                    key_hint="key1",
-                    priority=1,
-                )
-            )
-            await db.commit()
-
-        captured_context: dict[str, object] = {}
-
-        class ContextCapturingAdapter:
-            async def ask(self, prompt, context):
-                captured_context.update(context)
-                return AIResponse(text="ok")
-
-        def factory(provider, api_key):
-            return ContextCapturingAdapter()
-
-        async with AsyncSessionLocal() as db:
-            service = AIAssistantService(db, adapter_factory=factory)
-            await service.ask(
-                owner_user,
-                AIAskRequest(
-                    prompt="why is this expiring soon?",
-                    context={"product_name": "Amoxicillin", "days_to_expiry": 12},
-                ),
-            )
-        assert captured_context["product_name"] == "Amoxicillin"
-        assert captured_context["days_to_expiry"] == 12
-
 
 class TestPermissions:
     async def test_ask_requires_ai_use_permission(self, client, seeded_roles):
         from app.core.security import hash_password
-        from app.models.role import Role
         from app.models.user import User
 
         async with AsyncSessionLocal() as db:
@@ -462,46 +446,12 @@ class TestRealAdapterRequestShape:
         http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         adapter = OpenAIAdapter(api_key="test-key-123", client=http_client)
 
-        response = await adapter.ask("What's low on stock?", {"screen": "dashboard"})
+        response = await adapter.complete("What's low on stock?")
 
         assert response.text == "Hello from OpenAI"
         assert captured["url"] == "https://api.openai.com/v1/chat/completions"
         assert captured["auth_header"] == "Bearer test-key-123"
         assert b"What's low on stock?" in captured["body"]
-        assert b"screen" in captured["body"]  # context was included
-
-    async def test_every_prompt_carries_the_mandatory_business_insight_instruction(self):
-        """
-        The actual new requirement: every single reply, even a plain
-        greeting with no business question in it, must close with a
-        short, data-grounded performance/trajectory/next-action
-        summary. That instruction has to reach the model on every
-        call, not just ones that look like business questions --
-        proven here through a REAL adapter (OpenAIAdapter, real
-        request-building code, only the HTTP transport mocked), with
-        a prompt that is deliberately just a greeting and nothing
-        else, to rule out any chance this only fires for
-        business-sounding questions.
-        """
-        captured_body = b""
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            nonlocal captured_body
-            captured_body = request.read()
-            return httpx.Response(200, json={"choices": [{"message": {"content": "hi!"}}]})
-
-        http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        adapter = OpenAIAdapter(api_key="test-key-123", client=http_client)
-
-        await adapter.ask("good morning", {"person_asking_name": "Deric"})
-
-        assert b"How the business is doing" in captured_body
-        assert b"good morning" in captured_body
-        # Never invents a figure when none was actually provided --
-        # the instruction text itself says so explicitly; this checks
-        # that instruction is really present, word for word, not just
-        # a similar-sounding phrase.
-        assert b"never invent" in captured_body.lower() or b"never state" in captured_body.lower()
 
     async def test_claude_adapter_builds_correct_request(self):
         """
@@ -526,7 +476,7 @@ class TestRealAdapterRequestShape:
         http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         adapter = ClaudeAdapter(api_key="claude-key-456", client=http_client)
 
-        response = await adapter.ask("help", {})
+        response = await adapter.complete("help")
 
         assert response.text == "Hello from Claude"
         assert captured["url"] == "https://api.anthropic.com/v1/messages"
@@ -558,7 +508,7 @@ class TestRealAdapterRequestShape:
         http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         adapter = GeminiAdapter(api_key="gemini-key-789", client=http_client)
 
-        response = await adapter.ask("What's expiring soon?", {})
+        response = await adapter.complete("What's expiring soon?")
 
         assert response.text == "Hello from Gemini"
         assert captured["url"] == (
@@ -588,7 +538,7 @@ class TestRealAdapterRequestShape:
         http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         adapter = DeepSeekAdapter(api_key="deepseek-key-321", client=http_client)
 
-        response = await adapter.ask("Any low stock?", {})
+        response = await adapter.complete("Any low stock?")
 
         assert response.text == "Hello from DeepSeek"
         assert captured["url"] == "https://api.deepseek.com/chat/completions"
@@ -618,7 +568,7 @@ class TestRealAdapterRequestShape:
         http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         adapter = NvidiaAdapter(api_key="nvidia-key-654", client=http_client)
 
-        response = await adapter.ask("Reorder suggestions?", {})
+        response = await adapter.complete("Reorder suggestions?")
 
         assert response.text == "Hello from Nvidia"
         assert captured["url"] == "https://integrate.api.nvidia.com/v1/chat/completions"
@@ -634,7 +584,7 @@ class TestRealAdapterRequestShape:
 
         raised = False
         try:
-            await adapter.ask("test", {})
+            await adapter.complete("test")
         except AIProviderError:
             raised = True
         assert raised, "Expected AIProviderError on a 401 response"
@@ -648,1011 +598,10 @@ class TestRealAdapterRequestShape:
 
         raised = False
         try:
-            await adapter.ask("test", {})
+            await adapter.complete("test")
         except AIProviderError:
             raised = True
         assert raised, "Expected AIProviderError when response doesn't match the expected shape"
-
-
-class TestBusinessContext:
-    """
-    The actual gap this closes: the frontend never sent any context at
-    all, so every AI answer was pure guesswork with zero grounding in
-    the real pharmacy's data. Business context is now built server-
-    side, fresh, on every question -- never trusting whatever a client
-    might claim, and matching the dashboard's own profit-visibility
-    rule exactly.
-    """
-
-    async def test_business_context_is_automatically_included_with_no_client_context(
-        self, client, owner_user
-    ):
-        async with AsyncSessionLocal() as db:
-            db.add(
-                AIProviderKey(
-                    user_id=owner_user.id,
-                    provider=AIProviderName.OPENAI,
-                    encrypted_key=encrypt_secret("key"),
-                    key_hint="key1",
-                    priority=1,
-                )
-            )
-            await db.commit()
-
-        captured_context: dict[str, object] = {}
-
-        class ContextCapturingAdapter:
-            async def ask(self, prompt, context):
-                captured_context.update(context)
-                return AIResponse(text="ok")
-
-        def factory(provider, api_key):
-            return ContextCapturingAdapter()
-
-        async with AsyncSessionLocal() as db:
-            service = AIAssistantService(db, adapter_factory=factory)
-            await service.ask(owner_user, AIAskRequest(prompt="how is my pharmacy doing today?"))
-
-        # Real business numbers, present even though the client sent
-        # nothing at all -- this is the actual feature.
-        assert "today_revenue" in captured_context
-        assert "today_transaction_count" in captured_context
-        assert "low_stock_product_count" in captured_context
-
-    async def test_revenue_trend_included_when_a_prior_period_exists(self, client, owner_user):
-        """
-        The real data the mandatory closing summary (see
-        _BUSINESS_INSIGHT_CLOSING) depends on for an accurate
-        trajectory statement, rather than a guess. A sale yesterday
-        and a sale today gives kpi_dashboard a real day-over-day
-        comparison to compute -- this checks that number actually
-        reaches the assistant's context, not just the dashboard.
-        """
-        from app.models.medicine_batch import MedicineBatch
-        from app.models.product import Product
-        from app.models.sale import Sale, SaleItem
-
-        async with AsyncSessionLocal() as db:
-            db.add(
-                AIProviderKey(
-                    user_id=owner_user.id,
-                    provider=AIProviderName.OPENAI,
-                    encrypted_key=encrypt_secret("key"),
-                    key_hint="key1",
-                    priority=1,
-                )
-            )
-            product = Product(name="Trend Test Product")
-            db.add(product)
-            await db.flush()
-            batch = MedicineBatch(
-                product_id=product.id,
-                batch_number="TR1",
-                expiry_date=datetime(2027, 1, 1).date(),
-                qty_received=10,
-                qty_remaining=10,
-                cost_price=40.0,
-                selling_price=100.0,
-            )
-            db.add(batch)
-            await db.flush()
-
-            # Anchored to the business's own "today" (business_today())
-            # at local noon, not to whatever instant this process
-            # happens to run at -- otherwise this is flaky for the few
-            # hours each day the business's local calendar day has
-            # already rolled over ahead of this process's own clock.
-            today = await business_today(db)
-            tz = await get_business_timezone(db)
-            for offset_days, price in [(1, 50.0), (0, 100.0)]:  # yesterday, then today
-                sale = Sale(
-                    cashier_user_id=owner_user.id,
-                    subtotal=price,
-                    discount_amount=0.0,
-                    total_amount=price,
-                )
-                db.add(sale)
-                await db.flush()
-                local_noon = datetime.combine(
-                    today - timedelta(days=offset_days), time(12, 0), tzinfo=tz
-                )
-                sale.created_at = local_noon.astimezone(UTC).replace(tzinfo=None)
-                db.add(
-                    SaleItem(
-                        sale_id=sale.id,
-                        product_id=product.id,
-                        batch_id=batch.id,
-                        quantity=1,
-                        unit_price=price,
-                        unit_cost=batch.cost_price,
-                        line_total=price,
-                    )
-                )
-            await db.commit()
-
-        captured_context: dict[str, object] = {}
-
-        class ContextCapturingAdapter:
-            async def ask(self, prompt, context):
-                captured_context.update(context)
-                return AIResponse(text="ok")
-
-        def factory(provider, api_key):
-            return ContextCapturingAdapter()
-
-        async with AsyncSessionLocal() as db:
-            service = AIAssistantService(db, adapter_factory=factory)
-            await service.ask(owner_user, AIAskRequest(prompt="how are we doing?"))
-
-        # Today (100) vs yesterday (50) is a real +100% swing --
-        # present, and not fabricated as some other number.
-        assert captured_context.get("today_revenue_change_vs_prior_period_percent") == 100.0
-
-    async def test_monetary_figures_carry_the_businesss_real_currency_not_dollars(
-        self, client, owner_user
-    ):
-        """
-        The actual bug this closes: context values were bare numbers
-        (e.g. 1553.68) with no unit attached anywhere, and a model
-        given a bare figure in a business-data context defaults to
-        assuming USD far more often than not -- regardless of what
-        currency the business actually operates in. Proven with a
-        currency deliberately set to neither the schema default (KES)
-        nor USD, so this can't pass by coincidence either way.
-        """
-        from datetime import date as date_type
-
-        from app.models.medicine_batch import MedicineBatch
-        from app.models.product import Product
-        from app.models.sale import Sale, SaleItem
-
-        token = None
-        async with AsyncSessionLocal() as db:
-            db.add(
-                AIProviderKey(
-                    user_id=owner_user.id,
-                    provider=AIProviderName.OPENAI,
-                    encrypted_key=encrypt_secret("key"),
-                    key_hint="key1",
-                    priority=1,
-                )
-            )
-            product = Product(name="Currency Test Product")
-            db.add(product)
-            await db.flush()
-            batch = MedicineBatch(
-                product_id=product.id,
-                batch_number="CUR1",
-                expiry_date=date_type(2027, 1, 1),
-                qty_received=10,
-                qty_remaining=10,
-                cost_price=20.0,
-                selling_price=50.0,
-            )
-            db.add(batch)
-            await db.flush()
-            sale = Sale(
-                cashier_user_id=owner_user.id, subtotal=50.0, discount_amount=0.0, total_amount=50.0
-            )
-            db.add(sale)
-            await db.flush()
-            db.add(
-                SaleItem(
-                    sale_id=sale.id,
-                    product_id=product.id,
-                    batch_id=batch.id,
-                    quantity=1,
-                    unit_price=50.0,
-                    unit_cost=batch.cost_price,
-                    line_total=50.0,
-                )
-            )
-            # Pinned to a safe instant inside the business's own
-            # "today" (business_today(), whatever timezone this
-            # business is actually configured with) rather than
-            # trusting func.now() to land there -- the test would
-            # otherwise be flaky for the few hours each day where the
-            # business's local calendar day has already rolled over
-            # ahead of this process's own clock.
-            today = await business_today(db)
-            tz = await get_business_timezone(db)
-            local_noon = datetime.combine(today, time(12, 0), tzinfo=tz)
-            sale.created_at = local_noon.astimezone(UTC).replace(tzinfo=None)
-            await db.commit()
-
-        # Deliberately neither the schema default (KES) nor USD --
-        # a currency change actually taking effect here, rather than a
-        # hardcoded string surviving anywhere, is exactly what this
-        # test needs to rule out.
-        r = await client.post(
-            "/api/v1/auth/login", json={"username": "lucy", "password": "S3curePass!"}
-        )
-        assert r.status_code == 200
-        token = r.json()["access_token"]
-        cfg = await client.patch(
-            "/api/v1/config",
-            json={"currency": "EUR"},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        assert cfg.status_code == 200, cfg.text
-        assert cfg.json()["currency"] == "EUR"
-
-        captured_context: dict[str, object] = {}
-
-        class ContextCapturingAdapter:
-            async def ask(self, prompt, context):
-                captured_context.update(context)
-                return AIResponse(text="ok")
-
-        def factory(provider, api_key):
-            return ContextCapturingAdapter()
-
-        async with AsyncSessionLocal() as db:
-            service = AIAssistantService(db, adapter_factory=factory)
-            await service.ask(owner_user, AIAskRequest(prompt="how much did I make today?"))
-
-        # The monetary figure carries the real, just-changed currency
-        # -- not USD, not the schema default, not a bare number.
-        assert captured_context["today_revenue"] == "EUR 50.00"
-        # Non-monetary figures must NOT gain a currency prefix -- this
-        # fix is surgical, not a blanket string-wrap over every value
-        # in the context.
-        assert captured_context["today_transaction_count"] == 1
-
-    async def test_client_sent_context_cannot_override_the_real_business_numbers(
-        self, client, owner_user
-    ):
-        async with AsyncSessionLocal() as db:
-            db.add(
-                AIProviderKey(
-                    user_id=owner_user.id,
-                    provider=AIProviderName.OPENAI,
-                    encrypted_key=encrypt_secret("key"),
-                    key_hint="key1",
-                    priority=1,
-                )
-            )
-            await db.commit()
-
-        captured_context: dict[str, object] = {}
-
-        class ContextCapturingAdapter:
-            async def ask(self, prompt, context):
-                captured_context.update(context)
-                return AIResponse(text="ok")
-
-        def factory(provider, api_key):
-            return ContextCapturingAdapter()
-
-        async with AsyncSessionLocal() as db:
-            service = AIAssistantService(db, adapter_factory=factory)
-            await service.ask(
-                owner_user,
-                AIAskRequest(
-                    prompt="what's my revenue?",
-                    # A spoofing attempt -- must not win over the real number.
-                    context={"today_revenue": 999999999.0},
-                ),
-            )
-
-        assert captured_context["today_revenue"] != 999999999.0
-
-    async def test_profit_excluded_from_context_without_view_profit_permission(
-        self, client, owner_user, administrator_user
-    ):
-        async with AsyncSessionLocal() as db:
-            db.add(
-                AIProviderKey(
-                    user_id=administrator_user.id,
-                    provider=AIProviderName.OPENAI,
-                    encrypted_key=encrypt_secret("key"),
-                    key_hint="key1",
-                    priority=1,
-                )
-            )
-            await db.commit()
-
-        captured_context: dict[str, object] = {}
-
-        class ContextCapturingAdapter:
-            async def ask(self, prompt, context):
-                captured_context.update(context)
-                return AIResponse(text="ok")
-
-        def factory(provider, api_key):
-            return ContextCapturingAdapter()
-
-        async with AsyncSessionLocal() as db:
-            service = AIAssistantService(db, adapter_factory=factory)
-            await service.ask(administrator_user, AIAskRequest(prompt="how's business?"))
-
-        # Same rule the dashboard enforces -- not leaked into the AI
-        # prompt just because the assistant has a wider data pipe than
-        # the dashboard's own endpoint.
-        assert "today_profit" not in captured_context
-        assert "today_profit_margin_percent" not in captured_context
-
-    async def test_profit_included_in_context_for_owner(self, client, owner_user):
-        async with AsyncSessionLocal() as db:
-            db.add(
-                AIProviderKey(
-                    user_id=owner_user.id,
-                    provider=AIProviderName.OPENAI,
-                    encrypted_key=encrypt_secret("key"),
-                    key_hint="key1",
-                    priority=1,
-                )
-            )
-            await db.commit()
-
-        captured_context: dict[str, object] = {}
-
-        class ContextCapturingAdapter:
-            async def ask(self, prompt, context):
-                captured_context.update(context)
-                return AIResponse(text="ok")
-
-        def factory(provider, api_key):
-            return ContextCapturingAdapter()
-
-        async with AsyncSessionLocal() as db:
-            service = AIAssistantService(db, adapter_factory=factory)
-            await service.ask(owner_user, AIAskRequest(prompt="how's business?"))
-
-        assert "today_profit" in captured_context
-
-    async def _make_product(self, name: str, price: float) -> int:
-        from app.models.medicine_batch import MedicineBatch
-        from app.models.product import Product
-
-        async with AsyncSessionLocal() as db:
-            product = Product(name=name)
-            db.add(product)
-            await db.flush()
-            batch = MedicineBatch(
-                product_id=product.id,
-                batch_number=f"B-{name}",
-                expiry_date=datetime(2027, 1, 1).date(),
-                qty_received=100,
-                qty_remaining=100,
-                cost_price=1.0,
-                selling_price=price,
-            )
-            db.add(batch)
-            await db.commit()
-            return int(product.id)
-
-    async def test_reports_intelligence_excluded_without_reports_view_permission(
-        self, client, owner_user, employee_user
-    ):
-        """
-        The exact scenario this must never allow: a cashier has ai.use
-        (can ask the assistant questions at all) but not reports.view
-        (cannot open the Reports page's Fast/Slow Movers, Stock
-        Runway, or the new intelligence tabs). Asking the assistant
-        must not be a side door around that -- same rule as profit
-        above, extended to these two new figures.
-        """
-        product_a = await self._make_product("Gate Pair A", 5.0)
-        product_b = await self._make_product("Gate Pair B", 8.0)
-        owner_token = await _login(client, "lucy", "S3curePass!")
-        owner_headers = {"Authorization": f"Bearer {owner_token}"}
-        for _ in range(2):
-            await client.post(
-                "/api/v1/sales",
-                json={
-                    "items": [
-                        {"product_id": product_a, "quantity": 1},
-                        {"product_id": product_b, "quantity": 1},
-                    ],
-                    "payments": [{"method": "CASH", "amount": 13.0}],
-                },
-                headers=owner_headers,
-            )
-
-        async with AsyncSessionLocal() as db:
-            db.add(
-                AIProviderKey(
-                    user_id=employee_user.id,
-                    provider=AIProviderName.OPENAI,
-                    encrypted_key=encrypt_secret("key"),
-                    key_hint="key1",
-                    priority=1,
-                )
-            )
-            await db.commit()
-
-        captured_context: dict[str, object] = {}
-
-        class ContextCapturingAdapter:
-            async def ask(self, prompt, context):
-                captured_context.update(context)
-                return AIResponse(text="ok")
-
-        def factory(provider, api_key):
-            return ContextCapturingAdapter()
-
-        async with AsyncSessionLocal() as db:
-            service = AIAssistantService(db, adapter_factory=factory)
-            await service.ask(employee_user, AIAskRequest(prompt="what sells together?"))
-
-        assert "most_frequently_bought_together" not in captured_context
-        assert "top_seasonal_pattern" not in captured_context
-
-    async def test_co_occurrence_included_in_context_with_reports_view_permission(
-        self, client, owner_user, administrator_user
-    ):
-        product_a = await self._make_product("Included Pair A", 5.0)
-        product_b = await self._make_product("Included Pair B", 8.0)
-        owner_token = await _login(client, "lucy", "S3curePass!")
-        owner_headers = {"Authorization": f"Bearer {owner_token}"}
-        for _ in range(2):
-            await client.post(
-                "/api/v1/sales",
-                json={
-                    "items": [
-                        {"product_id": product_a, "quantity": 1},
-                        {"product_id": product_b, "quantity": 1},
-                    ],
-                    "payments": [{"method": "CASH", "amount": 13.0}],
-                },
-                headers=owner_headers,
-            )
-
-        async with AsyncSessionLocal() as db:
-            db.add(
-                AIProviderKey(
-                    user_id=administrator_user.id,
-                    provider=AIProviderName.OPENAI,
-                    encrypted_key=encrypt_secret("key"),
-                    key_hint="key1",
-                    priority=1,
-                )
-            )
-            await db.commit()
-
-        captured_context: dict[str, object] = {}
-
-        class ContextCapturingAdapter:
-            async def ask(self, prompt, context):
-                captured_context.update(context)
-                return AIResponse(text="ok")
-
-        def factory(provider, api_key):
-            return ContextCapturingAdapter()
-
-        async with AsyncSessionLocal() as db:
-            service = AIAssistantService(db, adapter_factory=factory)
-            # administrator_user has reports.view but not
-            # reports.view_profit -- proves this new gate is tied to
-            # the correct (broader) permission, not accidentally
-            # scoped to owner-only like profit is.
-            await service.ask(administrator_user, AIAskRequest(prompt="what sells together?"))
-
-        assert "most_frequently_bought_together" in captured_context
-        assert "Included Pair A" in captured_context["most_frequently_bought_together"]
-        assert "Included Pair B" in captured_context["most_frequently_bought_together"]
-
-    async def test_business_context_failure_never_breaks_the_assistant(
-        self, client, owner_user, monkeypatch
-    ):
-        """
-        Business context is enrichment, not load-bearing -- if
-        computing it fails for any reason, the assistant must still
-        answer using whatever context it has, never a 500.
-        """
-        async with AsyncSessionLocal() as db:
-            db.add(
-                AIProviderKey(
-                    user_id=owner_user.id,
-                    provider=AIProviderName.OPENAI,
-                    encrypted_key=encrypt_secret("key"),
-                    key_hint="key1",
-                    priority=1,
-                )
-            )
-            await db.commit()
-
-        class AlwaysSucceedsAdapter:
-            async def ask(self, prompt, context):
-                return AIResponse(text="ok despite broken context")
-
-        def factory(provider, api_key):
-            return AlwaysSucceedsAdapter()
-
-        async def broken_kpi_dashboard(*args, **kwargs):
-            raise RuntimeError("simulated failure")
-
-        monkeypatch.setattr(
-            "app.services.report_service.ReportService.kpi_dashboard", broken_kpi_dashboard
-        )
-
-        async with AsyncSessionLocal() as db:
-            service = AIAssistantService(db, adapter_factory=factory)
-            response = await service.ask(owner_user, AIAskRequest(prompt="test"))
-
-        assert response.answer == "ok despite broken context"
-
-    async def test_respects_a_client_supplied_viewing_date_range(self, client, owner_user):
-        """
-        The real new fix: when the person is looking at a specific
-        range on the Dashboard (e.g. "last month"), the assistant's
-        business context reflects that range instead of always
-        defaulting to today -- computed fresh server-side for that
-        range, never trusting a number from the client, only the
-        dates themselves.
-        """
-        from datetime import datetime, timedelta
-
-        from app.models.medicine_batch import MedicineBatch
-        from app.models.product import Product
-        from app.models.sale import Sale, SaleItem
-
-        async with AsyncSessionLocal() as db:
-            db.add(
-                AIProviderKey(
-                    user_id=owner_user.id,
-                    provider=AIProviderName.OPENAI,
-                    encrypted_key=encrypt_secret("key"),
-                    key_hint="key1",
-                    priority=1,
-                )
-            )
-            product = Product(name="Viewed Range Test Product")
-            db.add(product)
-            await db.flush()
-            batch = MedicineBatch(
-                product_id=product.id,
-                batch_number="VR1",
-                expiry_date=datetime(2027, 1, 1).date(),
-                qty_received=10,
-                qty_remaining=10,
-                cost_price=40.0,
-                selling_price=99.0,
-            )
-            db.add(batch)
-            await db.flush()
-
-            # A real sale placed "yesterday" (the business's own local
-            # yesterday, not datetime.now() - 1 day -- that's the test
-            # runner's system clock, which silently disagrees with the
-            # business's configured timezone for part of every day; see
-            # business_time.py's own docstring for the proof).
-            yesterday_local = await business_today(db) - timedelta(days=1)
-            utc_start, _utc_end = await local_day_bounds_utc(db, yesterday_local)
-            yesterday = utc_start + timedelta(hours=12)  # safely inside that local day
-            sale = Sale(
-                cashier_user_id=owner_user.id,
-                subtotal=99.0,
-                discount_amount=0.0,
-                total_amount=99.0,
-            )
-            db.add(sale)
-            await db.flush()
-            sale.created_at = yesterday
-            db.add(
-                SaleItem(
-                    sale_id=sale.id,
-                    product_id=product.id,
-                    batch_id=batch.id,
-                    quantity=1,
-                    unit_price=99.0,
-                    unit_cost=batch.cost_price,
-                    line_total=99.0,
-                )
-            )
-            await db.commit()
-
-        captured_context: dict[str, object] = {}
-
-        class ContextCapturingAdapter:
-            async def ask(self, prompt, context):
-                captured_context.update(context)
-                return AIResponse(text="ok")
-
-        def factory(provider, api_key):
-            return ContextCapturingAdapter()
-
-        yesterday_str = yesterday_local.isoformat()
-        async with AsyncSessionLocal() as db:
-            service = AIAssistantService(db, adapter_factory=factory)
-            await service.ask(
-                owner_user,
-                AIAskRequest(
-                    prompt="how did that period go?",
-                    context={
-                        "viewing_start_date": yesterday_str,
-                        "viewing_end_date": yesterday_str,
-                    },
-                ),
-            )
-
-        # The viewed-period revenue must include yesterday's real sale
-        # -- proving the range was actually used, not just accepted
-        # and ignored. Formatted with the business's real currency
-        # (KES, the default) rather than a bare number -- see
-        # _build_business_context's own reasoning for why a bare
-        # figure with no unit isn't safe to hand to a model.
-        assert captured_context.get("viewed_period_revenue") == "KES 99.00"
-
-    async def test_viewed_date_range_is_respected_not_always_today(self, client, owner_user):
-        """
-        The real gap this closes: the assistant's business awareness
-        was hardcoded to today, with zero connection to whatever range
-        someone was actually looking at on the Dashboard's slicer.
-        Only a date range crosses from client to server here -- every
-        number is still computed fresh, server-side, for that range.
-        """
-        token = await _login(client, "lucy", "S3curePass!")
-        headers = {"Authorization": f"Bearer {token}"}
-
-        product = await client.post(
-            "/api/v1/products",
-            json={"name": "AI Context Range Product"},
-            headers=headers,
-        )
-        product_id = product.json()["id"]
-        await client.post(
-            f"/api/v1/products/{product_id}/batches",
-            json={
-                "batch_number": "AICTX1",
-                "expiry_date": "2097-06-30",
-                "qty_received": 20,
-                "cost_price": 15.0,
-                "selling_price": 40.0,
-            },
-            headers=headers,
-        )
-        sale = await client.post(
-            "/api/v1/sales",
-            json={
-                "items": [{"product_id": product_id, "quantity": 1}],
-                "payments": [{"method": "CASH", "amount": 40.0}],
-            },
-            headers=headers,
-        )
-        sale_id = sale.json()["id"]
-
-        # Push the sale to yesterday -- outside today's default window.
-        # The business's own local yesterday (see business_time.py's
-        # docstring), converted to a safe mid-day UTC instant rather
-        # than combined naively with local midnight -- local midnight
-        # is not UTC midnight, so a naive combine risks landing back
-        # on the wrong calendar day, the exact bug this whole file is
-        # now written to avoid.
-        async with AsyncSessionLocal() as db:
-            yesterday = await business_today(db) - timedelta(days=1)
-            utc_start, _utc_end = await local_day_bounds_utc(db, yesterday)
-            yesterday_utc_instant = utc_start + timedelta(hours=12)
-
-            from app.models.sale import Sale
-
-            result = await db.execute(select(Sale).where(Sale.id == sale_id))
-            row = result.scalar_one()
-            row.created_at = yesterday_utc_instant
-            await db.commit()
-
-            db.add(
-                AIProviderKey(
-                    user_id=owner_user.id,
-                    provider=AIProviderName.OPENAI,
-                    encrypted_key=encrypt_secret("key"),
-                    key_hint="key1",
-                    priority=1,
-                )
-            )
-            await db.commit()
-
-        captured_context: dict[str, object] = {}
-
-        class ContextCapturingAdapter:
-            async def ask(self, prompt, context):
-                captured_context.update(context)
-                return AIResponse(text="ok")
-
-        def factory(provider, api_key):
-            return ContextCapturingAdapter()
-
-        async with AsyncSessionLocal() as db:
-            service = AIAssistantService(db, adapter_factory=factory)
-            await service.ask(
-                owner_user,
-                AIAskRequest(
-                    prompt="how's business?",
-                    context={
-                        "viewing_start_date": yesterday.isoformat(),
-                        "viewing_end_date": yesterday.isoformat(),
-                    },
-                ),
-            )
-
-        # The viewed-period revenue must reflect yesterday's real
-        # sale, not an empty "today" -- proving the range was honored.
-        # Formatted with the business's real currency (KES, the
-        # default), same reasoning as the sibling test above.
-        assert captured_context["viewed_period_revenue"] == "KES 40.00"
-
-    async def test_malformed_viewing_dates_fall_back_to_today_silently(self, client, owner_user):
-        async with AsyncSessionLocal() as db:
-            db.add(
-                AIProviderKey(
-                    user_id=owner_user.id,
-                    provider=AIProviderName.OPENAI,
-                    encrypted_key=encrypt_secret("key"),
-                    key_hint="key1",
-                    priority=1,
-                )
-            )
-            await db.commit()
-
-        class AlwaysSucceedsAdapter:
-            async def ask(self, prompt, context):
-                return AIResponse(text="ok")
-
-        def factory(provider, api_key):
-            return AlwaysSucceedsAdapter()
-
-        async with AsyncSessionLocal() as db:
-            service = AIAssistantService(db, adapter_factory=factory)
-            # Garbage input must never crash the assistant.
-            response = await service.ask(
-                owner_user,
-                AIAskRequest(
-                    prompt="test",
-                    context={"viewing_start_date": "not-a-date", "viewing_end_date": 12345},
-                ),
-            )
-
-        assert response.answer == "ok"
-
-    async def test_explicit_period_in_prompt_overrides_dashboard_viewed_range(
-        self, client, owner_user
-    ):
-        """
-        The real gap this closes: asking about a specific period IN
-        THE QUESTION ITSELF (e.g. "how did we do yesterday?") must be
-        answered for that period, not whatever the Dashboard's date
-        filter happens to still be sitting on -- even when the client
-        sends a completely different viewing_start_date/end_date, the
-        period named in the prompt wins.
-        """
-        from datetime import datetime, timedelta
-
-        from app.models.medicine_batch import MedicineBatch
-        from app.models.product import Product
-        from app.models.sale import Sale, SaleItem
-
-        async with AsyncSessionLocal() as db:
-            db.add(
-                AIProviderKey(
-                    user_id=owner_user.id,
-                    provider=AIProviderName.OPENAI,
-                    encrypted_key=encrypt_secret("key"),
-                    key_hint="key1",
-                    priority=1,
-                )
-            )
-            product = Product(name="Prompt Period Test Product")
-            db.add(product)
-            await db.flush()
-            batch = MedicineBatch(
-                product_id=product.id,
-                batch_number="PP1",
-                expiry_date=datetime(2027, 1, 1).date(),
-                qty_received=10,
-                qty_remaining=10,
-                cost_price=30.0,
-                selling_price=77.0,
-            )
-            db.add(batch)
-            await db.flush()
-
-            yesterday_local = await business_today(db) - timedelta(days=1)
-            utc_start, _utc_end = await local_day_bounds_utc(db, yesterday_local)
-            yesterday = utc_start + timedelta(hours=12)
-            sale = Sale(
-                cashier_user_id=owner_user.id,
-                subtotal=77.0,
-                discount_amount=0.0,
-                total_amount=77.0,
-            )
-            db.add(sale)
-            await db.flush()
-            sale.created_at = yesterday
-            db.add(
-                SaleItem(
-                    sale_id=sale.id,
-                    product_id=product.id,
-                    batch_id=batch.id,
-                    quantity=1,
-                    unit_price=77.0,
-                    unit_cost=batch.cost_price,
-                    line_total=77.0,
-                )
-            )
-            await db.commit()
-
-        captured_context: dict[str, object] = {}
-
-        class ContextCapturingAdapter:
-            async def ask(self, prompt, context):
-                captured_context.update(context)
-                return AIResponse(text="ok")
-
-        def factory(provider, api_key):
-            return ContextCapturingAdapter()
-
-        async with AsyncSessionLocal() as db:
-            today_str = (await business_today(db)).isoformat()
-            service = AIAssistantService(db, adapter_factory=factory)
-            await service.ask(
-                owner_user,
-                AIAskRequest(
-                    prompt="how did we do yesterday?",
-                    # Dashboard's filter is still on "today" -- the
-                    # prompt's own "yesterday" must win over this.
-                    context={"viewing_start_date": today_str, "viewing_end_date": today_str},
-                ),
-            )
-
-        assert captured_context.get("requested_period_revenue") == "KES 77.00"
-        assert "today_revenue" not in captured_context
-        assert "viewed_period_revenue" not in captured_context
-
-    async def test_last_n_days_phrase_in_prompt_is_recognized(self, client, owner_user):
-        async with AsyncSessionLocal() as db:
-            db.add(
-                AIProviderKey(
-                    user_id=owner_user.id,
-                    provider=AIProviderName.OPENAI,
-                    encrypted_key=encrypt_secret("key"),
-                    key_hint="key1",
-                    priority=1,
-                )
-            )
-            await db.commit()
-
-        captured_context: dict[str, object] = {}
-
-        class ContextCapturingAdapter:
-            async def ask(self, prompt, context):
-                captured_context.update(context)
-                return AIResponse(text="ok")
-
-        def factory(provider, api_key):
-            return ContextCapturingAdapter()
-
-        async with AsyncSessionLocal() as db:
-            service = AIAssistantService(db, adapter_factory=factory)
-            await service.ask(owner_user, AIAskRequest(prompt="show me the last 7 days"))
-
-        assert "requested_period_revenue" in captured_context
-
-    async def test_all_time_phrase_widens_beyond_dashboards_viewed_range(self, client, owner_user):
-        """
-        The real gap this closes: "what's our all-time revenue" must
-        see the business's ENTIRE history, not whatever narrow range
-        the Dashboard's slicer happens to still be open to. A sale
-        from two years ago -- far outside the still-open "today"
-        slicer sent in payload.context -- must still show up once the
-        question is explicitly about all time.
-        """
-        from datetime import datetime, timedelta
-
-        from app.models.medicine_batch import MedicineBatch
-        from app.models.product import Product
-        from app.models.sale import Sale, SaleItem
-
-        async with AsyncSessionLocal() as db:
-            db.add(
-                AIProviderKey(
-                    user_id=owner_user.id,
-                    provider=AIProviderName.OPENAI,
-                    encrypted_key=encrypt_secret("key"),
-                    key_hint="key1",
-                    priority=1,
-                )
-            )
-            product = Product(name="All Time Test Product")
-            db.add(product)
-            await db.flush()
-            batch = MedicineBatch(
-                product_id=product.id,
-                batch_number="AT1",
-                expiry_date=datetime(2027, 1, 1).date(),
-                qty_received=10,
-                qty_remaining=10,
-                cost_price=30.0,
-                selling_price=99.0,
-            )
-            db.add(batch)
-            await db.flush()
-            sale = Sale(
-                cashier_user_id=owner_user.id,
-                subtotal=99.0,
-                discount_amount=0.0,
-                total_amount=99.0,
-            )
-            db.add(sale)
-            await db.flush()
-            sale.created_at = datetime.now(UTC) - timedelta(days=730)
-            db.add(
-                SaleItem(
-                    sale_id=sale.id,
-                    product_id=product.id,
-                    batch_id=batch.id,
-                    quantity=1,
-                    unit_price=99.0,
-                    unit_cost=batch.cost_price,
-                    line_total=99.0,
-                )
-            )
-            await db.commit()
-
-        captured_context: dict[str, object] = {}
-
-        class ContextCapturingAdapter:
-            async def ask(self, prompt, context):
-                captured_context.update(context)
-                return AIResponse(text="ok")
-
-        def factory(provider, api_key):
-            return ContextCapturingAdapter()
-
-        async with AsyncSessionLocal() as db:
-            today_str = (await business_today(db)).isoformat()
-            service = AIAssistantService(db, adapter_factory=factory)
-            await service.ask(
-                owner_user,
-                AIAskRequest(
-                    prompt="what's our all-time revenue?",
-                    # Dashboard's filter is still on "today" -- a
-                    # two-year-old sale must not be excluded just
-                    # because this slicer never got reset.
-                    context={"viewing_start_date": today_str, "viewing_end_date": today_str},
-                ),
-            )
-
-        assert captured_context.get("all_time_revenue") == "KES 99.00"
-        assert "today_revenue" not in captured_context
-        assert "viewed_period_revenue" not in captured_context
-
-    async def test_all_time_phrase_with_no_sales_falls_back_to_today(self, client, owner_user):
-        """
-        A brand-new business has no history to widen to -- "all time"
-        must fall back to today's (empty) numbers rather than crashing
-        on a MIN() over zero rows.
-        """
-        async with AsyncSessionLocal() as db:
-            db.add(
-                AIProviderKey(
-                    user_id=owner_user.id,
-                    provider=AIProviderName.OPENAI,
-                    encrypted_key=encrypt_secret("key"),
-                    key_hint="key1",
-                    priority=1,
-                )
-            )
-            await db.commit()
-
-        captured_context: dict[str, object] = {}
-
-        class ContextCapturingAdapter:
-            async def ask(self, prompt, context):
-                captured_context.update(context)
-                return AIResponse(text="ok")
-
-        def factory(provider, api_key):
-            return ContextCapturingAdapter()
-
-        async with AsyncSessionLocal() as db:
-            service = AIAssistantService(db, adapter_factory=factory)
-            response = await service.ask(
-                owner_user, AIAskRequest(prompt="give me our lifetime revenue")
-            )
-
-        assert response.answer == "ok"
-        assert "today_revenue" in captured_context
 
 
 class TestNoKeyGuidance:
@@ -1702,7 +651,7 @@ class TestConversationHistory:
     @staticmethod
     def _working_factory(provider, api_key):
         class FakeAdapter:
-            async def ask(self, prompt, context):
+            async def complete(self, prompt):
                 return AIResponse(text=f"answer to: {prompt}")
 
         return FakeAdapter()
@@ -1918,7 +867,7 @@ class TestEventLoopNotBlockedDuringSlowResponse:
             await db.commit()
 
         class SlowAdapter:
-            async def ask(self, prompt, context):
+            async def complete(self, prompt):
                 await asyncio.sleep(1.0)  # a real "thinking" LLM response
                 return AIResponse(text="slow answer")
 
@@ -1955,72 +904,423 @@ class TestEventLoopNotBlockedDuringSlowResponse:
         assert total < ai_duration + 0.5
 
 
-class TestAssistantRespectsReportPermissions:
-    """
-    ai.use lets someone ask the assistant questions; it does not let them
-    read revenue, transaction counts, top products or named top customers,
-    which the Dashboard and Reports pages guard behind reports.view. The
-    assistant used to hand all of that to a cashier (and to the AI
-    provider on their behalf) -- a wider door than the pages themselves.
-    """
+_PLANNER_START = "You choose which read-only data lookups"
 
-    async def _ask_and_capture_context(self, asker_id: int, owner_id: int) -> dict[str, object]:
+
+class _ScriptedProvider:
+    """A fake model: answers the planner prompt with `plan` and anything else
+    with `answer`, and records every prompt it was sent."""
+
+    def __init__(self, plan: str, answer: str = "Here is your answer.") -> None:
+        self.plan = plan
+        self.answer = answer
+        self.prompts: list[str] = []
+
+    async def complete(self, prompt):
+        self.prompts.append(prompt)
+        return AIResponse(text=self.plan if prompt.startswith(_PLANNER_START) else self.answer)
+
+    def factory(self):
+        return lambda provider, api_key: self
+
+    @property
+    def planner_prompt(self) -> str:
+        return next(p for p in self.prompts if p.startswith(_PLANNER_START))
+
+    @property
+    def answer_prompt(self) -> str:
+        return next(p for p in self.prompts if not p.startswith(_PLANNER_START))
+
+
+async def _add_key(user, provider=AIProviderName.OPENAI, priority=1) -> None:
+    async with AsyncSessionLocal() as db:
+        db.add(
+            AIProviderKey(
+                user_id=user.id,
+                provider=provider,
+                encrypted_key=encrypt_secret("fake-key-123456"),
+                key_hint="3456",
+                priority=priority,
+            )
+        )
+        await db.commit()
+
+
+async def _ask(user, provider: _ScriptedProvider, prompt="question", **request):
+    async with AsyncSessionLocal() as db:
+        service = AIAssistantService(db, adapter_factory=provider.factory())
+        return await service.ask(user, AIAskRequest(prompt=prompt, **request))
+
+
+async def _supplier_owed(name: str, owed: float) -> None:
+    async with AsyncSessionLocal() as db:
+        supplier = Supplier(name=name)
+        db.add(supplier)
+        await db.flush()
+        db.add(SupplierTransaction(supplier_id=supplier.id, amount=owed, reference="po:1"))
+        await db.commit()
+
+
+def _plan(*calls: tuple[str, dict]) -> str:
+    return json.dumps({"calls": [{"tool": t, "args": a} for t, a in calls]})
+
+
+class TestAssistantAnswersFromRealData:
+    async def test_the_looked_up_data_reaches_the_answer_prompt(self, client, owner_user):
+        await _add_key(owner_user)
+        await _supplier_owed("Acme Pharma", 1250.0)
+        model = _ScriptedProvider(_plan(("suppliers", {})), answer="Acme is owed 1,250.")
+
+        response = await _ask(owner_user, model, "who do we owe money?")
+
+        assert response.answer == "Acme is owed 1,250."
+        assert "Acme Pharma" in model.answer_prompt
+        assert "1250" in model.answer_prompt
+        assert model.planner_prompt.count("suppliers(") == 1  # offered to the planner
+
+    async def test_several_lookups_in_one_plan_all_run(self, client, owner_user):
+        await _add_key(owner_user)
+        await _supplier_owed("Multi Supplier", 300.0)
+        model = _ScriptedProvider(
+            _plan(
+                ("suppliers", {}),
+                ("supplier_summary", {"start_date": "2026-01-01", "end_date": "2026-12-31"}),
+            )
+        )
+
+        await _ask(owner_user, model)
+
+        assert "Multi Supplier" in model.answer_prompt
+        assert "supplier_summary" in model.answer_prompt
+        assert "total_purchased" in model.answer_prompt
+
+    async def test_a_plan_wrapped_in_prose_and_code_fences_still_works(self, client, owner_user):
+        await _add_key(owner_user)
+        await _supplier_owed("Fenced Supplier", 10.0)
+        wrapped = f"Sure, here you go:\n```json\n{_plan(('suppliers', {}))}\n```"
+        model = _ScriptedProvider(wrapped)
+
+        await _ask(owner_user, model)
+
+        assert "Fenced Supplier" in model.answer_prompt
+
+    async def test_an_empty_plan_answers_without_any_data_block(self, client, owner_user):
+        await _add_key(owner_user)
+        model = _ScriptedProvider('{"calls": []}', answer="Good morning!")
+
+        response = await _ask(owner_user, model, "good morning")
+
+        assert response.answer == "Good morning!"
+        assert "Data looked up" not in model.answer_prompt
+
+    async def test_an_unreadable_plan_falls_back_to_todays_overview(self, client, owner_user):
+        await _add_key(owner_user)
+        model = _ScriptedProvider("I would rather just chat.")
+
+        await _ask(owner_user, model, "how are we doing?")
+
+        assert "Data looked up" in model.answer_prompt
+        assert "business_overview" in model.answer_prompt
+
+    async def test_a_bad_lookup_is_reported_to_the_model_not_hidden(self, client, owner_user):
+        await _add_key(owner_user)
+        model = _ScriptedProvider(
+            _plan(
+                ("drop_all_tables", {}),
+                ("top_products", {"start_date": "not-a-date", "end_date": "2026-01-02"}),
+                ("low_stock", {"colour": "red"}),
+            )
+        )
+
+        response = await _ask(owner_user, model)
+
+        assert response.answer  # the person still gets an answer
+        assert "unknown or unavailable lookup" in model.answer_prompt
+        assert "must be a date written YYYY-MM-DD" in model.answer_prompt
+        assert "unknown argument(s): colour" in model.answer_prompt
+
+    async def test_follow_up_questions_see_the_conversation_so_far(self, client, owner_user):
+        await _add_key(owner_user)
+        first = _ScriptedProvider('{"calls": []}', answer="Revenue was 500.")
+        opening = await _ask(owner_user, first, "what was revenue in June?")
+
+        second = _ScriptedProvider('{"calls": []}')
+        await _ask(owner_user, second, "and in July?", conversation_id=opening.conversation_id)
+
+        assert "what was revenue in June?" in second.planner_prompt
+        assert "Revenue was 500." in second.answer_prompt
+
+    async def test_the_dashboard_range_is_a_hint_not_a_number(self, client, owner_user):
+        await _add_key(owner_user)
+        model = _ScriptedProvider('{"calls": []}')
+
+        await _ask(
+            owner_user,
+            model,
+            context={"viewing_start_date": "2026-03-01", "viewing_end_date": "2026-03-31"},
+        )
+        assert "2026-03-01 to 2026-03-31" in model.planner_prompt
+
+        ignored = _ScriptedProvider('{"calls": []}')
+        await _ask(owner_user, ignored, context={"viewing_start_date": "junk"})
+        assert "dashboard open on" not in ignored.planner_prompt
+
+    async def test_the_prompt_states_the_businesss_currency(self, client, owner_user):
+        await _add_key(owner_user)
+        model = _ScriptedProvider('{"calls": []}')
+
+        await _ask(owner_user, model)
+
         async with AsyncSessionLocal() as db:
-            customer = Customer(name="Secret Customer", phone="0700111222")
-            db.add(customer)
-            db.add(
-                AIProviderKey(
-                    user_id=owner_id,
-                    provider=AIProviderName.OPENAI,
-                    encrypted_key=encrypt_secret("key"),
-                    key_hint="key1",
-                    priority=1,
-                )
-            )
-            await db.flush()
-            db.add(
-                Sale(
-                    cashier_user_id=owner_id,
-                    customer_id=customer.id,
-                    subtotal=50.0,
-                    discount_amount=0.0,
-                    total_amount=50.0,
-                )
-            )
-            await db.commit()
+            currency = (await BusinessConfigService(db).get()).currency
+        assert f"All money is in {currency}" in model.answer_prompt
 
-        captured: dict[str, object] = {}
 
-        class ContextSpy:
-            async def ask(self, prompt, context):
-                captured.update(context)
-                return AIResponse(text="ok")
+class TestAssistantRespectsPermissions:
+    async def test_an_employee_is_never_offered_data_their_pages_hide(self, client, employee_user):
+        await _add_key(employee_user)
+        await _supplier_owed("Hidden Supplier", 999.0)
+        model = _ScriptedProvider(_plan(("suppliers", {}), ("business_overview", {})))
 
-        async with AsyncSessionLocal() as db:
-            asker = (
-                await db.execute(
-                    select(User)
-                    .options(selectinload(User.role).selectinload(Role.permissions))
-                    .where(User.id == asker_id)
-                )
-            ).scalar_one()
-            service = AIAssistantService(db, adapter_factory=lambda provider, api_key: ContextSpy())
-            await service.ask(
-                asker,
-                AIAskRequest(prompt="what is our all-time revenue and who are the top customers?"),
-            )
-        return captured
+        await _ask(employee_user, model)
 
-    async def test_a_cashier_without_reports_view_gets_no_business_figures(
-        self, client, owner_user, employee_user
+        offered = model.planner_prompt
+        assert "low_stock(" in offered and "recent_sales(" in offered  # inventory + sales
+        for hidden in ("suppliers(", "business_overview(", "profit_summary(", "top_customers("):
+            assert hidden not in offered
+        # Asking for them anyway is refused, and nothing leaks.
+        assert "Hidden Supplier" not in model.answer_prompt
+        assert model.answer_prompt.count("unknown or unavailable lookup") == 2
+
+    async def test_profit_lookups_need_the_profit_permission(
+        self, client, owner_user, administrator_user
     ):
-        context = await self._ask_and_capture_context(employee_user.id, owner_user.id)
+        await _add_key(owner_user)
+        owner_model = _ScriptedProvider('{"calls": []}')
+        await _ask(owner_user, owner_model)
+        assert "profit_summary(" in owner_model.planner_prompt
 
-        assert context == {"person_asking_name": "Cashier Joe"}
-        assert "Secret Customer" not in str(context)
+        admin_model = _ScriptedProvider(
+            _plan(("profit_summary", {"start_date": "2026-01-01", "end_date": "2026-01-31"}))
+        )
+        await _ask(administrator_user, admin_model)
+        assert "profit_summary(" not in admin_model.planner_prompt
+        assert "unknown or unavailable lookup" in admin_model.answer_prompt
 
-    async def test_an_owner_with_reports_view_still_gets_them(self, client, owner_user):
-        context = await self._ask_and_capture_context(owner_user.id, owner_user.id)
+    async def test_product_cost_and_margin_are_hidden_without_profit_permission(
+        self, client, owner_user
+    ):
+        headers = {"Authorization": "Bearer " + await _login(client, "lucy", "S3curePass!")}
+        async with AsyncSessionLocal() as db:
+            supplier = Supplier(name="S")
+            product = Product(name="Costed Product")
+            db.add_all([supplier, product])
+            await db.commit()
+            supplier_id, product_id = supplier.id, product.id
+        bought = await client.post(
+            "/api/v1/purchase-orders/quick-purchase",
+            json={
+                "supplier_id": supplier_id,
+                "lines": [
+                    {
+                        "product_id": product_id,
+                        "quantity": 5,
+                        "batch_number": "B1",
+                        "expiry_date": "2097-01-01",
+                        "unit_cost": 8.0,
+                        "selling_price": 15.0,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert bought.status_code == 201, bought.text
 
-        assert "Secret Customer" in str(context["top_customers_by_revenue"])
-        assert any(key.endswith("_revenue") for key in context)
+        async with AsyncSessionLocal() as db:
+            call = [{"tool": "find_products", "args": {"search": "Costed"}}]
+            tools = available_tools({"inventory.view"})
+            hidden = await run_tool_calls(ToolContext(db, include_profit=False), tools, call)
+            shown = await run_tool_calls(ToolContext(db, include_profit=True), tools, call)
+
+        assert hidden[0].data[0]["current_selling_price"] == 15.0
+        assert "current_cost" not in hidden[0].data[0]
+        assert "margin_percent" not in hidden[0].data[0]
+        assert shown[0].data[0]["current_cost"] == 8.0
+
+
+class TestAssistantProviderFailures:
+    async def test_the_plan_step_falls_back_to_the_next_provider(self, client, owner_user):
+        await _add_key(owner_user, AIProviderName.OPENAI, priority=1)
+        await _add_key(owner_user, AIProviderName.CLAUDE, priority=2)
+        good = _ScriptedProvider('{"calls": []}', answer="From Claude")
+
+        class Broken:
+            async def complete(self, prompt):
+                raise AIProviderError("down")
+
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(
+                db,
+                adapter_factory=lambda provider, key: Broken()
+                if provider == AIProviderName.OPENAI
+                else good,
+            )
+            response = await service.ask(owner_user, AIAskRequest(prompt="hello"))
+
+        assert response.answer == "From Claude"
+        assert response.provider_used == AIProviderName.CLAUDE
+        assert response.fallback_used is True
+
+    async def test_when_every_provider_fails_the_plan_the_answer_step_is_not_attempted(
+        self, client, owner_user
+    ):
+        await _add_key(owner_user)
+        calls = 0
+
+        class Broken:
+            async def complete(self, prompt):
+                nonlocal calls
+                calls += 1
+                raise AIProviderError("down")
+
+        async with AsyncSessionLocal() as db:
+            service = AIAssistantService(db, adapter_factory=lambda provider, key: Broken())
+            response = await service.ask(owner_user, AIAskRequest(prompt="hello"))
+
+        assert "temporarily unavailable" in response.answer
+        assert response.provider_used is None
+        assert calls == 1  # one provider, one planning attempt, no wasted second round
+
+
+class TestDataTools:
+    @staticmethod
+    def _tool(name: str):
+        return next(t for t in TOOLS if t.name == name)
+
+    def test_each_permission_unlocks_only_its_tools(self):
+        assert {t.name for t in available_tools({"inventory.view"})} == {
+            "low_stock",
+            "expiring_stock",
+            "stock_valuation",
+            "find_products",
+        }
+        assert available_tools(set()) == []
+        everything = {p for t in TOOLS for p in t.permissions}
+        assert {t.name for t in available_tools(everything)} == {t.name for t in TOOLS}
+
+    def test_the_catalog_describes_every_argument(self):
+        text = catalog_text([self._tool("top_products"), self._tool("sales_over_time")])
+
+        assert "top_products(start_date: date YYYY-MM-DD, required" in text
+        assert "limit: integer 1-30, default 10" in text
+        assert "group_by: one of day|month, default day" in text
+
+    def test_arguments_are_validated_strictly(self):
+        top = self._tool("top_products")
+        good = {"start_date": "2026-01-01", "end_date": "2026-01-31"}
+
+        assert _validate(top, good) == {
+            "start_date": date(2026, 1, 1),
+            "end_date": date(2026, 1, 31),
+            "limit": 10,
+        }
+        assert _validate(top, {**good, "limit": 9999})["limit"] == 30  # clamped, not trusted
+        for bad, message in (
+            ({"end_date": "2026-01-31"}, "missing required argument: start_date"),
+            ({**good, "start_date": "2026-02-30"}, "YYYY-MM-DD"),
+            ({**good, "limit": "many"}, "whole number"),
+            ({**good, "start_date": "2026-03-01"}, "must not be after"),
+            ({**good, "extra": 1}, "unknown argument(s): extra"),
+            ("not an object", "must be an object"),
+        ):
+            with pytest.raises(ToolInputError, match=re.escape(message)):
+                _validate(top, bad)
+        with pytest.raises(ToolInputError, match="one of day, month"):
+            _validate(self._tool("sales_over_time"), {**good, "group_by": "year"})
+        with pytest.raises(ToolInputError, match="1 to 80"):
+            _validate(self._tool("find_products"), {"search": "x" * 81})
+
+    def test_plans_are_parsed_leniently_but_never_trusted(self):
+        assert parse_plan('{"calls": []}') == []
+        assert parse_plan('noise {"calls": [{"tool": "low_stock", "args": {}}]} noise') == [
+            {"tool": "low_stock", "args": {}}
+        ]
+        assert parse_plan("no json here") is None
+        assert parse_plan("{broken json") is None
+        assert parse_plan('{"something": "else"}') is None
+        assert len(parse_plan(json.dumps({"calls": [{"tool": "low_stock"}] * 20}))) == MAX_CALLS
+
+    def test_long_results_are_cut_and_say_so(self):
+        rows = [{"n": i} for i in range(MAX_ROWS + 15)]
+
+        assert _bounded(rows) == {"rows": rows[:MAX_ROWS], "rows_omitted": 15}
+        assert _bounded({"entries": rows, "total": 75}) == {
+            "entries": rows[:MAX_ROWS],
+            "entries_omitted": 15,
+            "total": 75,
+        }
+        assert _bounded({"entries": rows[:3]}) == {"entries": rows[:3]}
+        huge = render_results([ToolResult("t", {}, "x" * (MAX_RESULT_CHARS * 2), None)])
+        assert len(huge) < MAX_RESULT_CHARS + 100 and "cut: too long" in huge
+
+    async def test_a_failing_lookup_is_reported_and_the_rest_still_run(self, client, owner_user):
+        async def explode(ctx, args):
+            raise RuntimeError("database on fire")
+
+        async def fine(ctx, args):
+            return {"ok": True}
+
+        tools = [
+            DataTool("explodes", "x", ("reports.view",), {}, explode),
+            DataTool("fine", "x", ("reports.view",), {}, fine),
+        ]
+        async with AsyncSessionLocal() as db:
+            results = await run_tool_calls(
+                ToolContext(db, include_profit=False),
+                tools,
+                [{"tool": "explodes"}, {"tool": "fine"}],
+            )
+
+        assert [(r.tool, r.error) for r in results] == [
+            ("explodes", "the lookup failed"),
+            ("fine", None),
+        ]
+        assert results[1].data == {"ok": True}
+
+    async def test_every_tool_runs_against_an_empty_database_without_error(
+        self, client, owner_user
+    ):
+        """Each wrapper calls a real service with real arguments: a typo in a
+        keyword or a changed service signature surfaces here, not live."""
+        sample = {"start_date": "2026-01-01", "end_date": "2026-01-31", "search": "a"}
+        results: list[ToolResult] = []
+        async with AsyncSessionLocal() as db:
+            ctx = ToolContext(db, include_profit=True)
+            for tool in TOOLS:
+                args = {name: sample[name] for name, p in tool.params.items() if p.default is None}
+                results += await run_tool_calls(
+                    ctx, list(TOOLS), [{"tool": tool.name, "args": args}]
+                )
+
+        assert [(r.tool, r.error) for r in results if r.error] == []
+        assert [r.tool for r in results] == [t.name for t in TOOLS]
+
+
+class TestPrompts:
+    def test_the_chat_formatting_promise_matches_what_the_screen_can_show(self):
+        assert "simple tables" in FORMATTING_RULES
+        assert "Never use headers" in FORMATTING_RULES
+        assert "no closing summary" in FORMATTING_RULES
+
+    def test_the_answer_prompt_forbids_inventing_figures_and_writing_data(self):
+        prompt = answer_prompt("q", date(2026, 1, 1), "KES", "Deric", '{"x":1}', [])
+
+        assert "Never invent or estimate a figure" in prompt
+        assert "can only read and analyse data" in prompt
+        assert "KES 1,553.68" in prompt
+
+    def test_without_data_there_are_no_data_rules(self):
+        prompt = answer_prompt("hi", date(2026, 1, 1), "", "Deric", None, [])
+
+        assert "Rules for using the data" not in prompt
+        assert "All money is in" not in prompt

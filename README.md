@@ -1,8 +1,10 @@
 # Pharmacy ERP
 
 Full pharmacy POS/ERP — sales, batch/expiry-aware inventory, purchasing with
-Kanban, stock takes, customers, reports, AI assistant, backups, real-time
-cross-module sync via an event bus. Runs entirely on one computer, no
+Kanban (supplier payments, and owner-only reversal of a wrong purchase or
+payment), stock takes, customers, reports, an AI assistant that answers from
+your live data (read-only, and limited to what each person's role may see),
+backups, real-time cross-module sync via an event bus. Runs entirely on one computer, no
 network or server setup required. Every business-facing detail — name,
 logo, slogan, currency, and choice of 4 built-in visual themes — is
 configured live from Settings, baked into the installer per business, not

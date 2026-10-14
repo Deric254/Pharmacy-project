@@ -26,6 +26,8 @@ function po(items: ReturnType<typeof item>[]): PurchaseOrderOut {
     notes: null,
     created_at: '2026-01-01T00:00:00Z',
     received_at: null,
+    reversed_at: null,
+    reversal_reason: null,
     items,
   }
 }
@@ -105,8 +107,21 @@ describe('categorySpendBreakdown', () => {
 
     const result = categorySpendBreakdown(orders)
 
-    // 20 of 30 total -> 66.7%, 10 of 30 -> 33.3%
     expect(result.find((r) => r.category === 'Antibiotics')?.percentOfTotal).toBe(66.7)
     expect(result.find((r) => r.category === 'Painkillers')?.percentOfTotal).toBe(33.3)
+  })
+
+  it('leaves reversed purchases out of the spend', () => {
+    const kept = po([item({ category_name: 'Antibiotics', quantity_received: 10, unit_cost_actual: 5 })])
+    const undone = {
+      ...po([item({ category_name: 'Analgesics', quantity_received: 100, unit_cost_actual: 9 })]),
+      status: 'REVERSED' as const,
+    }
+
+    const breakdown = categorySpendBreakdown([kept, undone])
+
+    expect(breakdown).toEqual([
+      { category: 'Antibiotics', total: 50, itemCount: 1, percentOfTotal: 100 },
+    ])
   })
 })

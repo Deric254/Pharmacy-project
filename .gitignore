@@ -44,3 +44,9 @@ logs/
 # Playwright output
 electron/test-results/
 electron/playwright-report/
+
+# Licensing: the PRIVATE owner key must never be committed; licence-state.json is
+# per-install state a dev run writes next to its database.
+*-owner.key
+licence-state.json
+phe-owner.key

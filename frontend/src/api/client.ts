@@ -35,6 +35,9 @@ export function getAccessToken(): string | null {
   return accessToken
 }
 
+/** Fired when the server refuses a request for want of a licence, so the UI can show the activation screen. */
+export const LICENCE_REQUIRED_EVENT = 'licence-required'
+
 export class ApiError extends Error {
   status: number
   body: ApiErrorBody | null
@@ -125,6 +128,7 @@ async function rawRequest<T>(path: string, options: RequestOptions): Promise<T> 
   }
 
   if (!res.ok) {
+    if (res.status === 402) window.dispatchEvent(new Event(LICENCE_REQUIRED_EVENT))
     throw new ApiError(res.status, extractMessage(parsedBody, res.statusText), parsedBody)
   }
   return parsedBody as T
@@ -190,6 +194,7 @@ async function rawUpload<T>(
   }
 
   if (!res.ok) {
+    if (res.status === 402) window.dispatchEvent(new Event(LICENCE_REQUIRED_EVENT))
     throw new ApiError(res.status, extractMessage(parsedBody, res.statusText), parsedBody)
   }
   return parsedBody as T

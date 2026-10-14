@@ -25,10 +25,12 @@ import { execFileSync, execSync } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { seedOwnerLicence } from './licence'
 
 let appDataDir: string
 
 function testEnvironment() {
+  seedOwnerLicence(appDataDir)
   return { ...process.env, HOME: appDataDir, APPDATA: appDataDir, LOCALAPPDATA: appDataDir }
 }
 

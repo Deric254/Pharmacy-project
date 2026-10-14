@@ -1,0 +1,6 @@
+{
+  "app_id": "Pharmacy ERP",
+  "prefix": "PHE",
+  "public_key_file": "backend/app/core/licence_owner_key.py",
+  "public_key_var": "OWNER_PUBLIC_KEY"
+}

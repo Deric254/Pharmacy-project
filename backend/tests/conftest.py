@@ -12,9 +12,12 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-for-the-pytest-suite-0123456789")
 os.environ.setdefault("ENCRYPTION_KEY", "cGhhcm1hY3ktZXJwLXRlc3Qta2V5LTAxMjM0NTY3ODk=")
 
+import pytest
 import pytest_asyncio
+from licence_helpers import make_licensing
 
 from app.core.database import AsyncSessionLocal, Base, engine
+from app.core.licence_gate import use_licensing
 from app.core.redis_client import aclose_for_current_loop, redis_client
 from app.core.security import hash_password
 from app.models.ai_conversation import AIConversation, AIConversationMessage  # noqa: F401
@@ -66,6 +69,21 @@ async def _clear_cache():
     yield
     await redis_client.flushdb()
     await aclose_for_current_loop()
+
+
+@pytest.fixture(autouse=True)
+def _licensed_copy():
+    """
+    Every /api request is refused unless this copy is licensed (see
+    app/core/licence_gate.py), so the suite runs as an owner copy made with a
+    throwaway key -- never the real one. The gate itself stays fully active;
+    tests/test_licence_gate.py swaps in locked copies to prove it refuses.
+    """
+    lic, owner_key, _seed = make_licensing()
+    lic.claim_owner(owner_key)
+    use_licensing(lic)
+    yield
+    use_licensing(None)
 
 
 @pytest_asyncio.fixture

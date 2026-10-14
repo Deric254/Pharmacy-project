@@ -3,10 +3,14 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { useAuthStore } from './auth/store'
 import { useConfigStore } from './config/store'
 import { setupApi } from './api/setup'
+import { licenceApi, type LicenceState } from './api/licence'
+import { ApiError, LICENCE_REQUIRED_EVENT } from './api/client'
 import { RequireAuth, RequirePermission } from './auth/guards'
 import { AppShell } from './components/AppShell'
 import { LoginPage } from './pages/LoginPage'
 import { SetupPage } from './pages/SetupPage'
+import { LicencePage } from './pages/LicencePage'
+import { LicenceRenewalNotice } from './components/LicenceRenewalNotice'
 
 const DashboardPage = lazy(() =>
   import('./pages/DashboardPage').then((m) => ({ default: m.DashboardPage })),
@@ -73,10 +77,20 @@ export function App() {
   const configStatus = useConfigStore((s) => s.status)
   const [setupCheck, setSetupCheck] = useState<SetupCheck>('checking')
   const [retryCount, setRetryCount] = useState(0)
+  const [licence, setLicence] = useState<LicenceState | null>(null)
 
   useEffect(() => {
     let cancelled = false
     setSetupCheck('checking')
+    setLicence(null)
+    licenceApi
+      .state(BOOTSTRAP_TIMEOUT_MS)
+      .then((s) => {
+        if (!cancelled) setLicence(s)
+      })
+      .catch(() => {
+        if (!cancelled) setSetupCheck('unreachable')
+      })
     void bootstrap()
     void loadConfig(BOOTSTRAP_TIMEOUT_MS)
     setupApi
@@ -84,7 +98,9 @@ export function App() {
       .then((s) => {
         if (!cancelled) setSetupCheck(s.needs_setup ? 'setup_needed' : 'setup_done')
       })
-      .catch(() => {
+      .catch((err: unknown) => {
+        // A locked copy answers 402 here; the licence check above shows the activation screen.
+        if (err instanceof ApiError && err.status === 402) return
         if (!cancelled) setSetupCheck('unreachable')
       })
     return () => {
@@ -93,7 +109,28 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bootstrap, loadConfig, retryCount])
 
-  if (configStatus === 'loading' || setupCheck === 'checking') {
+  // Any request the server refuses for want of a licence (e.g. it expired mid-session)
+  // re-checks the state, which swaps the app for the activation screen.
+  useEffect(() => {
+    const recheck = () => {
+      licenceApi
+        .state()
+        .then(setLicence)
+        .catch(() => undefined)
+    }
+    window.addEventListener(LICENCE_REQUIRED_EVENT, recheck)
+    return () => window.removeEventListener(LICENCE_REQUIRED_EVENT, recheck)
+  }, [])
+
+  if (licence !== null && !licence.ok) {
+    return <LicencePage state={licence} onActivated={() => setRetryCount((n) => n + 1)} />
+  }
+
+  if (
+    configStatus === 'loading' ||
+    setupCheck === 'checking' ||
+    (licence === null && setupCheck !== 'unreachable')
+  ) {
     return (
       <div className="grid min-h-screen place-items-center bg-paper">
         <div className="flex flex-col items-center gap-3 text-ink-soft">
@@ -142,134 +179,137 @@ export function App() {
   }
 
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route
-          element={
-            <RequireAuth>
-              <Suspense fallback={<PageLoadingFallback />}>
-                <AppShell />
-              </Suspense>
-            </RequireAuth>
-          }
-        >
-          <Route index element={<DashboardPage />} />
+    <>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
           <Route
-            path="pos"
             element={
-              <RequirePermission code="sales.create">
-                <PosPage />
-              </RequirePermission>
+              <RequireAuth>
+                <Suspense fallback={<PageLoadingFallback />}>
+                  <AppShell />
+                </Suspense>
+              </RequireAuth>
             }
-          />
-          <Route
-            path="sales"
-            element={
-              <RequirePermission code="sales.create">
-                <SalesPage />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="inventory"
-            element={
-              <RequirePermission code="inventory.view">
-                <InventoryPage />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="inventory/movements"
-            element={
-              <RequirePermission code="inventory.adjust">
-                <StockMovementsPage />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="purchasing"
-            element={
-              <RequirePermission code="purchasing.create_po">
-                <PurchasingPage />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="stock-takes"
-            element={
-              <RequirePermission code="stocktake.perform">
-                <StockTakesPage />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="customers"
-            element={
-              <RequirePermission code="sales.create">
-                <CustomersPage />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="reports"
-            element={
-              <RequirePermission code="reports.view">
-                <ReportsPage />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="settings"
-            element={
-              <RequirePermission code="config.edit">
-                <SettingsPage />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="roles"
-            element={
-              <RequirePermission code="roles.manage">
-                <RolesPage />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="audit"
-            element={
-              <RequirePermission code="audit.view">
-                <AuditLogPage />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="users"
-            element={
-              <RequirePermission code="users.manage">
-                <UsersPage />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="backups"
-            element={
-              <RequirePermission code="backups.manage">
-                <BackupsPage />
-              </RequirePermission>
-            }
-          />
-          <Route path="help" element={<HelpPage />} />
-          <Route
-            path="ai-assistant"
-            element={
-              <RequirePermission code="ai.use">
-                <AiAssistantPage />
-              </RequirePermission>
-            }
-          />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+          >
+            <Route index element={<DashboardPage />} />
+            <Route
+              path="pos"
+              element={
+                <RequirePermission code="sales.create">
+                  <PosPage />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="sales"
+              element={
+                <RequirePermission code="sales.create">
+                  <SalesPage />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="inventory"
+              element={
+                <RequirePermission code="inventory.view">
+                  <InventoryPage />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="inventory/movements"
+              element={
+                <RequirePermission code="inventory.adjust">
+                  <StockMovementsPage />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="purchasing"
+              element={
+                <RequirePermission code="purchasing.create_po">
+                  <PurchasingPage />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="stock-takes"
+              element={
+                <RequirePermission code="stocktake.perform">
+                  <StockTakesPage />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="customers"
+              element={
+                <RequirePermission code="sales.create">
+                  <CustomersPage />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="reports"
+              element={
+                <RequirePermission code="reports.view">
+                  <ReportsPage />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="settings"
+              element={
+                <RequirePermission code="config.edit">
+                  <SettingsPage />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="roles"
+              element={
+                <RequirePermission code="roles.manage">
+                  <RolesPage />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="audit"
+              element={
+                <RequirePermission code="audit.view">
+                  <AuditLogPage />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="users"
+              element={
+                <RequirePermission code="users.manage">
+                  <UsersPage />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="backups"
+              element={
+                <RequirePermission code="backups.manage">
+                  <BackupsPage />
+                </RequirePermission>
+              }
+            />
+            <Route path="help" element={<HelpPage />} />
+            <Route
+              path="ai-assistant"
+              element={
+                <RequirePermission code="ai.use">
+                  <AiAssistantPage />
+                </RequirePermission>
+              }
+            />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+      {licence && <LicenceRenewalNotice state={licence} onRenewed={setLicence} />}
+    </>
   )
 }

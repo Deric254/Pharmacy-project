@@ -21,6 +21,9 @@ prerelease = false
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# licensing/ is the vendored licensing kit (owner tools + verifier); kept byte-identical to
+# the skill so it can be re-synced, so it is not reformatted or linted here.
+extend-exclude = ["licensing"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
@@ -29,6 +32,10 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = "licensing.*"
+follow_imports = "skip"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

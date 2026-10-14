@@ -146,6 +146,37 @@ deployment via `frontend/.env` (`VITE_APP_NAME` etc., see
 `frontend/.env.example`) and requires a rebuild, since it's baked into a
 static PWA manifest file read by the OS before the app itself ever runs.
 
+## Licensing (per computer, fully offline)
+
+Every installed copy needs a licence signed by the owner. No server, no
+internet: the owner holds a private **owner key**; its public half is built
+into every copy, which can only *verify* licences, never make them.
+
+- **Customer:** opens the app, reads the **activation code** on the licence
+  screen and sends it to the owner, then pastes back the licence text they get.
+- **Owner, issuing a licence** (on the owner's computer, from the repo root):
+  `python backend/licensing/issue_licence.py --code ABCD-EFGH-JKLM --user "Customer Name" --days 365 --log ~/licences-issued.csv`
+  and send back only the licence text. Renewal is the same command with the
+  same name; the customer pastes it into the **Renew** box (shown in the corner
+  when 14 days or fewer remain).
+- **Owner's own computer:** on the licence screen choose "I'm the owner of this
+  system" and paste the owner key once. It is used in memory and never stored.
+- **First-time setup (owner, once):** `python backend/licensing/make_owner_key.py`
+  writes `phe-owner.key` (gitignored: back it up to two places, never commit or
+  share it) and fills in `backend/app/core/licence_owner_key.py`; commit that
+  file. Until it is set the app refuses to run and CI/release refuse to ship.
+- **Never run `make_owner_key.py` again once a key is set:** a new key
+  invalidates every licence already issued.
+- **Customer troubleshooting:** `python backend/licensing/verify_licence.py --token <text> --code <their code>`
+  says why a licence is refused.
+
+Honest limits: a licence cannot be revoked (it works until it expires, so keep
+them short), the check is client-side (it stops casual copying and sharing, not
+someone who edits and rebuilds the code), and copying the data folder to another
+PC copies the install identity. The gate is `backend/app/core/licence_gate.py`;
+`backend/licensing/` is the vendored kit and is not linted or reformatted.
+Local development needs the owner key too (or a licence for your dev copy).
+
 ## Quality gate
 
 Run this locally before pushing — it's exactly what CI runs:

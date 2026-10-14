@@ -156,6 +156,23 @@ DRIVER = textwrap.dedent(
     async def smoke():
         import httpx
         from app.main import app
+        from app.core.licence_gate import APP_ID, PREFIX, use_licensing
+        from licensing.licensing import Licensing
+
+        # This subprocess is not the pytest process, so conftest's licensed copy does
+        # not apply: license it here (throwaway key, in-memory) so the request below
+        # still proves the app serves on this schema rather than the licence gate.
+        class Store(dict):
+            def get(self, key, default=None):
+                return super().get(key, default)
+
+            def set(self, key, value):
+                self[key] = value
+
+        owner_key, public = Licensing.make_owner_key(PREFIX)
+        licensing = Licensing(APP_ID, PREFIX, public, Store())
+        licensing.claim_owner(owner_key)
+        use_licensing(licensing)
 
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

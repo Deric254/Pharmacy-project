@@ -24,12 +24,14 @@ import { mkdtempSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { mainWindow } from './helpers'
+import { seedOwnerLicence } from './licence'
 
 let appDataDir: string
 let fakeReleaseServer: Server
 let fakeReleaseServerUrl: string
 
 function testEnvironment() {
+  seedOwnerLicence(appDataDir)
   return { ...process.env, HOME: appDataDir, APPDATA: appDataDir, LOCALAPPDATA: appDataDir }
 }
 

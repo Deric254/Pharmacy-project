@@ -69,6 +69,9 @@ jobs:
           ENCRYPTION_KEY: cGhhcm1hY3ktZXJwLXRlc3Qta2V5LTAxMjM0NTY3ODk=
         run: alembic downgrade base
 
+      - name: Licensing kit self-test (Ed25519 vectors, tampering, expiry, fail-closed)
+        run: python backend/licensing/selftest.py
+
       - name: Run tests with coverage
         working-directory: backend
         env:
@@ -128,6 +131,25 @@ jobs:
         run: |
           npm ci
           npm run build
+
+      - name: Use a throwaway owner key for this test run only
+        # The app refuses to run unlicensed, so the GUI tests run it as the owner's
+        # computer. This rewrites the public-key file in THIS job's checkout only
+        # (never committed, never the real key); electron/tests/licence.ts uses the
+        # matching private key from PHE_E2E_OWNER_KEY_FILE to claim the test copy.
+        run: |
+          python - <<'PY'
+          import os, sys
+          from pathlib import Path
+          sys.path.insert(0, "backend")
+          from licensing.licensing import Licensing
+          key_text, public = Licensing.make_owner_key("PHE")
+          Path(os.environ["RUNNER_TEMP"], "e2e-owner.key").write_text(key_text, encoding="utf-8")
+          Path("backend/app/core/licence_owner_key.py").write_text(
+              'OWNER_PUBLIC_KEY = "' + public + '"\n', encoding="utf-8"
+          )
+          PY
+          echo "PHE_E2E_OWNER_KEY_FILE=$RUNNER_TEMP/e2e-owner.key" >> "$GITHUB_ENV"
 
       - name: Install electron test dependencies
         working-directory: electron

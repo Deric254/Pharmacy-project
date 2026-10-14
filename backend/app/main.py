@@ -41,6 +41,7 @@ from app.api.v1.business_config import router as business_config_router
 from app.api.v1.categories import router as categories_router
 from app.api.v1.customers import router as customers_router
 from app.api.v1.inventory import router as inventory_router
+from app.api.v1.licence import router as licence_router
 from app.api.v1.products import router as products_router
 from app.api.v1.purchase_orders import router as purchase_orders_router
 from app.api.v1.reports import router as reports_router
@@ -53,6 +54,7 @@ from app.api.v1.users import router as users_router
 from app.api.v1.websocket import router as websocket_router
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.core.licence_gate import LicenceGateMiddleware
 from app.core.redis_client import aclose_for_current_loop
 from app.core.websocket_manager import manager as ws_manager
 from app.services.notification_dispatcher import start_dispatcher_task, stop_dispatcher_task
@@ -176,6 +178,9 @@ app = FastAPI(
     openapi_url=None if _is_production else "/openapi.json",
 )
 
+# Added before CORS so CORS wraps it: a refused (402) response still carries the
+# CORS headers a dev-server origin needs to read it.
+app.add_middleware(LicenceGateMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -241,6 +246,7 @@ async def _unhandled_error_handler(request: Request, exc: Exception) -> JSONResp
     )
 
 
+app.include_router(licence_router, prefix=settings.api_v1_prefix)
 app.include_router(auth_router, prefix=settings.api_v1_prefix)
 app.include_router(business_config_router, prefix=settings.api_v1_prefix)
 app.include_router(categories_router, prefix=settings.api_v1_prefix)

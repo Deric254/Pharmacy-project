@@ -198,3 +198,151 @@ def test_corrupt_ledger_is_not_overwritten(tmp_path: Path):
     with pytest.raises(LedgerError):
         LicenceLedger(p).customers()
     assert p.read_text(encoding="utf-8") == "{not json"
+
+
+# ---------------------------------------------------------------- new computers
+CODE2 = "WXYZ-2345-6789"
+CODE3 = "QRST-JKLM-NPQR"
+
+
+async def _issue(client, headers, key, **over):
+    return await client.post(f"{BASE}/issue", json=_body(key, **over), headers=headers)
+
+
+async def _list(client, headers):
+    return (await client.get(BASE, headers=headers)).json()
+
+
+async def test_new_code_for_a_known_name_must_say_migration_or_extra(
+    client, admin_headers, ledger, owner_key
+):
+    await _issue(client, admin_headers, owner_key)
+    r = await _issue(client, admin_headers, owner_key, code=CODE2, user="jane  DOE")
+    assert r.status_code == 409
+    assert "already has 1 active computer" in r.json()["detail"]
+    # Nothing was recorded and nothing was retired.
+    out = await _list(client, admin_headers)
+    assert out["summary"]["total_customers"] == 1 and out["summary"]["retired"] == 0
+
+
+async def test_migration_retires_the_old_computer_in_one_step(
+    client, admin_headers, ledger, owner_key
+):
+    await _issue(client, admin_headers, owner_key, paid_this_month=True)
+    r = await _issue(client, admin_headers, owner_key, code=CODE2, relation="migration")
+    assert r.status_code == 200, r.text
+    assert r.json()["retired_code"] == "ABCDEFGHJKLM"
+    assert r.json()["renewal"] is False
+    out = await _list(client, admin_headers)
+    assert out["summary"]["total_customers"] == 1  # one live computer, not two
+    assert out["summary"]["retired"] == 1
+    by_code = {c["code"]: c for c in out["customers"]}
+    assert by_code["ABCDEFGHJKLM"]["status"] == "retired"
+    assert by_code["ABCDEFGHJKLM"]["retired_on"] == date.today().isoformat()
+    assert by_code["WXYZ23456789"]["status"] == "active"
+    assert by_code["WXYZ23456789"]["active_computers"] == 1
+    # Active computer sorts above its retired predecessor.
+    assert [c["code"] for c in out["customers"]] == ["WXYZ23456789", "ABCDEFGHJKLM"]
+
+
+async def test_a_retired_computer_is_never_renewed_until_restored(
+    client, admin_headers, ledger, owner_key
+):
+    await _issue(client, admin_headers, owner_key)
+    await _issue(client, admin_headers, owner_key, code=CODE2, relation="migration")
+    r = await _issue(client, admin_headers, owner_key)  # old code again
+    assert r.status_code == 400 and "retired" in r.json()["detail"]
+    old = next(c for c in (await _list(client, admin_headers))["customers"] if c["retired"])
+    assert old["licence_count"] == 1  # nothing was signed or recorded
+    restored = await client.put(
+        f"{BASE}/{old['id']}/retired", json={"retired": False}, headers=admin_headers
+    )
+    assert restored.status_code == 200 and restored.json()["status"] != "retired"
+    assert (await _issue(client, admin_headers, owner_key)).status_code == 200
+
+
+async def test_extra_computer_keeps_both_and_counts_two(client, admin_headers, ledger, owner_key):
+    await _issue(client, admin_headers, owner_key)
+    r = await _issue(client, admin_headers, owner_key, code=CODE2, relation="extra")
+    assert r.status_code == 200 and r.json()["retired_code"] is None
+    out = await _list(client, admin_headers)
+    assert out["summary"]["total_customers"] == 2 and out["summary"]["retired"] == 0
+    assert {c["active_computers"] for c in out["customers"]} == {2}
+
+
+async def test_migration_with_several_computers_must_name_the_one_replaced(
+    client, admin_headers, ledger, owner_key
+):
+    await _issue(client, admin_headers, owner_key)
+    await _issue(client, admin_headers, owner_key, code=CODE2, relation="extra")
+    vague = await _issue(client, admin_headers, owner_key, code=CODE3, relation="migration")
+    assert vague.status_code == 400
+    stranger = await _issue(
+        client,
+        admin_headers,
+        owner_key,
+        code=CODE3,
+        relation="migration",
+        replaces="NOPE-NOPE-NOPE",
+    )
+    assert stranger.status_code == 400
+    assert (await _list(client, admin_headers))["summary"]["total_customers"] == 2
+    ok = await _issue(
+        client,
+        admin_headers,
+        owner_key,
+        code=CODE3,
+        relation="migration",
+        replaces="wxyz-2345-6789",
+    )
+    assert ok.status_code == 200 and ok.json()["retired_code"] == "WXYZ23456789"
+    out = await _list(client, admin_headers)
+    assert out["summary"]["total_customers"] == 2 and out["summary"]["retired"] == 1
+
+
+async def test_a_different_name_needs_no_choice(client, admin_headers, ledger, owner_key):
+    await _issue(client, admin_headers, owner_key)
+    r = await _issue(client, admin_headers, owner_key, code=CODE2, user="John Smith")
+    assert r.status_code == 200 and r.json()["retired_code"] is None
+
+
+async def test_retired_computer_money_and_manual_retire(client, admin_headers, ledger, owner_key):
+    """The month of the move belongs to the new computer, so it is never counted twice."""
+    out = await _issue(client, admin_headers, owner_key, monthly_fee=500)
+    cid = out.json()["customer"]["id"]
+    # Retired the same month it was created: nothing is owed on it.
+    r = await client.put(f"{BASE}/{cid}/retired", json={"retired": True}, headers=admin_headers)
+    assert r.status_code == 200
+    assert r.json()["status"] == "retired" and r.json()["unpaid_months"] == []
+    assert r.json()["amount_outstanding"] == 0
+    summary = (await _list(client, admin_headers))["summary"]
+    assert summary["total_customers"] == 0 and summary["retired"] == 1
+    assert summary["unpaid_months"] == 0
+    # A name whose only computers are retired can get a fresh code without a choice.
+    fresh = await _issue(client, admin_headers, owner_key, code=CODE2)
+    assert fresh.status_code == 200
+    missing = await client.put(
+        f"{BASE}/nope/retired", json={"retired": True}, headers=admin_headers
+    )
+    assert missing.status_code == 400
+
+
+async def test_csv_has_the_new_columns_and_months_stay_last(
+    client, admin_headers, ledger, owner_key
+):
+    await _issue(client, admin_headers, owner_key)
+    await _issue(client, admin_headers, owner_key, code=CODE2, relation="migration")
+    r = await client.get(f"{BASE}/export.csv", headers=admin_headers)
+    rows = list(csv.reader(io.StringIO(r.content.decode("utf-8-sig"))))
+    header = rows[0]
+    assert "Retired on" in header and "Active computers" in header
+    assert header.index("Notes") < header.index(f"{date.today().year:04d}-{date.today().month:02d}")
+    status_col = header.index("Status")
+    assert sorted(row[status_col] for row in rows[1:]) == ["active", "retired"]
+
+
+def test_previous_month_wraps_the_year():
+    from app.core.licence_ledger import previous_month
+
+    assert previous_month(date(2026, 1, 15)) == "2025-12"
+    assert previous_month(date(2026, 10, 31)) == "2026-09"

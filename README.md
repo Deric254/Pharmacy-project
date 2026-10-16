@@ -161,6 +161,12 @@ into every copy, which can only *verify* licences, never make them.
   when 14 days or fewer remain).
 - **Owner's own computer:** on the licence screen choose "I'm the owner of this
   system" and paste the owner key once. It is used in memory and never stored.
+- **Licence Desk (owner's computer only):** the **Licence Desk** item in the left menu (next to Roles & Permissions) lists every customer, lets
+  you type their activation code to generate the licence, tick each month as paid, and export
+  to CSV. A new code for a name that already has an active computer must be marked
+  **Migration** (the old computer is retired) or **Extra computer**; a retired computer
+  cannot be renewed unless you restore it. Licences are short, so a retired or copied
+  computer simply stops at its expiry.
 - **First-time setup (owner, once):** `python backend/licensing/make_owner_key.py`
   writes `phe-owner.key` (gitignored: back it up to two places, never commit or
   share it) and fills in `backend/app/core/licence_owner_key.py`; commit that

@@ -38,6 +38,12 @@ def month_of(d: date) -> str:
     return f"{d.year:04d}-{d.month:02d}"
 
 
+def previous_month(d: date) -> str:
+    """The calendar month before the one `d` falls in, as YYYY-MM."""
+    year, month = (d.year - 1, 12) if d.month == 1 else (d.year, d.month - 1)
+    return f"{year:04d}-{month:02d}"
+
+
 def months_between(first: str, last: str) -> list[str]:
     """Every month from `first` to `last` inclusive, as YYYY-MM (empty if last < first)."""
     y, m = int(first[:4]), int(first[5:])
@@ -101,10 +107,22 @@ class LicenceLedger:
         notes: str | None,
         monthly_fee: float | None,
         paid_month: str | None,
+        retire_code: str | None = None,
     ) -> dict[str, Any]:
-        """Add the customer (first licence) or add a licence to the existing one (renewal)."""
+        """Add the customer (first licence) or add a licence to the existing one (renewal).
+
+        `retire_code` marks another computer as retired in the same save: a customer
+        who moves to a new computer gets the new licence and loses the old one's
+        standing in one step, never one without the other.
+        """
         with self._lock:
             data = self._load()
+            if retire_code is not None:
+                old = next((c for c in data["customers"] if c["code"] == retire_code), None)
+                if old is None:
+                    raise LedgerError("The computer being replaced isn't in the ledger.")
+                old["retired"] = True
+                old["retired_on"] = issued
             customer = next((c for c in data["customers"] if c["code"] == code), None)
             if customer is None:
                 customer = {
@@ -152,6 +170,20 @@ class LicenceLedger:
                 customer["payments"][month] = {"paid": True, "on": today.isoformat()}
             else:
                 customer["payments"].pop(month, None)
+            self._save(data)
+            return customer
+
+    def set_retired(self, customer_id: str, retired: bool, today: date) -> dict[str, Any]:
+        """Retire a computer (it is never renewed again) or restore it."""
+        with self._lock:
+            data = self._load()
+            customer = self._find(data, customer_id)
+            if retired:
+                customer["retired"] = True
+                customer["retired_on"] = today.isoformat()
+            else:
+                customer.pop("retired", None)
+                customer.pop("retired_on", None)
             self._save(data)
             return customer
 

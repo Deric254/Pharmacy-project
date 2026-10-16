@@ -17,7 +17,7 @@ import csv
 import io
 import re
 from datetime import date
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
@@ -28,6 +28,7 @@ from app.core.licence_ledger import (
     get_ledger,
     month_of,
     months_between,
+    previous_month,
     valid_month,
 )
 from app.core.rbac import require_permission
@@ -64,11 +65,19 @@ class IssueIn(BaseModel):
     phone: str | None = Field(default=None, max_length=40)
     notes: str | None = Field(default=None, max_length=500)
     monthly_fee: float | None = Field(default=None, ge=0, le=1_000_000_000)
+    # Needed only when this NEW code is for a name that already has an active computer:
+    # "migration" = it replaces one of them (that one is retired), "extra" = one more computer.
+    relation: Literal["migration", "extra"] | None = None
+    replaces: str | None = Field(default=None, max_length=40)
 
 
 class PaymentIn(BaseModel):
     month: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
     paid: bool
+
+
+class RetiredIn(BaseModel):
+    retired: bool
 
 
 class DetailsIn(BaseModel):
@@ -83,12 +92,31 @@ def _today() -> date:
     return date.today()
 
 
-def _customer_view(c: dict[str, Any], today: date) -> dict[str, Any]:
+def _name_key(name: str) -> str:
+    """How two spellings of one customer name are recognised as the same."""
+    return re.sub(r"\s+", " ", name.strip()).casefold()
+
+
+def _seat_counts(customers: list[dict[str, Any]]) -> dict[str, int]:
+    """Active (not retired) computers per customer name."""
+    counts: dict[str, int] = {}
+    for c in customers:
+        if not c.get("retired"):
+            key = _name_key(c["name"])
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _customer_view(c: dict[str, Any], today: date, seats: dict[str, int]) -> dict[str, Any]:
     licences = c.get("licences", [])
     latest = max(licences, key=lambda lic: (lic["expires"], lic["issued"])) if licences else None
     expires = latest["expires"] if latest else None
     days_left = (date.fromisoformat(expires) - today).days if expires else None
-    if days_left is None or days_left < 0:
+    retired = bool(c.get("retired"))
+    retired_on = c.get("retired_on") if retired else None
+    if retired:
+        status = "retired"
+    elif days_left is None or days_left < 0:
         status = "expired"
     elif days_left <= EXPIRING_SOON_DAYS:
         status = "expiring"
@@ -98,7 +126,12 @@ def _customer_view(c: dict[str, Any], today: date) -> dict[str, Any]:
     payments = c.get("payments", {})
     paid_months = sorted(m for m, p in payments.items() if p.get("paid"))
     first = month_of(date.fromisoformat(c["created"]))
-    last = max([month_of(today), *paid_months])
+    if retired and retired_on:
+        # A retired computer is owed for the months before it was replaced; the month it
+        # was replaced belongs to the new computer (otherwise one payment is counted twice).
+        last = max([previous_month(date.fromisoformat(retired_on)), *paid_months])
+    else:
+        last = max([month_of(today), *paid_months])
     months = months_between(first, last)
     unpaid = [m for m in months if m not in paid_months]
     fee = c.get("monthly_fee")
@@ -114,6 +147,9 @@ def _customer_view(c: dict[str, Any], today: date) -> dict[str, Any]:
         "expires": expires,
         "days_left": days_left,
         "status": status,
+        "retired": retired,
+        "retired_on": retired_on,
+        "active_computers": seats.get(_name_key(c["name"]), 0),
         "licence_count": len(licences),
         "latest_licence": latest["token"] if latest else None,
         "months": [{"month": m, "paid": m in paid_months} for m in months],
@@ -123,12 +159,20 @@ def _customer_view(c: dict[str, Any], today: date) -> dict[str, Any]:
     }
 
 
+def _view_of(customer: dict[str, Any], today: date) -> dict[str, Any]:
+    return _customer_view(customer, today, _seat_counts(get_ledger().customers()))
+
+
 def _build_list(today: date) -> dict[str, Any]:
-    views = [_customer_view(c, today) for c in get_ledger().customers()]
-    views.sort(key=lambda v: v["name"].casefold())
+    customers = get_ledger().customers()
+    seats = _seat_counts(customers)
+    views = [_customer_view(c, today, seats) for c in customers]
+    views.sort(key=lambda v: (_name_key(v["name"]), v["retired"], v["created"]))
     return {
         "summary": {
-            "total_customers": len(views),
+            # Computers that still count: a retired one is history, not a user.
+            "total_customers": sum(not v["retired"] for v in views),
+            "retired": sum(v["retired"] for v in views),
             "active": sum(v["status"] == "active" for v in views),
             "expiring": sum(v["status"] == "expiring" for v in views),
             "expired": sum(v["status"] == "expired" for v in views),
@@ -147,6 +191,34 @@ def _ledger_call(fn: Any, *args: Any, **kwargs: Any) -> Any:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _resolve_new_computer(body: IssueIn, same_name: list[dict[str, Any]], name: str) -> str | None:
+    """A new activation code for a name that already has active computers: the owner must say
+    whether it is a migration or an extra computer. Returns the code to retire, if any."""
+    have = len(same_name)
+    if body.relation is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{name} already has {have} active computer{'s' if have != 1 else ''}. "
+                "Say whether this new code is a migration (replaces one) or an extra computer."
+            ),
+        )
+    if body.relation == "extra":
+        return None
+    if body.replaces:
+        target = next((c for c in same_name if c["code"] == norm_code(body.replaces)), None)
+        if target is None:
+            raise HTTPException(
+                status_code=400,
+                detail="The computer being replaced doesn't belong to this customer.",
+            )
+    elif have == 1:
+        target = same_name[0]
+    else:
+        raise HTTPException(status_code=400, detail="Choose which computer is being replaced.")
+    return str(target["code"])
+
+
 # ---------------------------------------------------------------------- routes
 @router.get("", dependencies=[OwnerOnly])
 async def list_customers() -> dict[str, Any]:
@@ -163,9 +235,11 @@ async def issue_licence(body: IssueIn) -> dict[str, Any]:
         code = norm_code(body.code)
         name = re.sub(r"\s+", " ", body.user.strip())
         ledger = get_ledger()
-        existing = next((c for c in ledger.customers() if c["code"] == code), None)
+        all_customers = ledger.customers()
+        existing = next((c for c in all_customers if c["code"] == code), None)
+        retire_code: str | None = None
         if existing is not None:
-            if existing["name"].casefold() != name.casefold():
+            if _name_key(existing["name"]) != _name_key(name):
                 # A customer's copy only accepts a renewal for the name it was activated with.
                 raise HTTPException(
                     status_code=400,
@@ -175,6 +249,22 @@ async def issue_licence(body: IssueIn) -> dict[str, Any]:
                     ),
                 )
             name = existing["name"]
+            if existing.get("retired"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"This computer was retired on {existing.get('retired_on')}. Renewing it "
+                        "would keep two computers licensed. Restore it first if that is intended."
+                    ),
+                )
+        else:
+            same_name = [
+                c
+                for c in all_customers
+                if not c.get("retired") and _name_key(c["name"]) == _name_key(name)
+            ]
+            if same_name:
+                retire_code = _resolve_new_computer(body, same_name, name)
         try:
             seed = lic.parse_owner_key(body.owner_key)
             out = lic.issue(seed, code, name, body.days)
@@ -192,6 +282,7 @@ async def issue_licence(body: IssueIn) -> dict[str, Any]:
             notes=(body.notes or "").strip() or None,
             monthly_fee=body.monthly_fee,
             paid_month=month_of(today) if body.paid_this_month else None,
+            retire_code=retire_code,
         )
         return {
             "licence": out["licence"],
@@ -199,7 +290,8 @@ async def issue_licence(body: IssueIn) -> dict[str, Any]:
             "code": code,
             "expires": out["expires"],
             "renewal": existing is not None,
-            "customer": _customer_view(customer, today),
+            "retired_code": retire_code,
+            "customer": _view_of(customer, today),
         }
 
     return await asyncio.to_thread(run)
@@ -213,7 +305,17 @@ async def set_payment(customer_id: str, body: PaymentIn) -> dict[str, Any]:
     customer = await asyncio.to_thread(
         lambda: _ledger_call(get_ledger().set_payment, customer_id, body.month, body.paid, today)
     )
-    return _customer_view(customer, today)
+    return _view_of(customer, today)
+
+
+@router.put("/{customer_id}/retired", dependencies=[OwnerOnly])
+async def set_retired(customer_id: str, body: RetiredIn) -> dict[str, Any]:
+    """Retire a computer (it can no longer be renewed here) or restore it."""
+    today = _today()
+    customer = await asyncio.to_thread(
+        lambda: _ledger_call(get_ledger().set_retired, customer_id, body.retired, today)
+    )
+    return _view_of(customer, today)
 
 
 @router.patch("/{customer_id}", dependencies=[OwnerOnly])
@@ -229,7 +331,7 @@ async def update_customer(customer_id: str, body: DetailsIn) -> dict[str, Any]:
             clear_fee=body.clear_fee,
         )
     )
-    return _customer_view(customer, today)
+    return _view_of(customer, today)
 
 
 @router.delete("/{customer_id}", status_code=204, dependencies=[OwnerOnly])
@@ -268,6 +370,8 @@ async def export_csv() -> Response:
                 "Last issued",
                 "Expires",
                 "Status",
+                "Retired on",
+                "Active computers",
                 "Months paid",
                 "Months unpaid",
                 "Outstanding",
@@ -287,6 +391,8 @@ async def export_csv() -> Response:
                     v["last_issued"] or "",
                     v["expires"] or "",
                     v["status"],
+                    v["retired_on"] or "",
+                    v["active_computers"],
                     v["paid_count"],
                     len(v["unpaid_months"]),
                     "" if v["amount_outstanding"] is None else v["amount_outstanding"],

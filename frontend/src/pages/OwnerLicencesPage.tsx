@@ -16,16 +16,23 @@ function normCode(code: string): string {
   return code.toUpperCase().replace(/[^A-Z0-9]/g, '')
 }
 
+/** Two spellings of one customer name are the same customer (matches the server). */
+function nameKey(name: string): string {
+  return name.trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
 const STATUS_LABEL: Record<LedgerCustomer['status'], string> = {
   active: 'Active',
   expiring: 'Expiring soon',
   expired: 'Expired',
+  retired: 'Retired',
 }
 
 const STATUS_CLASS: Record<LedgerCustomer['status'], string> = {
   active: 'text-ink',
   expiring: 'text-brass',
   expired: 'text-stamp-red',
+  retired: 'text-ink-soft',
 }
 
 function monthLabel(month: string): string {
@@ -66,6 +73,9 @@ export function OwnerLicencesPage() {
   const [fee, setFee] = useState('')
   const [issuing, setIssuing] = useState(false)
   const [exporting, setExporting] = useState(false)
+  // Only used when a NEW code is for a name that already has an active computer.
+  const [relation, setRelation] = useState<'' | 'migration' | 'extra'>('')
+  const [replaces, setReplaces] = useState('')
 
   const reload = useCallback(async () => {
     try {
@@ -98,9 +108,24 @@ export function OwnerLicencesPage() {
     [ledger, code],
   )
 
+  // A new code whose name already has active computers: the owner must say what it is.
+  const sameName = useMemo(() => {
+    if (existing || nameKey(name) === '') return []
+    return (ledger?.customers ?? []).filter((c) => !c.retired && nameKey(c.name) === nameKey(name))
+  }, [ledger, existing, name])
+  // Which computer a migration retires: the only one, or the one picked.
+  const replaceCode =
+    sameName.length === 1
+      ? sameName[0].code
+      : (sameName.find((c) => c.code === replaces)?.code ?? '')
+  const choiceMissing =
+    sameName.length > 0 && (relation === '' || (relation === 'migration' && replaceCode === ''))
+
   function startRenewal(c: LedgerCustomer) {
     setCode(c.code)
     setName(c.name)
+    setRelation('')
+    setReplaces('')
     setResult(null)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
@@ -124,10 +149,14 @@ export function OwnerLicencesPage() {
         paid_this_month: paid,
         phone: phone.trim() || undefined,
         monthly_fee: fee.trim() === '' ? undefined : Number(fee),
+        relation: sameName.length > 0 && relation !== '' ? relation : undefined,
+        replaces: sameName.length > 0 && relation === 'migration' ? replaceCode : undefined,
       })
       setResult(out)
       setCode('')
       setName('')
+      setRelation('')
+      setReplaces('')
       setPaid(false)
       setPhone('')
       setFee('')
@@ -154,6 +183,21 @@ export function OwnerLicencesPage() {
       await reload()
     } catch (err) {
       setError(errText(err, 'Could not save that payment.'))
+    }
+  }
+
+  async function handleSetRetired(c: LedgerCustomer, retired: boolean) {
+    const ok = window.confirm(
+      retired
+        ? `Retire this computer of ${c.name}?\n\nIt will no longer count as a user and cannot be renewed here. A licence you already sent keeps working until it expires.`
+        : `Restore this computer of ${c.name}?\n\nIt will count as an active user again and can be renewed.`,
+    )
+    if (!ok) return
+    try {
+      await ownerLicencesApi.setRetired(c.id, retired)
+      await reload()
+    } catch (err) {
+      setError(errText(err, 'Could not update that computer.'))
     }
   }
 
@@ -229,11 +273,21 @@ export function OwnerLicencesPage() {
         </div>
       )}
 
+      {s && s.retired > 0 && (
+        <p className="-mt-3 text-xs text-ink-soft">
+          {s.retired} retired computer{s.retired === 1 ? '' : 's'} (replaced or closed) not counted
+          above.
+        </p>
+      )}
+
       <section className="ledger-panel p-5">
         <h2 className="mb-3 font-display text-lg text-ink">Generate a licence</h2>
         <form onSubmit={handleIssue} className="grid gap-4 md:grid-cols-2">
           <div>
-            <label htmlFor="ol-code" className="block text-xs uppercase tracking-wide text-ink-soft">
+            <label
+              htmlFor="ol-code"
+              className="block text-xs uppercase tracking-wide text-ink-soft"
+            >
               Activation code from the customer
             </label>
             <input
@@ -244,14 +298,23 @@ export function OwnerLicencesPage() {
               autoComplete="off"
               className="mt-1 w-full border border-rule bg-paper px-3 py-2 font-mono text-sm tracking-widest text-ink outline-none focus-visible:border-brass"
             />
-            {existing && (
+            {existing && !existing.retired && (
               <p className="mt-1 text-xs text-brass">
                 Existing customer: this will be a renewal for {existing.name}.
               </p>
             )}
+            {existing?.retired && (
+              <p role="alert" className="mt-1 text-xs text-stamp-red">
+                This computer was retired on {existing.retired_on}. Restore it in the list below
+                before renewing it.
+              </p>
+            )}
           </div>
           <div>
-            <label htmlFor="ol-name" className="block text-xs uppercase tracking-wide text-ink-soft">
+            <label
+              htmlFor="ol-name"
+              className="block text-xs uppercase tracking-wide text-ink-soft"
+            >
               Customer name
             </label>
             <input
@@ -264,7 +327,10 @@ export function OwnerLicencesPage() {
             />
           </div>
           <div>
-            <label htmlFor="ol-days" className="block text-xs uppercase tracking-wide text-ink-soft">
+            <label
+              htmlFor="ol-days"
+              className="block text-xs uppercase tracking-wide text-ink-soft"
+            >
               Licence length (days)
             </label>
             <input
@@ -294,7 +360,10 @@ export function OwnerLicencesPage() {
             </p>
           </div>
           <div>
-            <label htmlFor="ol-phone" className="block text-xs uppercase tracking-wide text-ink-soft">
+            <label
+              htmlFor="ol-phone"
+              className="block text-xs uppercase tracking-wide text-ink-soft"
+            >
               Phone (optional)
             </label>
             <input
@@ -319,6 +388,58 @@ export function OwnerLicencesPage() {
               className="mt-1 w-full border border-rule bg-paper px-3 py-2 text-sm text-ink outline-none focus-visible:border-brass"
             />
           </div>
+          {sameName.length > 0 && (
+            <fieldset className="border border-brass p-3 text-sm text-ink md:col-span-2">
+              <legend className="px-1 text-xs uppercase tracking-wide text-brass">
+                {sameName[0].name} already has {sameName.length} active computer
+                {sameName.length === 1 ? '' : 's'}
+              </legend>
+              <p className="mb-2 text-xs text-ink-soft">
+                Is this new code a move to a new computer, or an extra computer? Active now:{' '}
+                {sameName
+                  .map((c) => `${c.code}${c.expires ? ` (until ${c.expires})` : ''}`)
+                  .join(', ')}
+              </p>
+              <label className="mr-6 inline-flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="ol-relation"
+                  checked={relation === 'migration'}
+                  onChange={() => setRelation('migration')}
+                />
+                Migration: replaces an old computer (the old one is retired)
+              </label>
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="ol-relation"
+                  checked={relation === 'extra'}
+                  onChange={() => setRelation('extra')}
+                />
+                Extra computer (both stay active)
+              </label>
+              {relation === 'migration' && sameName.length > 1 && (
+                <div className="mt-2">
+                  <label htmlFor="ol-replaces" className="block text-xs text-ink-soft">
+                    Which computer is being replaced?
+                  </label>
+                  <select
+                    id="ol-replaces"
+                    value={replaceCode}
+                    onChange={(e) => setReplaces(e.target.value)}
+                    className="mt-1 border border-rule bg-paper px-3 py-2 font-mono text-xs text-ink"
+                  >
+                    <option value="">Choose…</option>
+                    {sameName.map((c) => (
+                      <option key={c.id} value={c.code}>
+                        {c.code}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </fieldset>
+          )}
           <label className="flex items-center gap-2 text-sm text-ink md:col-span-2">
             <input type="checkbox" checked={paid} onChange={(e) => setPaid(e.target.checked)} />
             They have paid for this month
@@ -330,7 +451,9 @@ export function OwnerLicencesPage() {
                 issuing ||
                 ownerKey.trim() === '' ||
                 normCode(code).length !== 12 ||
-                (!existing && name.trim() === '')
+                (!existing && name.trim() === '') ||
+                existing?.retired === true ||
+                choiceMissing
               }
               className="border border-ink bg-ink px-4 py-2 text-sm font-medium text-paper disabled:opacity-50"
             >
@@ -345,6 +468,11 @@ export function OwnerLicencesPage() {
               {result.renewal ? 'Renewal' : 'Licence'} for <strong>{result.user}</strong>, valid
               until {result.expires}. Send them everything in the box below:
             </p>
+            {result.retired_code && (
+              <p className="mt-1 text-xs text-brass">
+                The old computer ({result.retired_code}) is now retired. Do not renew it.
+              </p>
+            )}
             <textarea
               readOnly
               rows={4}
@@ -390,6 +518,7 @@ export function OwnerLicencesPage() {
                 copied={copied === c.id}
                 onToggle={() => setExpanded(expanded === c.id ? null : c.id)}
                 onRenew={() => startRenewal(c)}
+                onRetire={() => void handleSetRetired(c, !c.retired)}
                 onCopy={() => c.latest_licence && void copy(c.latest_licence, c.id)}
                 onPay={(month, nowPaid) => void togglePayment(c, month, nowPaid)}
                 onDelete={() => void handleDelete(c)}
@@ -408,6 +537,7 @@ function CustomerRows({
   copied,
   onToggle,
   onRenew,
+  onRetire,
   onCopy,
   onPay,
   onDelete,
@@ -417,6 +547,7 @@ function CustomerRows({
   copied: boolean
   onToggle: () => void
   onRenew: () => void
+  onRetire: () => void
   onCopy: () => void
   onPay: (month: string, paid: boolean) => void
   onDelete: () => void
@@ -428,13 +559,22 @@ function CustomerRows({
         <td className="px-3 py-2">
           <p className="font-medium text-ink">{c.name}</p>
           {c.phone && <p className="text-xs text-ink-soft">{c.phone}</p>}
+          {!c.retired && c.active_computers > 1 && (
+            <p className="text-xs text-brass">{c.active_computers} computers</p>
+          )}
         </td>
         <td className="px-3 py-2 font-mono text-xs tracking-wider text-ink">{c.code}</td>
         <td className="px-3 py-2">
           <p className={STATUS_CLASS[c.status]}>{STATUS_LABEL[c.status]}</p>
           <p className="text-xs text-ink-soft">
-            {c.expires ? `until ${c.expires}` : '—'}
-            {c.days_left !== null && c.days_left >= 0 ? ` (${c.days_left} days left)` : ''}
+            {c.retired && c.retired_on
+              ? `since ${c.retired_on}`
+              : c.expires
+                ? `until ${c.expires}`
+                : '—'}
+            {!c.retired && c.days_left !== null && c.days_left >= 0
+              ? ` (${c.days_left} days left)`
+              : ''}
           </p>
         </td>
         <td className="px-3 py-2">
@@ -452,8 +592,13 @@ function CustomerRows({
           <button onClick={onToggle} className="text-ink underline decoration-dotted">
             {open ? 'Hide payments' : 'Payments'}
           </button>
-          <button onClick={onRenew} className="text-ink underline decoration-dotted">
-            Renew
+          {!c.retired && (
+            <button onClick={onRenew} className="text-ink underline decoration-dotted">
+              Renew
+            </button>
+          )}
+          <button onClick={onRetire} className="text-ink underline decoration-dotted">
+            {c.retired ? 'Restore' : 'Retire'}
           </button>
           <button onClick={onCopy} className="text-ink underline decoration-dotted">
             {copied ? 'Copied' : 'Copy last licence'}

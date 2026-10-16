@@ -346,3 +346,49 @@ def test_previous_month_wraps_the_year():
 
     assert previous_month(date(2026, 1, 15)) == "2025-12"
     assert previous_month(date(2026, 10, 31)) == "2026-09"
+
+
+async def test_retiring_twice_keeps_the_first_date_and_old_ledgers_still_load(
+    client, admin_headers, ledger, owner_key
+):
+    # A ledger written before retiring existed has none of the new fields.
+    import json
+
+    ledger.path.write_text(
+        json.dumps(
+            {
+                "customers": [
+                    {
+                        "id": "legacy1",
+                        "name": "Old Customer",
+                        "code": "ABCDEFGHJKLM",
+                        "phone": "",
+                        "notes": "",
+                        "monthly_fee": None,
+                        "created": date.today().isoformat(),
+                        "licences": [
+                            {
+                                "issued": date.today().isoformat(),
+                                "expires": "2099-01-01",
+                                "days": 30,
+                                "token": "t",
+                            }
+                        ],
+                        "payments": {},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    row = (await _list(client, admin_headers))["customers"][0]
+    assert row["status"] == "active" and row["retired"] is False and row["active_computers"] == 1
+
+    url = f"{BASE}/legacy1/retired"
+    first = await client.put(url, json={"retired": True}, headers=admin_headers)
+    assert first.status_code == 200 and first.json()["retired_on"] == date.today().isoformat()
+    ledger_data = json.loads(ledger.path.read_text(encoding="utf-8"))
+    ledger_data["customers"][0]["retired_on"] = "2026-01-05"
+    ledger.path.write_text(json.dumps(ledger_data), encoding="utf-8")
+    again = await client.put(url, json={"retired": True}, headers=admin_headers)
+    assert again.json()["retired_on"] == "2026-01-05"  # unchanged by a second retire

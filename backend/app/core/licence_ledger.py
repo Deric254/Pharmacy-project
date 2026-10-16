@@ -179,8 +179,10 @@ class LicenceLedger:
             data = self._load()
             customer = self._find(data, customer_id)
             if retired:
-                customer["retired"] = True
-                customer["retired_on"] = today.isoformat()
+                # Already retired: keep the original date, which months-owed are counted from.
+                if not customer.get("retired"):
+                    customer["retired"] = True
+                    customer["retired_on"] = today.isoformat()
             else:
                 customer.pop("retired", None)
                 customer.pop("retired_on", None)

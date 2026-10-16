@@ -42,6 +42,7 @@ from app.api.v1.categories import router as categories_router
 from app.api.v1.customers import router as customers_router
 from app.api.v1.inventory import router as inventory_router
 from app.api.v1.licence import router as licence_router
+from app.api.v1.owner_licences import router as owner_licences_router
 from app.api.v1.products import router as products_router
 from app.api.v1.purchase_orders import router as purchase_orders_router
 from app.api.v1.reports import router as reports_router
@@ -247,6 +248,7 @@ async def _unhandled_error_handler(request: Request, exc: Exception) -> JSONResp
 
 
 app.include_router(licence_router, prefix=settings.api_v1_prefix)
+app.include_router(owner_licences_router, prefix=settings.api_v1_prefix)
 app.include_router(auth_router, prefix=settings.api_v1_prefix)
 app.include_router(business_config_router, prefix=settings.api_v1_prefix)
 app.include_router(categories_router, prefix=settings.api_v1_prefix)

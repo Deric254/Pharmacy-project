@@ -153,6 +153,8 @@ export const api = {
     apiRequest<T>(path, { method: 'GET', query, timeoutMs }),
   post: <T>(path: string, body?: unknown, timeoutMs?: number) =>
     apiRequest<T>(path, { method: 'POST', body, timeoutMs }),
+  put: <T>(path: string, body?: unknown, timeoutMs?: number) =>
+    apiRequest<T>(path, { method: 'PUT', body, timeoutMs }),
   patch: <T>(path: string, body?: unknown, timeoutMs?: number) =>
     apiRequest<T>(path, { method: 'PATCH', body, timeoutMs }),
   delete: <T>(path: string, timeoutMs?: number) => apiRequest<T>(path, { method: 'DELETE', timeoutMs }),

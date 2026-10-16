@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { FloatingAiWidget } from './FloatingAiWidget'
 import { useAuthStore } from '../auth/store'
+import { licenceApi } from '../api/licence'
 import { useConfigStore } from '../config/store'
 import { useUpdateCheck, type UpdateInfo } from '../lib/updateCheck'
 import { formatRoleName } from '../lib/roleDisplay'
@@ -12,6 +13,8 @@ interface NavItem {
   to: string
   label: string
   permission: string | null
+  /** Only shown on the owner's own computer (the server enforces this too). */
+  ownerCopyOnly?: boolean
 }
 
 interface NavSection {
@@ -43,6 +46,12 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { to: '/settings', label: 'Settings', permission: 'config.edit' },
       { to: '/roles', label: 'Roles & Permissions', permission: 'roles.manage' },
+      {
+        to: '/owner-licences',
+        label: 'Licence Desk',
+        permission: 'roles.manage',
+        ownerCopyOnly: true,
+      },
       { to: '/users', label: 'Staff Accounts', permission: 'users.manage' },
       { to: '/audit', label: 'Audit Trail', permission: 'audit.view' },
       { to: '/backups', label: 'Backups', permission: 'backups.manage' },
@@ -59,12 +68,30 @@ export function AppShell() {
   const slogan = useConfigStore((s) => s.config?.slogan ?? '')
   const { info: updateInfo } = useUpdateCheck()
   const location = useLocation()
+  const [isOwnerCopy, setIsOwnerCopy] = useState(false)
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({})
+
+  useEffect(() => {
+    let cancelled = false
+    licenceApi
+      .state()
+      .then((s) => {
+        if (!cancelled) setIsOwnerCopy(s.kind === 'owner')
+      })
+      .catch(() => {
+        if (!cancelled) setIsOwnerCopy(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const visibleSections = NAV_SECTIONS.map((section) => ({
     ...section,
     items: section.items.filter(
-      (item) => item.permission === null || hasPermission(item.permission),
+      (item) =>
+        (!item.ownerCopyOnly || isOwnerCopy) &&
+        (item.permission === null || hasPermission(item.permission)),
     ),
   })).filter((section) => section.items.length > 0)
 

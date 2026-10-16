@@ -16,6 +16,9 @@ const DashboardPage = lazy(() =>
   import('./pages/DashboardPage').then((m) => ({ default: m.DashboardPage })),
 )
 const PosPage = lazy(() => import('./pages/PosPage').then((m) => ({ default: m.PosPage })))
+const OwnerLicencesPage = lazy(() =>
+  import('./pages/OwnerLicencesPage').then((m) => ({ default: m.OwnerLicencesPage })),
+)
 const SalesPage = lazy(() => import('./pages/SalesPage').then((m) => ({ default: m.SalesPage })))
 const InventoryPage = lazy(() =>
   import('./pages/InventoryPage').then((m) => ({ default: m.InventoryPage })),
@@ -270,6 +273,14 @@ export function App() {
               element={
                 <RequirePermission code="roles.manage">
                   <RolesPage />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="owner-licences"
+              element={
+                <RequirePermission code="roles.manage">
+                  <OwnerLicencesPage />
                 </RequirePermission>
               }
             />

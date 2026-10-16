@@ -1,6 +1,6 @@
 [project]
 name = "pharmacy-erp-backend"
-version = "0.0.107"
+version = "0.0.108"
 description = "Pharmacy POS/ERP backend"
 requires-python = ">=3.12"
 

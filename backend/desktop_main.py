@@ -214,6 +214,21 @@ def _snapshot_before_upgrade(db_path: Path, head_revision: str | None) -> None:
         stale.unlink(missing_ok=True)
 
 
+def _is_at_head(db_path: Path, head_revision: str | None) -> bool:
+    """
+    True only when the database file exists and already records the newest
+    revision, so there is certainly nothing to upgrade. Any doubt (no file yet,
+    no version table, a file SQLite cannot read, a locked database) answers
+    False and the normal upgrade path runs and reports the problem itself.
+    """
+    if head_revision is None or not db_path.exists():
+        return False
+    try:
+        return _current_revision(db_path) == head_revision
+    except sqlite3.Error:
+        return False
+
+
 def _run_migrations(db_path: Path) -> None:
     from alembic import command
     from alembic.config import Config
@@ -228,6 +243,11 @@ def _run_migrations(db_path: Path) -> None:
     alembic_cfg = Config(str(base / "alembic.ini"))
     alembic_cfg.set_main_option("script_location", str(base / "alembic"))
     head_revision = ScriptDirectory.from_config(alembic_cfg).get_current_head()
+    if _is_at_head(db_path, head_revision):
+        # Every launch after the first finds nothing to upgrade. Skipping Alembic's
+        # own start-up (loading its environment, opening a second connection,
+        # re-reading the version table) makes the app open noticeably sooner.
+        return
     _snapshot_before_upgrade(db_path, head_revision)
     print("Setting up the database (first run may take a few seconds)...")
     try:

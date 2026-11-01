@@ -75,6 +75,45 @@ def _snapshots(db_path):
     return sorted((db_path.parent / "pre-upgrade-snapshots").glob("*.db"))
 
 
+class TestSkipUpgradeWhenAlreadyCurrent:
+    """Every launch after the first has nothing to upgrade, so the launcher skips Alembic's own
+    start-up. Skipping must only ever happen when the database certainly records the newest
+    revision; every doubt has to fall through to the normal upgrade path."""
+
+    def test_a_database_recording_the_newest_revision_is_current(self, tmp_path):
+        db = tmp_path / "pharmacy.db"
+        _database_at_revision(db, "0036")
+
+        assert desktop_main._is_at_head(db, "0036") is True
+
+    def test_a_database_one_revision_behind_is_not_current(self, tmp_path):
+        db = tmp_path / "pharmacy.db"
+        _database_at_revision(db, "0035")
+
+        assert desktop_main._is_at_head(db, "0036") is False
+
+    def test_a_first_run_with_no_database_file_is_not_current(self, tmp_path):
+        assert desktop_main._is_at_head(tmp_path / "pharmacy.db", "0036") is False
+
+    def test_an_empty_database_with_no_version_table_is_not_current(self, tmp_path):
+        db = tmp_path / "pharmacy.db"
+        sqlite3.connect(db).close()
+
+        assert desktop_main._is_at_head(db, "0036") is False
+
+    def test_a_file_that_is_not_a_database_is_not_current_and_does_not_raise(self, tmp_path):
+        db = tmp_path / "pharmacy.db"
+        db.write_bytes(b"this is not a sqlite database" * 50)
+
+        assert desktop_main._is_at_head(db, "0036") is False
+
+    def test_an_unknown_newest_revision_is_never_treated_as_current(self, tmp_path):
+        db = tmp_path / "pharmacy.db"
+        _database_at_revision(db, "0036")
+
+        assert desktop_main._is_at_head(db, None) is False
+
+
 class TestPreUpgradeSnapshot:
     def test_a_pending_upgrade_snapshots_the_current_data_first(self, tmp_path):
         db = tmp_path / "pharmacy.db"

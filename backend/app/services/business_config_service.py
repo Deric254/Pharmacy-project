@@ -70,7 +70,7 @@ def _shrink_logo(logo_url: str | None) -> str | None:
 
         # Image.LANCZOS (the bare top-level constant) is the deprecated
         # pre-9.1 spelling; Resampling.LANCZOS is what current Pillow
-        # (this app pins 12.3.*) actually exposes in its type stubs.
+        # (this app pins 13.0.*) actually exposes in its type stubs.
         img.thumbnail((_LOGO_MAX_DIMENSION, _LOGO_MAX_DIMENSION), PILImage.Resampling.LANCZOS)
         # PNG keeps transparency (common for logos) and, at these small
         # dimensions, is reliably smaller than the original upload

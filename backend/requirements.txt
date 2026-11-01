@@ -54,4 +54,4 @@ httpx==0.27.*
 # production install (or a PyInstaller build machine with a similarly
 # "impure" venv) tried to generate a receipt and had no PIL to do it
 # with.
-pillow==12.3.*
+pillow==13.0.*

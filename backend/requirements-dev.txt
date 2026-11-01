@@ -15,4 +15,4 @@ pyinstaller==6.21.*
 # see requirements.txt's comment on httpx/pillow above for exactly
 # why a dependency living in both files, rather than just its real
 # one, is the thing to avoid.
-pillow==12.3.*
+pillow==13.0.*

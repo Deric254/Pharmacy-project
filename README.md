@@ -152,10 +152,22 @@ Every installed copy needs a licence signed by the owner. No server, no
 internet: the owner holds a private **owner key**; its public half is built
 into every copy, which can only *verify* licences, never make them.
 
+- **Plans:** Monthly $100 (30 days) or Lifetime $1000. A customer can pay inside
+  the app (**Pay with PayPal** on the licence screen or the Renew box), then email
+  the proof the app prepares; the owner sends the licence back.
 - **Customer:** opens the app, reads the **activation code** on the licence
   screen and sends it to the owner, then pastes back the licence text they get.
+- **When a licence ends:** for 5 days (grace) everything still works and a corner
+  notice asks for renewal. After that the app is **view-only**: people still sign
+  in, read their data and take it out (every read, report, export and the
+  encrypted migration export), but anything that adds, changes or deletes is
+  refused (HTTP 402) with "Your licence has expired, so this is view-only" and the
+  Renew box. A copy that was never activated, has a licence for another computer
+  or has its clock wound back stays fully locked. Pasting a renewal restores full
+  use at once. Lifetime licences never warn.
 - **Owner, issuing a licence** (on the owner's computer, from the repo root):
   `python backend/licensing/issue_licence.py --code ABCD-EFGH-JKLM --user "Customer Name" --days 365 --log ~/licences-issued.csv`
+  (`--lifetime` instead of `--days` for the lifetime plan)
   and send back only the licence text. Renewal is the same command with the
   same name; the customer pastes it into the **Renew** box (shown in the corner
   when 14 days or fewer remain).

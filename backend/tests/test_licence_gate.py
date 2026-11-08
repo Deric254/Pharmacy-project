@@ -111,7 +111,7 @@ class TestActivation:
             await client.post("/api/v1/licence/activate", json={"licence": same})
         ).status_code == 200
 
-    async def test_licence_stops_working_after_it_expires(self, client):
+    async def test_expired_licence_gets_a_grace_period_then_goes_view_only(self, client):
         today = {"d": date(2026, 1, 1)}
         lic, key_text, seed = make_licensing()
         lic._today = lambda: today["d"]
@@ -121,11 +121,118 @@ class TestActivation:
             await client.post("/api/v1/licence/activate", json={"licence": token})
         ).status_code == 200
         assert (await client.get("/api/v1/auth/me")).status_code == 401
-        today["d"] += timedelta(days=3)
+        today["d"] += timedelta(days=3)  # 2 days after the end: inside the 5-day grace
         licence_gate.reset_cache()
-        r = await client.get("/api/v1/auth/me")
+        state = (await client.get("/api/v1/licence/state")).json()
+        assert state["ok"] is True and state["grace"] is True and state["grace_days_left"] == 3
+        assert (await client.post("/api/v1/products", json={})).status_code != 402
+        today["d"] += timedelta(days=10)  # well past the grace period
+        licence_gate.reset_cache()
+        state = (await client.get("/api/v1/licence/state")).json()
+        assert (state["ok"], state["kind"], state["read_only"]) == (False, "expired", True)
+        assert "app=pharmacy-erp" in state["renew_url"]
+        assert f"code={lic.install_id()}" in state["renew_url"]
+
+
+class TestReadOnlyCopy:
+    @pytest.fixture
+    def expired(self):
+        today = {"d": date(2026, 1, 1)}
+        lic, _, seed = make_licensing()
+        lic._today = lambda: today["d"]
+        use_licensing(lic)
+        lic.activate(lic.issue(seed, lic.install_id(), "Lucy", 1)["licence"])
+        today["d"] += timedelta(days=30)
+        licence_gate.reset_cache()
+        return lic, seed, today
+
+    async def test_changes_are_refused_with_the_renew_payload(self, client, expired):
+        lic = expired[0]
+        for method, path in (
+            ("POST", "/api/v1/products"),
+            ("POST", "/api/v1/sales"),
+            ("PATCH", "/api/v1/products/1"),
+            ("PUT", "/api/v1/owner/licences/x/payments"),
+            ("DELETE", "/api/v1/products/1"),
+            ("POST", "/api/v1/backups/run"),
+            ("POST", "/api/v1/auth/login/"),  # not the exact sign-in path: unknown = a change
+            ("POST", "/api/v1/ai/ask"),
+        ):
+            r = await client.request(method, path, json={})
+            assert r.status_code == 402, (method, path)
+            body = r.json()
+            assert body["detail"] == licence_gate.READ_ONLY_MESSAGE
+            assert body["licence"]["ok"] is False
+            assert body["licence"]["kind"] == "expired"
+            assert body["licence"]["read_only"] is True
+            assert body["licence"]["renew_url"] == licence_gate.renew_url(lic.install_id())
+
+    async def test_reading_exporting_and_signing_in_still_work(self, client, expired):
+        # Past the gate: the route answers for itself (401 no token, 422 no body), never 402.
+        for method, path in (
+            ("GET", "/api/v1/auth/me"),
+            ("GET", "/api/v1/products"),
+            ("GET", "/api/v1/reports/sales-summary"),
+            ("HEAD", "/api/v1/products"),
+            ("OPTIONS", "/api/v1/products"),
+            ("POST", "/api/v1/auth/login"),
+            ("POST", "/api/v1/auth/refresh"),
+            ("POST", "/api/v1/auth/logout"),
+            ("POST", "/api/v1/auth/change-password"),
+            ("POST", "/api/v1/auth/accept-terms"),
+            ("POST", "/api/v1/auth/forgot-password"),
+            ("POST", "/api/v1/backups/export-for-migration"),
+        ):
+            r = await client.request(method, path, json={})
+            assert r.status_code != 402, (method, path)
+
+    async def test_licence_endpoints_stay_open_and_renewing_restores_full_use(
+        self, client, expired
+    ):
+        lic, seed, today = expired
+        assert (await client.post("/api/v1/products", json={})).status_code == 402
+        renewal = lic.issue(seed, lic.install_id(), "Lucy", 30)["licence"]
+        r = await client.post("/api/v1/licence/activate", json={"licence": renewal})
+        assert r.status_code == 200
+        assert r.json()["ok"] is True and r.json()["kind"] == "licensed"
+        assert (await client.post("/api/v1/products", json={})).status_code != 402
+
+    async def test_a_lifetime_licence_never_expires_or_nags(self, client):
+        today = {"d": date(2026, 1, 1)}
+        lic, _, seed = make_licensing()
+        lic._today = lambda: today["d"]
+        use_licensing(lic)
+        lic.activate(lic.issue(seed, lic.install_id(), "Lucy", lifetime=True)["licence"])
+        today["d"] += timedelta(days=365 * 20)
+        licence_gate.reset_cache()
+        state = (await client.get("/api/v1/licence/state")).json()
+        assert state["ok"] is True and state["lifetime"] is True and "grace" not in state
+        assert (await client.post("/api/v1/products", json={})).status_code != 402
+
+    async def test_never_activated_copy_is_still_fully_locked(self, client, locked):
+        for method, path in (("GET", "/api/v1/products"), ("POST", "/api/v1/auth/login")):
+            r = await client.request(method, path, json={})
+            assert r.status_code == 402, (method, path)
+            assert r.json()["licence"] == {"ok": False, "kind": "unlicensed"}
+
+    async def test_a_wound_back_clock_is_still_fully_locked(self, client):
+        lic, _, seed = make_licensing()
+        lic.activate(lic.issue(seed, lic.install_id(), "Lucy", 30)["licence"])
+        use_licensing(lic)
+        lic._clock = lambda: lic.store.get("clock_high", 0) - 10 * 86400
+        r = await client.get("/api/v1/products")
         assert r.status_code == 402
-        assert "expired" in r.json()["detail"]
+        assert "read_only" not in r.json()["licence"]
+
+    async def test_websockets_are_not_closed_when_view_only(self, expired):
+        reached: list[str] = []
+
+        async def inner(scope, receive, send):
+            reached.append(scope["path"])
+
+        scope = {"type": "websocket", "path": "/api/v1/ws/notifications"}
+        await LicenceGateMiddleware(inner)(scope, None, None)
+        assert reached == ["/api/v1/ws/notifications"]
 
 
 class TestOwnerClaim:

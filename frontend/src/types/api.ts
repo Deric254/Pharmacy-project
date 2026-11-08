@@ -864,4 +864,6 @@ export interface ApiErrorBody {
     | string
     | { msg: string; loc: (string | number)[] }[]
     | { message: string; errors?: ImportRowError[] }
+  /** Present on a 402: the licence gate's reason (see app/core/licence_gate.py). */
+  licence?: { ok: boolean; kind: string; read_only?: boolean; renew_url?: string }
 }

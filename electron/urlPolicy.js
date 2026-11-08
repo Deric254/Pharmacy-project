@@ -60,10 +60,34 @@ function isSafeExternalUrl(value) {
   return url !== null && ['https:', 'http:', 'mailto:'].includes(url.protocol)
 }
 
+// The only places the licence pay window opens (see frontend/src/lib/payment.ts): the DericBI
+// renewal page, PayPal, Gmail's compose window and an email to the owner.
+const PAYMENT_LINK_PREFIXES = [
+  'https://dericbi.vercel.app/renew.html?',
+  'https://www.paypal.com/',
+  'https://mail.google.com/mail/?view=cm',
+  'mailto:dericmarangu@gmail.com?',
+]
+
+function isPaymentLink(value) {
+  return (
+    typeof value === 'string' &&
+    value.length <= 4000 &&
+    PAYMENT_LINK_PREFIXES.some((prefix) => value.startsWith(prefix))
+  )
+}
+
 function isSameOrigin(value, baseUrl) {
   const url = parse(value)
   const base = parse(baseUrl)
   return url !== null && base !== null && url.origin === base.origin
 }
 
-module.exports = { INSTALLER_FILENAME, isTrustedInstallerUrl, isSafeExternalUrl, isSameOrigin }
+module.exports = {
+  INSTALLER_FILENAME,
+  PAYMENT_LINK_PREFIXES,
+  isTrustedInstallerUrl,
+  isSafeExternalUrl,
+  isPaymentLink,
+  isSameOrigin,
+}

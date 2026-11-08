@@ -15,4 +15,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // itself resolves as soon as the download starts, not when it
   // finishes, so it has nothing meaningful to return.
   downloadUpdateInstaller: (url) => ipcRenderer.invoke('download-update-installer', url),
+  // url: a payment link built by the licence pay window. The main process opens it in the
+  // person's own browser or email app only if it is on its short payment-link allowlist.
+  openLink: (url) => ipcRenderer.invoke('open-link', url),
 })

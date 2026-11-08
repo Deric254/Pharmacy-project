@@ -45,7 +45,11 @@ export function LicencePage({
 
         {canActivate && (
           <div className="ledger-panel space-y-4 p-6">
-            <LicenceForm installId={state.install_id} onActivated={onActivated} />
+            <LicenceForm
+              installId={state.install_id}
+              renewUrl={state.renew_url}
+              onActivated={onActivated}
+            />
             <div className="border-t border-rule pt-3">
               <button
                 type="button"

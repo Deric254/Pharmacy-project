@@ -34,6 +34,7 @@ const {
   INSTALLER_FILENAME,
   isTrustedInstallerUrl,
   isSafeExternalUrl,
+  isPaymentLink,
   isSameOrigin,
 } = require('./urlPolicy')
 
@@ -1084,6 +1085,17 @@ ipcMain.handle('download-update-installer', (event, url) => {
   }
   approvedInstallerUrl = url
   mainWindow.webContents.downloadURL(url)
+})
+
+// Opens a licence payment link (PayPal, the proof email, the renewal page) in the person's own
+// browser or email app. Only the main window may ask, and only for a link on the payment
+// allowlist in urlPolicy.js; anything else is refused.
+ipcMain.handle('open-link', (event, url) => {
+  if (event.sender !== mainWindow?.webContents || !isPaymentLink(url)) return { ok: false }
+  return shell
+    .openExternal(url)
+    .then(() => ({ ok: true }))
+    .catch(() => ({ ok: false }))
 })
 
 function stopBackend() {

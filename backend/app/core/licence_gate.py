@@ -1,12 +1,19 @@
 """
 Offline per-computer licence gate.
 
-The backend is the real gate: every /api/* request and WebSocket handshake
-is refused (HTTP 402 / WebSocket close 4402) unless this copy holds a valid
-licence, or is the owner's own computer. The UI only shows the activation
-screen. Only the licence endpoints (app/api/v1/licence.py), /health and the
-static front-end files stay reachable while locked -- the activation screen
-needs them, and none of them expose business data.
+The backend is the real gate. A licence is a plan: 30 days ($100) or lifetime
+($1000).
+  * Valid, or up to GRACE_DAYS after it ends: everything works (the UI shows a
+    renewal notice).
+  * Past the grace period: READ-ONLY. The person can still sign in, read their
+    data and take it out (every GET, the encrypted migration export, WebSockets),
+    but every other call is refused with HTTP 402 plus where to renew.
+  * Never activated, a wrong-computer licence or a wound-back clock: LOCKED.
+    Every /api/* request and WebSocket handshake is refused (HTTP 402 /
+    WebSocket close 4402). Only the licence endpoints
+    (app/api/v1/licence.py), /health and the static front-end files stay
+    reachable -- the activation screen needs them, and none of them expose
+    business data.
 
 Verification is Ed25519 against OWNER_PUBLIC_KEY (app/core/licence_owner_key.py,
 built into every copy). A copy can check a licence but never make one. A build
@@ -32,12 +39,36 @@ from licensing.licensing import FileStore, Licensing
 
 APP_ID = "Pharmacy ERP"
 PREFIX = "PHE"
+GRACE_DAYS = 5
+# Where a person renews: the DericBI site, pre-filled with this app and the activation code.
+RENEW_PAGE = "https://dericbi.vercel.app/renew.html"
+RENEW_APP = "pharmacy-erp"
 STATE_FILENAME = "licence-state.json"
 # Verifying a signature is cheap but not free; a minute of caching keeps the
 # per-request cost at a dictionary lookup. Every activation resets it.
 STATE_TTL_SECONDS = 60.0
 # Sent when a WebSocket handshake is refused for want of a licence.
 LICENCE_REQUIRED_CLOSE_CODE = 4402
+READ_ONLY_MESSAGE = (
+    "Your licence has expired, so this is view-only. Renew your licence to add or change anything."
+)
+# What still works once the licence has run out: looking at data and taking it out
+# (every GET/HEAD/OPTIONS, which covers reports and exports), signing in (including
+# the steps that must finish before the app opens: first password change, terms,
+# a forgotten password), and the one POST that is a download of the person's own
+# data. Anything not listed here is treated as a change and refused.
+READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+SIGN_IN_PATHS = frozenset(
+    {
+        "/auth/login",
+        "/auth/refresh",
+        "/auth/logout",
+        "/auth/forgot-password",
+        "/auth/change-password",
+        "/auth/accept-terms",
+    }
+)
+DATA_OUT_PATHS = frozenset({"/backups/export-for-migration"})
 
 _lock = threading.Lock()
 _licensing: Licensing | None = None
@@ -58,7 +89,11 @@ def get_licensing() -> Licensing:
     with _lock:
         if _licensing is None:
             _licensing = Licensing(
-                APP_ID, PREFIX, OWNER_PUBLIC_KEY, FileStore(str(_data_dir()), STATE_FILENAME)
+                APP_ID,
+                PREFIX,
+                OWNER_PUBLIC_KEY,
+                FileStore(str(_data_dir()), STATE_FILENAME),
+                grace_days=GRACE_DAYS,
             )
         return _licensing
 
@@ -83,7 +118,12 @@ def public_state() -> dict[str, Any]:
     state = dict(lic.state())
     if lic.configured():
         state["install_id"] = lic.install_id()
+        state["renew_url"] = renew_url(state["install_id"])
     return state
+
+
+def renew_url(install_id: str) -> str:
+    return f"{RENEW_PAGE}?app={RENEW_APP}&code={install_id}"
 
 
 def _compute_state() -> dict[str, Any]:
@@ -111,6 +151,39 @@ def is_gated(path: str) -> bool:
     return not path.startswith(f"{prefix}/licence/")
 
 
+def allows(scope: Scope, state: dict[str, Any]) -> bool:
+    """May this call run? Everything for a valid licence; reading, signing in and exporting once it
+    has lapsed; nothing otherwise."""
+    if state["ok"]:
+        return True
+    if not state.get("read_only"):
+        return False
+    if scope["type"] == "websocket":
+        return True
+    if scope["method"] in READ_METHODS:
+        return True
+    prefix = get_settings().api_v1_prefix
+    path = scope["path"]
+    return scope["method"] == "POST" and any(
+        path == f"{prefix}{p}" for p in SIGN_IN_PATHS | DATA_OUT_PATHS
+    )
+
+
+def refusal(state: dict[str, Any]) -> dict[str, Any]:
+    """The JSON body sent with HTTP 402 when a call is refused for want of a licence."""
+    if state.get("read_only"):
+        return {
+            "detail": READ_ONLY_MESSAGE,
+            "licence": {
+                "ok": False,
+                "kind": state["kind"],
+                "read_only": True,
+                "renew_url": renew_url(state["install_id"]),
+            },
+        }
+    return {"detail": state["message"], "licence": {"ok": False, "kind": state["kind"]}}
+
+
 class LicenceGateMiddleware:
     """Pure ASGI, not BaseHTTPMiddleware: it must cover WebSocket handshakes too."""
 
@@ -120,15 +193,9 @@ class LicenceGateMiddleware:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] in ("http", "websocket") and is_gated(scope["path"]):
             state = await current_state()
-            if not state["ok"]:
+            if not allows(scope, state):
                 if scope["type"] == "http":
-                    response = JSONResponse(
-                        {
-                            "detail": state["message"],
-                            "licence": {"ok": False, "kind": state["kind"]},
-                        },
-                        status_code=402,
-                    )
+                    response = JSONResponse(refusal(state), status_code=402)
                     await response(scope, receive, send)
                 else:
                     await receive()  # the websocket.connect event

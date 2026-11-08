@@ -38,6 +38,18 @@ export function getAccessToken(): string | null {
 /** Fired when the server refuses a request for want of a licence, so the UI can show the activation screen. */
 export const LICENCE_REQUIRED_EVENT = 'licence-required'
 
+/** Fired when the server refuses a change because the licence ran out (view-only); detail is its message. */
+export const LICENCE_READ_ONLY_EVENT = 'licence-read-only'
+
+function reportLicenceRefusal(body: ApiErrorBody | null): void {
+  if (body?.licence?.read_only) {
+    const detail = typeof body.detail === 'string' ? body.detail : ''
+    window.dispatchEvent(new CustomEvent<string>(LICENCE_READ_ONLY_EVENT, { detail }))
+  } else {
+    window.dispatchEvent(new Event(LICENCE_REQUIRED_EVENT))
+  }
+}
+
 export class ApiError extends Error {
   status: number
   body: ApiErrorBody | null
@@ -128,7 +140,7 @@ async function rawRequest<T>(path: string, options: RequestOptions): Promise<T> 
   }
 
   if (!res.ok) {
-    if (res.status === 402) window.dispatchEvent(new Event(LICENCE_REQUIRED_EVENT))
+    if (res.status === 402) reportLicenceRefusal(parsedBody)
     throw new ApiError(res.status, extractMessage(parsedBody, res.statusText), parsedBody)
   }
   return parsedBody as T
@@ -196,7 +208,7 @@ async function rawUpload<T>(
   }
 
   if (!res.ok) {
-    if (res.status === 402) window.dispatchEvent(new Event(LICENCE_REQUIRED_EVENT))
+    if (res.status === 402) reportLicenceRefusal(parsedBody)
     throw new ApiError(res.status, extractMessage(parsedBody, res.statusText), parsedBody)
   }
   return parsedBody as T

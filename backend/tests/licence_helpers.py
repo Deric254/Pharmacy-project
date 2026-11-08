@@ -3,7 +3,7 @@
 from datetime import date
 from typing import Any
 
-from app.core.licence_gate import APP_ID, PREFIX
+from app.core.licence_gate import APP_ID, GRACE_DAYS, PREFIX
 from licensing.licensing import Licensing
 
 
@@ -21,6 +21,8 @@ class MemoryStore:
 def make_licensing(today: date | None = None) -> tuple[Licensing, str, bytes]:
     """A Licensing over a throwaway key: (instance, owner key text, owner key seed)."""
     key_text, public = Licensing.make_owner_key(PREFIX)
-    kwargs: dict[str, Any] = {} if today is None else {"today": lambda: today}
+    kwargs: dict[str, Any] = {"grace_days": GRACE_DAYS}  # the same grace period as the shipped app
+    if today is not None:
+        kwargs["today"] = lambda: today
     lic = Licensing(APP_ID, PREFIX, public, MemoryStore(), **kwargs)
     return lic, key_text, lic.parse_owner_key(key_text)

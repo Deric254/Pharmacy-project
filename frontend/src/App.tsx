@@ -4,7 +4,7 @@ import { useAuthStore } from './auth/store'
 import { useConfigStore } from './config/store'
 import { setupApi } from './api/setup'
 import { licenceApi, type LicenceState } from './api/licence'
-import { ApiError, LICENCE_REQUIRED_EVENT } from './api/client'
+import { ApiError, LICENCE_READ_ONLY_EVENT, LICENCE_REQUIRED_EVENT } from './api/client'
 import { RequireAuth, RequirePermission } from './auth/guards'
 import { AppShell } from './components/AppShell'
 import { LoginPage } from './pages/LoginPage'
@@ -113,7 +113,8 @@ export function App() {
   }, [bootstrap, loadConfig, retryCount])
 
   // Any request the server refuses for want of a licence (e.g. it expired mid-session)
-  // re-checks the state, which swaps the app for the activation screen.
+  // re-checks the state. A copy with no valid licence gets the activation screen; one that is
+  // only view-only (expired past the grace period) keeps the app and shows the renewal notice.
   useEffect(() => {
     const recheck = () => {
       licenceApi
@@ -122,10 +123,14 @@ export function App() {
         .catch(() => undefined)
     }
     window.addEventListener(LICENCE_REQUIRED_EVENT, recheck)
-    return () => window.removeEventListener(LICENCE_REQUIRED_EVENT, recheck)
+    window.addEventListener(LICENCE_READ_ONLY_EVENT, recheck)
+    return () => {
+      window.removeEventListener(LICENCE_REQUIRED_EVENT, recheck)
+      window.removeEventListener(LICENCE_READ_ONLY_EVENT, recheck)
+    }
   }, [])
 
-  if (licence !== null && !licence.ok) {
+  if (licence !== null && !licence.ok && !licence.read_only) {
     return <LicencePage state={licence} onActivated={() => setRetryCount((n) => n + 1)} />
   }
 

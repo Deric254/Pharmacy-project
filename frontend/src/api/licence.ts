@@ -2,11 +2,18 @@ import { api } from './client'
 
 export interface LicenceState {
   ok: boolean
-  kind: 'owner' | 'licensed' | 'unlicensed' | 'unconfigured'
+  kind: 'owner' | 'licensed' | 'expired' | 'unlicensed' | 'unconfigured'
   message: string
   install_id?: string
+  renew_url?: string
   expires?: string
   days_left?: number
+  /** Just ended: everything still works while the person is asked to renew. */
+  grace?: boolean
+  grace_days_left?: number
+  /** Past the grace period: reading, exporting and signing in work, changes are refused. */
+  read_only?: boolean
+  lifetime?: boolean
   user?: string
   features?: string[]
 }

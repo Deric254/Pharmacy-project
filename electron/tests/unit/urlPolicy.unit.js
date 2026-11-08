@@ -6,6 +6,8 @@ const {
   INSTALLER_FILENAME,
   isTrustedInstallerUrl,
   isSafeExternalUrl,
+  isPaymentLink,
+  PAYMENT_LINK_PREFIXES,
   isSameOrigin,
 } = require('../../urlPolicy')
 
@@ -81,4 +83,37 @@ test('the installer filename pattern matches only the installer', () => {
   assert.equal(INSTALLER_FILENAME.test('Pharmacy-ERP-Setup-1.2.3.exe'), true)
   assert.equal(INSTALLER_FILENAME.test('sales-report.xlsx'), false)
   assert.equal(INSTALLER_FILENAME.test('Pharmacy-ERP-Setup-1.2.3.exe.zip'), false)
+})
+
+test('only the licence payment links can be opened from the pay window', () => {
+  assert.deepEqual(
+    [...PAYMENT_LINK_PREFIXES].sort(),
+    [
+      'https://dericbi.vercel.app/renew.html?',
+      'https://mail.google.com/mail/?view=cm',
+      'https://www.paypal.com/',
+      'mailto:dericmarangu@gmail.com?',
+    ].sort(),
+  )
+  for (const ok of [
+    'https://dericbi.vercel.app/renew.html?app=pharmacy-erp&code=ABCD-EFGH-JKLM',
+    'https://www.paypal.com/myaccount/transfer/homepage',
+    'https://mail.google.com/mail/?view=cm&fs=1&to=dericmarangu%40gmail.com&su=x&body=y',
+    'mailto:dericmarangu@gmail.com?subject=x&body=y',
+  ]) {
+    assert.equal(isPaymentLink(ok), true, ok)
+  }
+  for (const bad of [
+    'https://dericbi.vercel.app/other.html',
+    'https://www.paypal.com.evil.example/',
+    'https://mail.google.com/mail/u/0/',
+    'mailto:someone@else.com?subject=x',
+    'mailto:dericmarangu@gmail.com',
+    'file:///C:/Windows/System32/calc.exe',
+    'https://www.paypal.com/' + 'a'.repeat(4000),
+    undefined,
+    42,
+  ]) {
+    assert.equal(isPaymentLink(bad), false, String(bad))
+  }
 })

@@ -217,6 +217,8 @@ export interface ExpiringBatchOut {
 export interface StockValuationOut {
   total_value: number
   by_product: { product_id: number; name: string; qty_on_hand: number; value: number }[]
+  dead_capital: number
+  dead_stock_days: number
 }
 
 export type RefundReason = 'CUSTOMER_RETURN' | 'DAMAGED' | 'WRONG_ITEM_SOLD' | 'EXPIRED' | 'OTHER'

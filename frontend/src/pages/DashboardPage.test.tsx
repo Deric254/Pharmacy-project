@@ -158,7 +158,7 @@ function mockEverythingHarmless() {
   })
   vi.mocked(inventoryApi.lowStock).mockResolvedValue([])
   vi.mocked(inventoryApi.expiring).mockResolvedValue([])
-  vi.mocked(inventoryApi.valuation).mockResolvedValue({ total_value: 0, by_product: [] })
+  vi.mocked(inventoryApi.valuation).mockResolvedValue({ total_value: 0, by_product: [], dead_capital: 0, dead_stock_days: 45 })
 }
 
 function renderDashboard() {
@@ -244,5 +244,55 @@ describe('DashboardPage revenue by category', () => {
     await user.click(await screen.findByText(/Antibiotics: 70/))
 
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
+  })
+})
+
+describe('DashboardPage dead capital and bundling alerts', () => {
+  beforeEach(() => {
+    seedStores()
+    mockEverythingHarmless()
+  })
+
+  it('shows the dead capital banner only when stock has sat unsold', async () => {
+    vi.mocked(inventoryApi.valuation).mockResolvedValue({
+      total_value: 9000,
+      by_product: [],
+      dead_capital: 1234,
+      dead_stock_days: 45,
+    })
+    renderDashboard()
+
+    const banner = await screen.findByText(/DEAD CAPITAL DETECTED/)
+    expect(banner).toHaveTextContent(/trapped on your shelves/)
+    expect(banner).toHaveTextContent(/past 45\+ days/)
+    expect(banner).toHaveTextContent(/1,234/)
+  })
+
+  it('shows no dead capital banner when nothing is stale', async () => {
+    renderDashboard()
+
+    await screen.findByText(/Welcome back/)
+    expect(screen.queryByText(/DEAD CAPITAL DETECTED/)).not.toBeInTheDocument()
+  })
+
+  it('states the real co-purchase percentage for the top pair', async () => {
+    vi.mocked(reportsApi.coOccurrence).mockResolvedValue({
+      lookback_days: 90,
+      pairs: [
+        {
+          product_a_id: 1,
+          product_a_name: 'Amoxicillin',
+          product_b_id: 2,
+          product_b_name: 'Vitamin C',
+          times_together: 8,
+          percent_of_a_sales: 42,
+        },
+      ],
+    } as never)
+    renderDashboard()
+
+    const alert = await screen.findByText(/UNCLAIMED REVENUE ALERT/)
+    expect(alert).toHaveTextContent('42% of sales of Amoxicillin also included Vitamin C')
+    expect(alert).toHaveTextContent(/leaving money on the table/)
   })
 })

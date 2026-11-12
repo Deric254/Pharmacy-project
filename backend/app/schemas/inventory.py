@@ -34,6 +34,8 @@ class ProductValuationOut(BaseModel):
 class StockValuationOut(BaseModel):
     total_value: float
     by_product: list[ProductValuationOut]
+    dead_capital: float
+    dead_stock_days: int
 
 
 class AdjustmentReason(enum.StrEnum):

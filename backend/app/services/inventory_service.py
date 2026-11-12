@@ -18,11 +18,11 @@ a signal for a human to investigate (possible bug, or someone edited
 the DB directly), not something to silently paper over.
 """
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
 
 from fastapi import HTTPException
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, exists, func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +32,7 @@ from app.models.audit_log import AuditLog
 from app.models.business_config import BusinessConfig
 from app.models.medicine_batch import MedicineBatch
 from app.models.product import Product
+from app.models.sale import Sale, SaleItem
 from app.models.stock_movement import MovementType, StockMovement
 from app.models.user import User
 from app.schemas.inventory import (
@@ -47,6 +48,8 @@ from app.schemas.inventory import (
     StockValuationOut,
     WriteOffResult,
 )
+
+DEAD_STOCK_DAYS = 45
 
 
 class InventoryService:
@@ -151,8 +154,29 @@ class InventoryService:
             )
             for row in rows
         ]
+        cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=DEAD_STOCK_DAYS)
+        dead_capital = await self.db.scalar(
+            select(
+                func.coalesce(func.sum(MedicineBatch.qty_remaining * MedicineBatch.cost_price), 0.0)
+            )
+            .join(Product, Product.id == MedicineBatch.product_id)
+            .where(
+                Product.deleted_at.is_(None),
+                MedicineBatch.expiry_date > today,
+                MedicineBatch.qty_remaining > 0,
+                MedicineBatch.created_at < cutoff,
+                ~exists().where(
+                    SaleItem.product_id == MedicineBatch.product_id,
+                    SaleItem.sale_id == Sale.id,
+                    Sale.created_at >= cutoff,
+                ),
+            )
+        )
         return StockValuationOut(
-            total_value=sum(p.value for p in by_product), by_product=by_product
+            total_value=sum(p.value for p in by_product),
+            by_product=by_product,
+            dead_capital=float(dead_capital or 0.0),
+            dead_stock_days=DEAD_STOCK_DAYS,
         )
 
     async def adjust_stock(self, payload: AdjustmentRequest, user: User) -> AdjustmentOut:

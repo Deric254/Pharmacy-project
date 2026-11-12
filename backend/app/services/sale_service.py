@@ -252,12 +252,12 @@ class SaleService:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f'"{product.name}" (batch {batch.batch_number}, '
-                    f"exp {batch.expiry_date.isoformat()}) would sell at a loss: "
-                    f"selling price {batch.selling_price:.2f} is below this batch's cost "
-                    f"{batch.cost_price:.2f}. This is the batch FEFO would sell "
-                    "next for this product -- raise its selling price in "
-                    "Inventory, or adjust its cost, before selling this line."
+                    f'\U0001f6d1 TRANSACTION BLOCKED: Selling "{product.name}" '
+                    f"(batch {batch.batch_number}) at KSH {batch.selling_price:.2f} will result "
+                    "in an immediate cash leak of KSH "
+                    f"{batch.cost_price - batch.selling_price:.2f} per unit directly from your "
+                    "drawer. The sale has been stopped to protect your margin; raise its selling "
+                    "price in Inventory, or adjust its cost, before selling this line."
                 ),
             )
 

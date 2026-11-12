@@ -296,6 +296,17 @@ export function DashboardPage() {
         </p>
       )}
 
+      {valuation && valuation.dead_capital > 0 && (
+        <p
+          role="alert"
+          className="mb-4 border border-stamp-red-soft bg-stamp-red-soft/40 px-3 py-2 text-sm text-stamp-red"
+        >
+          ⚠️ DEAD CAPITAL DETECTED: {formatCurrency(valuation.dead_capital)} of your liquid money
+          is currently trapped on your shelves. It has generated 0 Shillings in revenue for the
+          past {valuation.dead_stock_days}+ days.
+        </p>
+      )}
+
       {!canSeeInventory && !canSeeReports && (
         <p className="text-sm text-ink-soft">
           Your role doesn't include reporting visibility, so there's nothing to show here yet.
@@ -523,6 +534,13 @@ export function DashboardPage() {
           title={`Frequently bought together, last ${coOccurrence.lookback_days} days`}
           reportTab="coOccurrence"
         >
+          <p className="mb-2 text-sm text-ink">
+            💡 UNCLAIMED REVENUE ALERT: {coOccurrence.pairs[0].percent_of_a_sales}% of sales of{' '}
+            {coOccurrence.pairs[0].product_a_name} also included{' '}
+            {coOccurrence.pairs[0].product_b_name}. By not offering{' '}
+            {coOccurrence.pairs[0].product_b_name} at the counter right now, you are leaving money
+            on the table.
+          </p>
           <ul className="divide-y divide-rule">
             {coOccurrence.pairs.slice(0, 5).map((p) => (
               <li

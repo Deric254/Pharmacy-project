@@ -204,6 +204,45 @@ class TestValuation:
         assert product_row["value"] == 200.0  # 100 * 2.0
         assert r.json()["total_value"] >= 200.0
 
+    async def test_dead_capital_counts_only_old_stock_with_no_recent_sale(self, client, owner_user):
+        from datetime import datetime
+
+        from app.models.sale import Sale, SaleItem
+
+        old = datetime.now() - timedelta(days=60)
+        stale_product = await _make_product("Stale Stock")
+        stale_batch = await _add_batch(stale_product, qty=100)
+        fresh_product = await _make_product("Fresh Stock")
+        await _add_batch(fresh_product, qty=100)
+        selling_product = await _make_product("Selling Stock")
+        selling_batch = await _add_batch(selling_product, qty=50)
+        async with AsyncSessionLocal() as db:
+            for batch_id in (stale_batch, selling_batch):
+                batch = await db.get(MedicineBatch, batch_id)
+                batch.created_at = old
+            sale = Sale(cashier_user_id=1, subtotal=5.0, discount_amount=0.0, total_amount=5.0)
+            db.add(sale)
+            await db.flush()
+            db.add(
+                SaleItem(
+                    sale_id=sale.id,
+                    product_id=selling_product,
+                    batch_id=selling_batch,
+                    quantity=1,
+                    unit_price=5.0,
+                    unit_cost=2.0,
+                    line_total=5.0,
+                )
+            )
+            await db.commit()
+
+        token = await _login(client, "lucy", "S3curePass!")
+        r = await client.get(
+            "/api/v1/inventory/valuation", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert r.json()["dead_stock_days"] == 45
+        assert r.json()["dead_capital"] == 200.0  # only Stale Stock: 100 * cost 2.0
+
     async def test_expired_stock_does_not_inflate_valuation(self, client, owner_user):
         """
         The real bug this closes: a product could show real stock
@@ -689,9 +728,9 @@ class TestSaleTriggeredLowStockEvent:
                     break
 
         await pubsub.unsubscribe(CHANNEL)
-        assert (
-            found_stock_low
-        ), "Expected a stock.low event after the sale dropped below reorder point"
+        assert found_stock_low, (
+            "Expected a stock.low event after the sale dropped below reorder point"
+        )
 
 
 class TestExpiredStockWriteOff:

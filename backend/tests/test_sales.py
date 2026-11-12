@@ -571,7 +571,8 @@ class TestIdempotentCheckout:
         )
         assert r.status_code == 400
         detail = r.json()["detail"].lower()
-        assert "loss" in detail
+        assert "transaction blocked" in detail
+        assert "cash leak of ksh 5.00 per unit" in detail
         # A product can have several batches at different prices --
         # naming which specific batch is the problem (not just the
         # product) is what lets someone actually go fix it, rather
@@ -1191,7 +1192,7 @@ class TestQuoteAgreesWithCheckout:
 
         assert quote.status_code == checkout.status_code == 400
         assert quote.json()["detail"] == checkout.json()["detail"]
-        assert "would sell at a loss" in quote.json()["detail"]
+        assert "TRANSACTION BLOCKED" in quote.json()["detail"]
 
     async def test_paying_the_quoted_total_always_succeeds(self, client, employee_user):
         product_id = await _make_product_with_batch(price=12.35, qty=100, cost=1.0)

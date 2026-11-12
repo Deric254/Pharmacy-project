@@ -73,7 +73,7 @@ function seedStores() {
 describe('InventoryPage expired-stock write-off', () => {
   beforeEach(() => {
     vi.mocked(inventoryApi.lowStock).mockResolvedValue([])
-    vi.mocked(inventoryApi.valuation).mockResolvedValue({ total_value: 0, by_product: [] } as never)
+    vi.mocked(inventoryApi.valuation).mockResolvedValue({ total_value: 0, by_product: [], dead_capital: 0, dead_stock_days: 45 } as never)
     vi.mocked(inventoryApi.reconcile).mockResolvedValue([])
     vi.mocked(inventoryApi.writeOffExpired).mockReset()
     vi.mocked(inventoryApi.writeOffAllExpired).mockReset()
@@ -187,7 +187,7 @@ describe('InventoryPage product category assignment', () => {
   beforeEach(() => {
     vi.mocked(inventoryApi.lowStock).mockResolvedValue([])
     vi.mocked(inventoryApi.expiring).mockResolvedValue([])
-    vi.mocked(inventoryApi.valuation).mockResolvedValue({ total_value: 0, by_product: [] } as never)
+    vi.mocked(inventoryApi.valuation).mockResolvedValue({ total_value: 0, by_product: [], dead_capital: 0, dead_stock_days: 45 } as never)
     vi.mocked(inventoryApi.reconcile).mockResolvedValue([])
     vi.mocked(productsApi.list).mockResolvedValue([])
     vi.mocked(productsApi.create).mockReset()
@@ -289,7 +289,7 @@ describe('InventoryPage bulk import from Excel', () => {
   beforeEach(() => {
     vi.mocked(inventoryApi.lowStock).mockResolvedValue([])
     vi.mocked(inventoryApi.expiring).mockResolvedValue([])
-    vi.mocked(inventoryApi.valuation).mockResolvedValue({ total_value: 0, by_product: [] } as never)
+    vi.mocked(inventoryApi.valuation).mockResolvedValue({ total_value: 0, by_product: [], dead_capital: 0, dead_stock_days: 45 } as never)
     vi.mocked(inventoryApi.reconcile).mockResolvedValue([])
     vi.mocked(productsApi.list).mockResolvedValue([])
     vi.mocked(categoriesApi.list).mockResolvedValue([])

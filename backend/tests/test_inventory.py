@@ -24,9 +24,7 @@ from app.models.stock_take import StockTake
 
 
 async def _login(client, username: str, password: str) -> str:
-    r = await client.post(
-        "/api/v1/auth/login", json={"username": username, "password": password}
-    )
+    r = await client.post("/api/v1/auth/login", json={"username": username, "password": password})
     assert r.status_code == 200, r.text
     return str(r.json()["access_token"])
 
@@ -206,9 +204,7 @@ class TestValuation:
         assert product_row["value"] == 200.0  # 100 * 2.0
         assert r.json()["total_value"] >= 200.0
 
-    async def test_dead_capital_counts_only_old_stock_with_no_recent_sale(
-        self, client, owner_user
-    ):
+    async def test_dead_capital_counts_only_old_stock_with_no_recent_sale(self, client, owner_user):
         from datetime import datetime
 
         from app.models.sale import Sale, SaleItem
@@ -270,9 +266,7 @@ class TestValuation:
         r = await client.get(
             "/api/v1/inventory/valuation", headers={"Authorization": f"Bearer {token}"}
         )
-        row = next(
-            (p for p in r.json()["by_product"] if p["product_id"] == product_id), None
-        )
+        row = next((p for p in r.json()["by_product"] if p["product_id"] == product_id), None)
         # Either excluded entirely or present with zero value/qty --
         # never claiming expired-only stock has real, sellable value.
         if row is not None:

@@ -220,7 +220,12 @@ class TestValuation:
             for batch_id in (stale_batch, selling_batch):
                 batch = await db.get(MedicineBatch, batch_id)
                 batch.created_at = old
-            sale = Sale(cashier_user_id=1, subtotal=5.0, discount_amount=0.0, total_amount=5.0)
+            sale = Sale(
+                cashier_user_id=1,
+                subtotal=5.0,
+                discount_amount=0.0,
+                total_amount=5.0,
+            )
             db.add(sale)
             await db.flush()
             db.add(
@@ -728,9 +733,9 @@ class TestSaleTriggeredLowStockEvent:
                     break
 
         await pubsub.unsubscribe(CHANNEL)
-        assert found_stock_low, (
-            "Expected a stock.low event after the sale dropped below reorder point"
-        )
+        assert (
+            found_stock_low
+        ), "Expected a stock.low event after the sale dropped below reorder point"
 
 
 class TestExpiredStockWriteOff:

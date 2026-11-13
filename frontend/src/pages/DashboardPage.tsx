@@ -535,11 +535,12 @@ export function DashboardPage() {
           reportTab="coOccurrence"
         >
           <p className="mb-2 text-sm text-ink">
-            💡 UNCLAIMED REVENUE ALERT: {coOccurrence.pairs[0].percent_of_a_sales}% of sales of{' '}
+            💡 BUNDLING OPPORTUNITY: In the last {coOccurrence.lookback_days} days,{' '}
+            {coOccurrence.pairs[0].percent_of_a_sales}% of sales that included{' '}
             {coOccurrence.pairs[0].product_a_name} also included{' '}
-            {coOccurrence.pairs[0].product_b_name}. By not offering{' '}
-            {coOccurrence.pairs[0].product_b_name} at the counter right now, you are leaving money
-            on the table.
+            {coOccurrence.pairs[0].product_b_name} ({coOccurrence.pairs[0].co_occurrence_count}{' '}
+            sales). Offering {coOccurrence.pairs[0].product_b_name} when{' '}
+            {coOccurrence.pairs[0].product_a_name} is sold could add revenue.
           </p>
           <ul className="divide-y divide-rule">
             {coOccurrence.pairs.slice(0, 5).map((p) => (

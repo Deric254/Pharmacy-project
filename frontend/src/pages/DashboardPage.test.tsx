@@ -284,15 +284,17 @@ describe('DashboardPage dead capital and bundling alerts', () => {
           product_a_name: 'Amoxicillin',
           product_b_id: 2,
           product_b_name: 'Vitamin C',
-          times_together: 8,
+          co_occurrence_count: 8,
           percent_of_a_sales: 42,
         },
       ],
     } as never)
     renderDashboard()
 
-    const alert = await screen.findByText(/UNCLAIMED REVENUE ALERT/)
-    expect(alert).toHaveTextContent('42% of sales of Amoxicillin also included Vitamin C')
-    expect(alert).toHaveTextContent(/leaving money on the table/)
+    const alert = await screen.findByText(/BUNDLING OPPORTUNITY/)
+    expect(alert).toHaveTextContent(
+      'In the last 90 days, 42% of sales that included Amoxicillin also included Vitamin C (8 sales)',
+    )
+    expect(alert).toHaveTextContent(/could add revenue/)
   })
 })

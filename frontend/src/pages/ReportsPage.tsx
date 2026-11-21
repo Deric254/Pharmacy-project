@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { reportsApi, downloadReportExport } from '../api/reports'
+import { IntelligencePanel } from '../components/IntelligencePanel'
 import { useAuthStore } from '../auth/store'
 import { useConfigStore } from '../config/store'
 import { useCurrencyFormatter } from '../lib/currency'
@@ -40,6 +41,7 @@ type Tab =
   | 'stockRunway'
   | 'coOccurrence'
   | 'seasonalTrends'
+  | 'intelligence'
 
 const TABS: { id: Tab; label: string; permission: string }[] = [
   { id: 'sales', label: 'Sales', permission: 'reports.view' },
@@ -50,6 +52,7 @@ const TABS: { id: Tab; label: string; permission: string }[] = [
   { id: 'stockRunway', label: 'Stock Runway', permission: 'reports.view' },
   { id: 'coOccurrence', label: 'Frequently Bought Together', permission: 'reports.view' },
   { id: 'seasonalTrends', label: 'Seasonal Trends', permission: 'reports.view' },
+  { id: 'intelligence', label: 'Intelligence', permission: 'reports.view' },
 ]
 
 function defaultDateRange(timezone: string) {
@@ -101,6 +104,7 @@ export function ReportsPage() {
       {tab === 'stockRunway' && <StockRunwayReport />}
       {tab === 'coOccurrence' && <CoOccurrenceReport />}
       {tab === 'seasonalTrends' && <SeasonalTrendsReport />}
+      {tab === 'intelligence' && <IntelligencePanel />}
     </div>
   )
 }

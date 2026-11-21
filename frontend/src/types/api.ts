@@ -869,3 +869,67 @@ export interface ApiErrorBody {
   /** Present on a 402: the licence gate's reason (see app/core/licence_gate.py). */
   licence?: { ok: boolean; kind: string; read_only?: boolean; renew_url?: string }
 }
+
+// Business intelligence: the eight areas as structured insights.
+// Money is in the business currency's major units, like every other report.
+export interface IntelligencePeriod {
+  label: string
+  start: string
+  end: string
+}
+
+export interface IntelligenceEvidence {
+  label: string
+  value: string
+}
+
+export interface IntelligenceComparison {
+  label: string
+  period: IntelligencePeriod
+  current: number
+  previous: number
+  change_pct: number | null
+  unit: string
+}
+
+export interface IntelligenceInsight {
+  area: string
+  kind: string
+  title: string
+  severity: 'problem' | 'watch' | 'info' | 'good'
+  what_happened: string
+  evidence: IntelligenceEvidence[]
+  period: IntelligencePeriod
+  comparison: IntelligenceComparison | null
+  why_it_matters: string
+  impact: { amount: number; basis: string } | null
+  recommended_action: string
+  confidence: { level: 'high' | 'medium' | 'low'; limitations: string[] }
+  follow_up: string | null
+}
+
+export interface IntelligenceKpi {
+  label: string
+  value: number | null
+  previous: number | null
+  change_pct: number | null
+  unit: string
+}
+
+export interface IntelligenceArea {
+  id: string
+  title: string
+  status: 'full' | 'partial' | 'unavailable'
+  kpis: IntelligenceKpi[]
+  insights: IntelligenceInsight[]
+  missing: string[]
+  notes: string[]
+}
+
+export interface IntelligenceReportOut {
+  as_of: string
+  currency: string
+  period: IntelligencePeriod
+  previous_period: IntelligencePeriod
+  areas: IntelligenceArea[]
+}

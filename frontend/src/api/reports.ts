@@ -4,6 +4,7 @@ import type {
   CategoryRevenueReportOut,
   ExpiredStockReportOut,
   FastSlowMoversOut,
+  IntelligenceReportOut,
   KpiDashboardOut,
   ProductCoOccurrenceOut,
   ProfitByProductEntry,
@@ -72,6 +73,8 @@ export const reportsApi = {
   fastSlowMovers: (days: number, limit: number) =>
     api.get<FastSlowMoversOut>('/reports/fast-slow-movers', { days, limit }),
   stockTakeHistory: () => api.get<StockTakeHistoryOut>('/reports/stock-take-history'),
+  intelligence: (days = 30) =>
+    api.get<IntelligenceReportOut>('/reports/intelligence', { days }),
   stockRunway: (lookbackDays = 30) =>
     api.get<StockRunwayOut>('/reports/stock-runway', { lookback_days: lookbackDays }),
   salesByCashier: (startDate: string, endDate: string) =>

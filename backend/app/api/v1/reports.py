@@ -9,6 +9,7 @@ from starlette.concurrency import run_in_threadpool
 from app.core.database import get_db
 from app.core.rbac import get_current_user, require_permission
 from app.models.user import User
+from app.schemas.intelligence import IntelligenceReportOut
 from app.schemas.reports import (
     CashierSalesOut,
     CategoryRevenueReportOut,
@@ -25,6 +26,7 @@ from app.schemas.reports import (
     TopCustomersOut,
     TopProductEntry,
 )
+from app.services.intelligence_service import build_report as build_intelligence_report
 from app.services.report_export_service import (
     ExportFormat,
     build_export_response,
@@ -65,6 +67,20 @@ async def kpi_dashboard(
     user_permission_codes = {p.code for p in current_user.role.permissions}
     include_profit = "reports.view_profit" in user_permission_codes
     return await ReportService(db).kpi_dashboard(start_date, end_date, include_profit)
+
+
+@router.get("/intelligence", response_model=IntelligenceReportOut)
+async def business_intelligence(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    _: Annotated[User, Depends(require_permission("reports.view"))],
+    days: Annotated[int, Query(ge=7, le=180)] = 30,
+) -> IntelligenceReportOut:
+    """The eight business intelligence areas as structured insights (see intelligence_service.py).
+    Read-only. Anything built on cost or profit is withheld, like every other profit figure, from a
+    role without reports.view_profit."""
+    include_profit = "reports.view_profit" in {p.code for p in current_user.role.permissions}
+    return await build_intelligence_report(db, days, include_profit)
 
 
 @router.get("/sales")
